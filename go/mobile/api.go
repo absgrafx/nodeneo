@@ -1,6 +1,3 @@
-// Package mobile provides the gomobile-exported API surface.
-// All functions use basic types (string, int, bool, []byte) for cross-platform
-// FFI compatibility. Complex return values are JSON-encoded strings.
 package mobile
 
 import (
@@ -8,9 +5,9 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/AlanHortwormo/redpill/internal/core"
-	"github.com/AlanHortwormo/redpill/internal/orchestrator"
-	"github.com/AlanHortwormo/redpill/internal/store"
+	"github.com/absgrafx/redpill/internal/core"
+	"github.com/absgrafx/redpill/internal/orchestrator"
+	"github.com/absgrafx/redpill/internal/store"
 )
 
 var (
@@ -20,46 +17,63 @@ var (
 	db   *store.Store
 )
 
-// Init initializes the RedPill engine. Must be called once at app startup.
-// dataDir: platform-specific writable directory for DB and config.
-// ethNodeURL: Arbitrum RPC endpoint (e.g. "https://arb1.arbitrum.io/rpc").
-// Returns empty string on success, error message on failure.
-func Init(dataDir string, ethNodeURL string) string {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var err error
-	db, err = store.New(dataDir + "/redpill.db")
-	if err != nil {
-		return "store init failed: " + err.Error()
-	}
-
-	eng = core.NewEngine(core.Config{
-		DataDir:    dataDir,
-		EthNodeURL: ethNodeURL,
-		ChainID:    42161, // Arbitrum One
-	})
-
-	if err := eng.Init(context.Background()); err != nil {
-		return "engine init failed: " + err.Error()
-	}
-
-	orch = orchestrator.New(eng, db)
-	return ""
+func resultJSON(v interface{}) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
-// Shutdown cleanly shuts down the engine and closes the database.
-func Shutdown() string {
+func errJSON(err error) string {
+	b, _ := json.Marshal(map[string]string{"error": err.Error()})
+	return string(b)
+}
+
+// --- Lifecycle ---
+
+// Init starts the engine. proxyBaseURL is the running proxy-router
+// (e.g. "http://localhost:8082"). dataDir is where the local SQLite
+// database will be stored.
+func Init(dataDir string, proxyBaseURL string) string {
 	mu.Lock()
 	defer mu.Unlock()
 
 	if eng != nil {
-		eng.Close()
+		return resultJSON(map[string]string{"status": "already_initialized"})
 	}
+
+	cfg := core.Config{
+		DataDir:      dataDir,
+		ProxyBaseURL: proxyBaseURL,
+	}
+	eng = core.NewEngine(cfg)
+	if err := eng.Init(context.Background()); err != nil {
+		eng = nil
+		return errJSON(err)
+	}
+
+	var err error
+	db, err = store.New(dataDir + "/redpill.db")
+	if err != nil {
+		eng = nil
+		return errJSON(err)
+	}
+
+	orch = orchestrator.New(eng, db)
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// Shutdown tears everything down.
+func Shutdown() {
+	mu.Lock()
+	defer mu.Unlock()
 	if db != nil {
-		db.Close()
+		_ = db.Close()
+		db = nil
 	}
-	return ""
+	if eng != nil {
+		_ = eng.Close()
+		eng = nil
+	}
+	orch = nil
 }
 
 // IsReady returns true if the engine is initialized.
@@ -69,150 +83,225 @@ func IsReady() bool {
 	return eng != nil && eng.IsReady()
 }
 
-// --- Wallet ---
+// IsProxyReachable checks if the proxy-router HTTP service responds.
+func IsProxyReachable() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if orch == nil {
+		return false
+	}
+	return orch.ProxyReachable(context.Background())
+}
 
-// CreateWallet generates a new BIP-39 wallet.
-// Returns JSON: {"mnemonic":"...", "address":"0x..."}
+// --- Wallet (native — no proxy-router needed) ---
+
+// CreateWallet generates a new BIP-39 wallet. Returns JSON:
+// {"mnemonic":"...", "address":"0x..."}
 func CreateWallet() string {
 	mu.Lock()
 	defer mu.Unlock()
-
+	if eng == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
 	mnemonic, address, err := eng.CreateWallet()
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(map[string]string{"mnemonic": mnemonic, "address": address})
+	return resultJSON(map[string]string{
+		"mnemonic": mnemonic,
+		"address":  address,
+	})
 }
 
-// ImportWalletMnemonic imports a wallet from a BIP-39 mnemonic phrase.
-// Returns JSON: {"address":"0x..."}
-func ImportWalletMnemonic(mnemonic string) string {
+// ImportWalletMnemonic imports a wallet from a BIP-39 mnemonic.
+// derivationPath can be empty to use the default (m/44'/60'/0'/0/0).
+func ImportWalletMnemonic(mnemonic string, derivationPath string) string {
 	mu.Lock()
 	defer mu.Unlock()
-
-	address, err := eng.ImportWallet(mnemonic)
-	if err != nil {
-		return jsonError(err)
+	if eng == nil {
+		return errJSON(core.ErrNotInitialized)
 	}
-	return jsonOK(map[string]string{"address": address})
+	address, err := eng.ImportWallet(mnemonic, derivationPath)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"address": address})
 }
 
 // ImportWalletPrivateKey imports a wallet from a hex-encoded private key.
-// Returns JSON: {"address":"0x..."}
 func ImportWalletPrivateKey(hexKey string) string {
 	mu.Lock()
 	defer mu.Unlock()
-
+	if eng == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
 	address, err := eng.ImportPrivateKey(hexKey)
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(map[string]string{"address": address})
+	return resultJSON(map[string]string{"address": address})
 }
 
-// GetWalletSummary returns balances and session count for the given address.
-// Returns JSON: {"address":"...", "mor_balance":"...", "eth_balance":"...", "active_sessions":0}
-func GetWalletSummary(address string) string {
-	summary, err := orch.GetWalletSummary(context.Background(), address)
+// ExportPrivateKey returns the hex-encoded private key of the current wallet.
+// The caller (UI) should gate this behind biometric re-auth before displaying.
+func ExportPrivateKey() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if eng == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	hex, err := eng.PrivateKeyHex()
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(summary)
+	return resultJSON(map[string]string{"private_key": hex})
 }
 
-// --- Models ---
-
-// GetActiveModels returns the list of active models, TEE-first.
-// Returns JSON array of model objects.
-func GetActiveModels() string {
-	models, err := orch.ActiveModels(context.Background())
+// GetWalletSummary returns address, ETH balance, and MOR balance.
+func GetWalletSummary() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if orch == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	summary, err := orch.GetWalletSummary(context.Background())
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(models)
+	return resultJSON(summary)
 }
 
-// --- Sessions ---
+// --- Models (via proxy-router HTTP) ---
 
-// QuickOpenSession finds the best provider and opens a session for the given model.
-// Returns JSON session object.
-func QuickOpenSession(modelID string) string {
-	session, err := orch.QuickSession(context.Background(), modelID)
+// GetActiveModels returns active models as JSON array, cached 60s.
+// If teeOnly is true, only models with TEE in their tags are returned
+// (MAX Privacy mode).
+func GetActiveModels(teeOnly bool) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if orch == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	models, err := orch.ActiveModels(context.Background(), teeOnly)
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(session)
+	return resultJSON(models)
 }
 
-// SendPrompt sends a prompt to the active session.
-// For now, returns the full response (non-streaming).
-// TODO: implement streaming via callback interface.
-func SendPrompt(sessionID string, conversationID string, prompt string) string {
-	chunks, err := orch.ChatStream(context.Background(), sessionID, conversationID, prompt)
+// GetRatedBids returns rated bids for a model, sorted by score.
+func GetRatedBids(modelID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if eng == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	bids, err := eng.GetRatedBids(context.Background(), modelID)
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-
-	var full string
-	for chunk := range chunks {
-		full += chunk
-	}
-	return jsonOK(map[string]string{"response": full})
+	return resultJSON(bids)
 }
 
-// --- Conversations ---
+// --- Sessions (via proxy-router HTTP) ---
 
-// GetConversations returns recent conversation list.
-// Returns JSON array.
-func GetConversations(limit int) string {
-	convos, err := db.ListConversations(limit)
+// QuickOpenSession opens a session for a model in one shot.
+func QuickOpenSession(modelID string, durationSeconds int) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if orch == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	session, err := orch.QuickSession(context.Background(), modelID, int64(durationSeconds))
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(convos)
+	return resultJSON(session)
 }
 
-// GetMessages returns all messages in a conversation.
-// Returns JSON array.
+// CloseSession closes an active session.
+func CloseSession(sessionID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if eng == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	if err := eng.CloseSession(context.Background(), sessionID); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "closed"})
+}
+
+// --- Chat (via proxy-router HTTP) ---
+
+// SendPrompt sends a chat prompt through an open session.
+// Returns the full assistant response (non-streaming for now).
+func SendPrompt(sessionID string, modelID string, conversationID string, prompt string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if orch == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	response, err := orch.ChatStream(context.Background(), sessionID, modelID, conversationID, prompt)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"response": response})
+}
+
+// --- Conversations (local SQLite) ---
+
+// GetConversations lists all saved conversations.
+func GetConversations() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
+	convos, err := db.ListConversations(100)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(convos)
+}
+
+// GetMessages returns messages for a conversation.
 func GetMessages(conversationID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
 	msgs, err := db.GetMessages(conversationID)
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(msgs)
+	return resultJSON(msgs)
 }
 
-// --- Preferences ---
+// --- Preferences (local SQLite) ---
 
-func SetPreference(key, value string) string {
-	if err := db.SetPreference(key, value); err != nil {
-		return jsonError(err)
+func SetPreference(key string, value string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(core.ErrNotInitialized)
 	}
-	return jsonOK("ok")
+	if err := db.SetPreference(key, value); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
 }
 
 func GetPreference(key string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(core.ErrNotInitialized)
+	}
 	val, err := db.GetPreference(key)
 	if err != nil {
-		return jsonError(err)
+		return errJSON(err)
 	}
-	return jsonOK(map[string]string{"value": val})
-}
-
-// --- JSON helpers ---
-
-type apiResponse struct {
-	OK    bool        `json:"ok"`
-	Data  interface{} `json:"data,omitempty"`
-	Error string      `json:"error,omitempty"`
-}
-
-func jsonOK(data interface{}) string {
-	b, _ := json.Marshal(apiResponse{OK: true, Data: data})
-	return string(b)
-}
-
-func jsonError(err error) string {
-	b, _ := json.Marshal(apiResponse{OK: false, Error: err.Error()})
-	return string(b)
+	return resultJSON(map[string]string{"value": val})
 }

@@ -1,6 +1,7 @@
 # RedPill — Plan & Progress
 
 > Living document. Updated as we build.
+> Part of the [absgrafx](https://github.com/absgrafx) project.
 
 ---
 
@@ -16,22 +17,24 @@
 Goal: Prove the architecture works. Go library compiles, Flutter talks to it, wallet works.
 
 
-| #    | Task                                      | Status      | Notes                   |
-| ---- | ----------------------------------------- | ----------- | ----------------------- |
-| 0.1  | Create repo + architecture docs           | DONE        |                         |
-| 0.2  | Go module with proxy-router dependency    | IN PROGRESS |                         |
-| 0.3  | Core wrapper — init, wallet create/import |             |                         |
-| 0.4  | Orchestrator stub — WalletSummary         |             |                         |
-| 0.5  | SQLite store — init + migrations          |             |                         |
-| 0.6  | gomobile build → macOS dylib              |             |                         |
-| 0.7  | Install Flutter SDK                       |             |                         |
-| 0.8  | Flutter scaffold (macOS + iOS targets)    |             |                         |
-| 0.9  | dart:ffi bridge — call Go from Dart       |             |                         |
-| 0.10 | Onboarding screen — create/import wallet  |             | biometric + PIN         |
-| 0.11 | Home screen — show wallet balance         |             | Proves end-to-end works |
+| #    | Task                                      | Status      | Notes                                      |
+| ---- | ----------------------------------------- | ----------- | ------------------------------------------ |
+| 0.1  | Create repo + architecture docs           | DONE        |                                            |
+| 0.2  | Go module (go 1.26, go-ethereum, bip39)   | DONE        | `github.com/absgrafx/redpill`              |
+| 0.3  | Native wallet — create, import, key derive| DONE        | BIP-39 + go-ethereum, all tests pass       |
+| 0.4  | HTTP proxy client for proxy-router API    | DONE        | Models, sessions, chat, balance            |
+| 0.5  | Orchestrator — ActiveModels, QuickSession | DONE        | Cached model listing, one-tap sessions     |
+| 0.6  | SQLite store — init + migrations          | DONE        | Conversations, messages, preferences       |
+| 0.7  | Mobile FFI API surface (gomobile)         | DONE        | JSON-based function exports                |
+| 0.8  | Install Flutter SDK                       | DONE        | Flutter 3.41.5                             |
+| 0.9  | Flutter scaffold (macOS + iOS targets)    | DONE        | Dark theme, onboarding + home screens      |
+| 0.10 | License + absgrafx org setup              | DONE        | MIT license                                |
+| 0.11 | dart:ffi bridge — call Go from Dart       | TODO        | Next step                                  |
+| 0.12 | Onboarding screen — wire to real wallet   | TODO        | Connect create/import to Go FFI            |
+| 0.13 | Fork proxy-router → absgrafx             | TODO        | Add `mobile/` SDK for direct Go import     |
 
 
-**Phase 0 success criteria:** Launch app on macOS, create a wallet, see MOR balance from Arbitrum. All in one binary, no separate processes.
+**Phase 0 success criteria:** Launch app on macOS, create a wallet, see address. Wire to proxy-router for balance + model listing.
 
 ---
 
@@ -131,13 +134,15 @@ Goal: Running on a real iPhone. Same app, native feel.
 
 | Dependency             | Source                                                      | Purpose                                |
 | ---------------------- | ----------------------------------------------------------- | -------------------------------------- |
-| proxy-router           | `github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router` | Core blockchain, sessions, attestation |
+| go-ethereum            | `github.com/ethereum/go-ethereum`                           | Key derivation, Ethereum addresses     |
+| go-bip39               | `github.com/tyler-smith/go-bip39`                           | BIP-39 mnemonic generation             |
+| btcsuite               | `github.com/btcsuite/btcd`, `btcutil`                       | HD key derivation (BIP-32)             |
+| proxy-router (HTTP)    | `github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router` | Blockchain, sessions, chat via REST    |
+| modernc.org/sqlite     | Pure-Go SQLite                                              | Embedded DB, no CGo                    |
 | Flutter SDK            | flutter.dev                                                 | Cross-platform UI                      |
 | gomobile               | `golang.org/x/mobile/cmd/gomobile`                          | Compile Go → native libraries          |
-| modernc.org/sqlite     | Pure-Go SQLite                                              | Embedded DB, no CGo                    |
 | flutter_secure_storage | pub.dev                                                     | Platform keychain abstraction          |
 | local_auth             | pub.dev                                                     | Biometric authentication               |
-| web3dart               | pub.dev                                                     | Ethereum interaction from Dart         |
 
 
 ---
@@ -145,13 +150,14 @@ Goal: Running on a real iPhone. Same app, native feel.
 ## Architecture Decisions Log
 
 
-| Date       | Decision                                | Rationale                                                                                                      |
-| ---------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 2026-03-17 | Embedded Go via FFI, not HTTP localhost | Port conflicts, process management issues on some systems, iOS background restrictions                         |
-| 2026-03-17 | Flutter over React Native               | True native compilation, first-class desktop + mobile from single codebase, better Go interop via dart:ffi     |
-| 2026-03-17 | Orchestrator layer between UI and core  | Smart consumer API (active models, quick sessions) — patterns from API Gateway without the multi-user overhead |
-| 2026-03-17 | Pure-Go SQLite (modernc)                | Avoids CGo for clean cross-compilation with gomobile                                                           |
-| 2026-03-17 | Upstream Go module dep, not fork        | Inherit TEE improvements, attestation updates automatically                                                    |
-| 2026-03-17 | Consumer-only, strip provider code      | Smaller binary, simpler UX, focused scope                                                                      |
+| Date       | Decision                                     | Rationale                                                                                                      |
+| ---------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 2026-03-17 | Flutter over React Native                    | True native compilation, first-class desktop + mobile, better Go interop via dart:ffi                          |
+| 2026-03-17 | Orchestrator layer between UI and core       | Smart consumer API (active models, quick sessions) — patterns from API Gateway without multi-user overhead     |
+| 2026-03-17 | Pure-Go SQLite (modernc)                     | Avoids CGo for clean cross-compilation with gomobile                                                           |
+| 2026-03-17 | Consumer-only, strip provider code           | Smaller binary, simpler UX, focused scope                                                                      |
+| 2026-03-17 | Native wallet, HTTP for blockchain ops       | go-ethereum/bip39 for wallet (no deps), proxy-router REST API for blockchain (pragmatic)                       |
+| 2026-03-17 | Planned fork into absgrafx org               | Will add `mobile/` SDK package so RedPill can import proxy-router directly — eliminates HTTP intermediary      |
+| 2026-03-17 | absgrafx org, MIT license                    | Personal project bolted on top of MorpheusAIs, compatible with upstream MIT license                            |
 
 
