@@ -3,16 +3,19 @@ package orchestrator
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/AlanHortwormo/redpill/internal/core"
-	"github.com/AlanHortwormo/redpill/internal/store"
+	"github.com/absgrafx/redpill/internal/core"
+	"github.com/absgrafx/redpill/internal/store"
 )
 
+const modelCacheTTL = 60 * time.Second
+
 // Orchestrator provides consumer-friendly operations on top of the raw
-// proxy-router engine. It consolidates multi-step workflows (like the API
-// Gateway does) without the multi-user/billing overhead.
+// proxy-router engine. Consolidates multi-step workflows (like the API
+// Gateway does) without multi-user/billing overhead.
 type Orchestrator struct {
 	engine *core.Engine
 	store  *store.Store
@@ -22,8 +25,6 @@ type Orchestrator struct {
 	modelExpiry time.Time
 }
 
-const modelCacheTTL = 60 * time.Second
-
 func New(engine *core.Engine, store *store.Store) *Orchestrator {
 	return &Orchestrator{
 		engine: engine,
@@ -31,15 +32,15 @@ func New(engine *core.Engine, store *store.Store) *Orchestrator {
 	}
 }
 
-// ActiveModels returns currently active models with available bids,
-// enriched with TEE status. Results are cached for modelCacheTTL.
-// TEE-attested models are sorted first.
-func (o *Orchestrator) ActiveModels(ctx context.Context) ([]core.Model, error) {
+// ActiveModels returns currently active (non-deleted) models, cached
+// for modelCacheTTL. LLM models are sorted first, then alphabetically.
+// If teeOnly is true, only models with a "tee" tag are returned.
+func (o *Orchestrator) ActiveModels(ctx context.Context, teeOnly bool) ([]core.Model, error) {
 	o.mu.RLock()
 	if time.Now().Before(o.modelExpiry) && len(o.modelCache) > 0 {
 		cached := o.modelCache
 		o.mu.RUnlock()
-		return cached, nil
+		return filterModels(cached, teeOnly), nil
 	}
 	o.mu.RUnlock()
 
@@ -50,13 +51,19 @@ func (o *Orchestrator) ActiveModels(ctx context.Context) ([]core.Model, error) {
 
 	active := make([]core.Model, 0, len(all))
 	for _, m := range all {
-		// TODO: filter by active status, available bids
-		active = append(active, m)
+		if !m.IsDeleted {
+			active = append(active, m)
+		}
 	}
 
 	sort.Slice(active, func(i, j int) bool {
-		if active[i].IsTEE != active[j].IsTEE {
-			return active[i].IsTEE
+		iTEE := hasTEETag(active[i].Tags)
+		jTEE := hasTEETag(active[j].Tags)
+		if iTEE != jTEE {
+			return iTEE
+		}
+		if active[i].ModelType != active[j].ModelType {
+			return active[i].ModelType == "LLM"
 		}
 		return active[i].Name < active[j].Name
 	})
@@ -66,10 +73,32 @@ func (o *Orchestrator) ActiveModels(ctx context.Context) ([]core.Model, error) {
 	o.modelExpiry = time.Now().Add(modelCacheTTL)
 	o.mu.Unlock()
 
-	return active, nil
+	return filterModels(active, teeOnly), nil
 }
 
-// WalletSummary returns a consolidated view of the user's wallet.
+func filterModels(models []core.Model, teeOnly bool) []core.Model {
+	if !teeOnly {
+		return models
+	}
+	out := make([]core.Model, 0)
+	for _, m := range models {
+		if hasTEETag(m.Tags) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func hasTEETag(tags []string) bool {
+	for _, t := range tags {
+		lower := strings.ToLower(t)
+		if lower == "tee" || strings.Contains(lower, "tee") {
+			return true
+		}
+	}
+	return false
+}
+
 type WalletSummary struct {
 	Address        string `json:"address"`
 	MORBalance     string `json:"mor_balance"`
@@ -77,10 +106,10 @@ type WalletSummary struct {
 	ActiveSessions int    `json:"active_sessions"`
 }
 
-func (o *Orchestrator) GetWalletSummary(ctx context.Context, address string) (*WalletSummary, error) {
-	info, err := o.engine.GetBalance(ctx, address)
+func (o *Orchestrator) GetWalletSummary(ctx context.Context) (*WalletSummary, error) {
+	info, err := o.engine.GetBalance(ctx)
 	if err != nil {
-		return nil, err
+		return &WalletSummary{Address: o.engine.Address()}, nil
 	}
 
 	return &WalletSummary{
@@ -90,55 +119,27 @@ func (o *Orchestrator) GetWalletSummary(ctx context.Context, address string) (*W
 	}, nil
 }
 
-// QuickSession finds the best provider for a model, handles MOR approval
-// if needed, and initiates a session — all in one call.
-func (o *Orchestrator) QuickSession(ctx context.Context, modelID string) (*core.Session, error) {
-	models, err := o.ActiveModels(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var bestProvider string
-	for _, m := range models {
-		if m.ID == modelID {
-			bestProvider = m.Provider
-			if m.IsTEE {
-				break // prefer TEE provider
-			}
-		}
-	}
-
-	if bestProvider == "" {
-		return nil, core.ErrNotInitialized // TODO: proper error
-	}
-
-	// TODO: check MOR allowance, auto-approve if needed
-
-	return o.engine.OpenSession(ctx, modelID, bestProvider)
+// QuickSession opens a session for a model in one call — the proxy-router
+// handles bid selection, MOR approval, and provider handshake.
+func (o *Orchestrator) QuickSession(ctx context.Context, modelID string, durationSeconds int64) (*core.Session, error) {
+	return o.engine.OpenSession(ctx, modelID, durationSeconds)
 }
 
-// ChatStream sends a prompt and returns streaming response chunks.
-// It also persists the exchange to local storage.
-func (o *Orchestrator) ChatStream(ctx context.Context, sessionID string, conversationID string, prompt string) (<-chan string, error) {
-	chunks, err := o.engine.SendPrompt(ctx, sessionID, prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	// Save user message
+// ChatStream sends a prompt and persists the exchange to local storage.
+// Returns the full response (streaming will be added in a later phase).
+func (o *Orchestrator) ChatStream(ctx context.Context, sessionID string, modelID string, conversationID string, prompt string) (string, error) {
 	_ = o.store.SaveMessage(conversationID, "user", prompt)
 
-	// Wrap the channel to accumulate and persist the full response
-	out := make(chan string, 64)
-	go func() {
-		defer close(out)
-		var full string
-		for chunk := range chunks {
-			full += chunk
-			out <- chunk
-		}
-		_ = o.store.SaveMessage(conversationID, "assistant", full)
-	}()
+	response, err := o.engine.SendPrompt(ctx, sessionID, modelID, prompt)
+	if err != nil {
+		return "", err
+	}
 
-	return out, nil
+	_ = o.store.SaveMessage(conversationID, "assistant", response)
+	return response, nil
+}
+
+// ProxyReachable checks if the proxy-router HTTP service is available.
+func (o *Orchestrator) ProxyReachable(ctx context.Context) bool {
+	return o.engine.Client().IsReachable(ctx)
 }
