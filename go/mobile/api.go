@@ -5,16 +5,15 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/absgrafx/redpill/internal/core"
-	"github.com/absgrafx/redpill/internal/orchestrator"
+	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
 	"github.com/absgrafx/redpill/internal/store"
 )
 
 var (
-	mu   sync.Mutex
-	eng  *core.Engine
-	orch *orchestrator.Orchestrator
-	db   *store.Store
+	mu      sync.Mutex
+	client  *sdk.SDK
+	db      *store.Store
+	initErr error
 )
 
 func resultJSON(v interface{}) string {
@@ -29,35 +28,44 @@ func errJSON(err error) string {
 
 // --- Lifecycle ---
 
-// Init starts the engine. proxyBaseURL is the running proxy-router
-// (e.g. "http://localhost:8082"). dataDir is where the local SQLite
-// database will be stored.
-func Init(dataDir string, proxyBaseURL string) string {
+// Init initializes the embedded proxy-router SDK and local storage.
+// All blockchain operations go directly through the SDK — no external
+// proxy-router process needed.
+func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, blockscoutURL string) string {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if eng != nil {
+	if client != nil {
 		return resultJSON(map[string]string{"status": "already_initialized"})
 	}
 
-	cfg := core.Config{
-		DataDir:      dataDir,
-		ProxyBaseURL: proxyBaseURL,
-	}
-	eng = core.NewEngine(cfg)
-	if err := eng.Init(context.Background()); err != nil {
-		eng = nil
-		return errJSON(err)
+	activeModelsURL := "https://active.dev.mor.org/active_models.json"
+
+	cfg := sdk.Config{
+		DataDir:         dataDir,
+		EthNodeURL:      ethNodeURL,
+		ChainID:         chainID,
+		DiamondAddr:     diamondAddr,
+		MorTokenAddr:    morTokenAddr,
+		BlockscoutURL:   blockscoutURL,
+		ActiveModelsURL: activeModelsURL,
+		LogLevel:        "info",
 	}
 
 	var err error
-	db, err = store.New(dataDir + "/redpill.db")
+	client, err = sdk.NewSDK(cfg)
 	if err != nil {
-		eng = nil
+		client = nil
 		return errJSON(err)
 	}
 
-	orch = orchestrator.New(eng, db)
+	db, err = store.New(dataDir + "/redpill.db")
+	if err != nil {
+		client.Shutdown()
+		client = nil
+		return errJSON(err)
+	}
+
 	return resultJSON(map[string]string{"status": "ok"})
 }
 
@@ -69,41 +77,30 @@ func Shutdown() {
 		_ = db.Close()
 		db = nil
 	}
-	if eng != nil {
-		_ = eng.Close()
-		eng = nil
+	if client != nil {
+		client.Shutdown()
+		client = nil
 	}
-	orch = nil
 }
 
-// IsReady returns true if the engine is initialized.
+// IsReady returns true if the SDK is initialized.
 func IsReady() bool {
 	mu.Lock()
 	defer mu.Unlock()
-	return eng != nil && eng.IsReady()
+	return client != nil
 }
 
-// IsProxyReachable checks if the proxy-router HTTP service responds.
-func IsProxyReachable() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	if orch == nil {
-		return false
-	}
-	return orch.ProxyReachable(context.Background())
-}
-
-// --- Wallet (native — no proxy-router needed) ---
+// --- Wallet (native via SDK — embedded proxy-router wallet) ---
 
 // CreateWallet generates a new BIP-39 wallet. Returns JSON:
 // {"mnemonic":"...", "address":"0x..."}
 func CreateWallet() string {
 	mu.Lock()
 	defer mu.Unlock()
-	if eng == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	mnemonic, address, err := eng.CreateWallet()
+	mnemonic, address, err := client.CreateWallet()
 	if err != nil {
 		return errJSON(err)
 	}
@@ -114,14 +111,13 @@ func CreateWallet() string {
 }
 
 // ImportWalletMnemonic imports a wallet from a BIP-39 mnemonic.
-// derivationPath can be empty to use the default (m/44'/60'/0'/0/0).
-func ImportWalletMnemonic(mnemonic string, derivationPath string) string {
+func ImportWalletMnemonic(mnemonic string) string {
 	mu.Lock()
 	defer mu.Unlock()
-	if eng == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	address, err := eng.ImportWallet(mnemonic, derivationPath)
+	address, err := client.ImportMnemonic(mnemonic)
 	if err != nil {
 		return errJSON(err)
 	}
@@ -132,10 +128,10 @@ func ImportWalletMnemonic(mnemonic string, derivationPath string) string {
 func ImportWalletPrivateKey(hexKey string) string {
 	mu.Lock()
 	defer mu.Unlock()
-	if eng == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	address, err := eng.ImportPrivateKey(hexKey)
+	address, err := client.ImportPrivateKey(hexKey)
 	if err != nil {
 		return errJSON(err)
 	}
@@ -147,44 +143,57 @@ func ImportWalletPrivateKey(hexKey string) string {
 func ExportPrivateKey() string {
 	mu.Lock()
 	defer mu.Unlock()
-	if eng == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	hex, err := eng.PrivateKeyHex()
+	hex, err := client.ExportPrivateKey()
 	if err != nil {
 		return errJSON(err)
 	}
 	return resultJSON(map[string]string{"private_key": hex})
 }
 
-// GetWalletSummary returns address, ETH balance, and MOR balance.
+// GetWalletSummary returns address + ETH/MOR balances.
 func GetWalletSummary() string {
 	mu.Lock()
 	defer mu.Unlock()
-	if orch == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	summary, err := orch.GetWalletSummary(context.Background())
+
+	addr, _ := client.GetAddress()
+	bal, err := client.GetBalance(context.Background())
 	if err != nil {
-		return errJSON(err)
+		return resultJSON(map[string]string{
+			"address":     addr,
+			"eth_balance": "0",
+			"mor_balance": "0",
+			"error":       err.Error(),
+		})
 	}
-	return resultJSON(summary)
+	return resultJSON(map[string]string{
+		"address":     addr,
+		"eth_balance": bal.ETH,
+		"mor_balance": bal.MOR,
+	})
 }
 
-// --- Models (via proxy-router HTTP) ---
+// --- Models (direct blockchain via SDK) ---
 
-// GetActiveModels returns active models as JSON array, cached 60s.
-// If teeOnly is true, only models with TEE in their tags are returned
-// (MAX Privacy mode).
+// GetActiveModels returns all registered models as a JSON array.
+// If teeOnly is true, only TEE-tagged models are returned (MAX Privacy).
 func GetActiveModels(teeOnly bool) string {
 	mu.Lock()
 	defer mu.Unlock()
-	if orch == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	models, err := orch.ActiveModels(context.Background(), teeOnly)
+	models, err := client.GetAllModels(context.Background())
 	if err != nil {
 		return errJSON(err)
+	}
+	if teeOnly {
+		models = filterTEE(models)
 	}
 	return resultJSON(models)
 }
@@ -193,60 +202,89 @@ func GetActiveModels(teeOnly bool) string {
 func GetRatedBids(modelID string) string {
 	mu.Lock()
 	defer mu.Unlock()
-	if eng == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	bids, err := eng.GetRatedBids(context.Background(), modelID)
+	bids, err := client.GetRatedBids(context.Background(), modelID)
 	if err != nil {
 		return errJSON(err)
 	}
 	return resultJSON(bids)
 }
 
-// --- Sessions (via proxy-router HTTP) ---
+// --- Sessions (direct blockchain via SDK) ---
 
-// QuickOpenSession opens a session for a model in one shot.
-func QuickOpenSession(modelID string, durationSeconds int) string {
+// OpenSession opens a session for a model. durationSeconds is the session length.
+func OpenSession(modelID string, durationSeconds int64, directPayment bool) string {
 	mu.Lock()
 	defer mu.Unlock()
-	if orch == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	session, err := orch.QuickSession(context.Background(), modelID, int64(durationSeconds))
+	sessionID, err := client.OpenSession(context.Background(), modelID, durationSeconds, directPayment)
 	if err != nil {
 		return errJSON(err)
 	}
-	return resultJSON(session)
+	return resultJSON(map[string]string{"session_id": sessionID})
 }
 
 // CloseSession closes an active session.
 func CloseSession(sessionID string) string {
 	mu.Lock()
 	defer mu.Unlock()
-	if eng == nil {
-		return errJSON(core.ErrNotInitialized)
+	if client == nil {
+		return errJSON(errNotInit)
 	}
-	if err := eng.CloseSession(context.Background(), sessionID); err != nil {
-		return errJSON(err)
-	}
-	return resultJSON(map[string]string{"status": "closed"})
-}
-
-// --- Chat (via proxy-router HTTP) ---
-
-// SendPrompt sends a chat prompt through an open session.
-// Returns the full assistant response (non-streaming for now).
-func SendPrompt(sessionID string, modelID string, conversationID string, prompt string) string {
-	mu.Lock()
-	defer mu.Unlock()
-	if orch == nil {
-		return errJSON(core.ErrNotInitialized)
-	}
-	response, err := orch.ChatStream(context.Background(), sessionID, modelID, conversationID, prompt)
+	txHash, err := client.CloseSession(context.Background(), sessionID)
 	if err != nil {
 		return errJSON(err)
 	}
-	return resultJSON(map[string]string{"response": response})
+	return resultJSON(map[string]string{"status": "closed", "tx_hash": txHash})
+}
+
+// GetSession retrieves session details by ID.
+func GetSession(sessionID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	s, err := client.GetSessionJSON(context.Background(), sessionID)
+	if err != nil {
+		return errJSON(err)
+	}
+	return s
+}
+
+// --- Chat (direct MOR-RPC via SDK — streaming) ---
+
+// SendPrompt sends a chat prompt through an open session and persists
+// the exchange locally. Returns the full response.
+func SendPrompt(sessionID string, conversationID string, prompt string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+
+	if db != nil {
+		_ = db.SaveMessage(conversationID, "user", prompt)
+	}
+
+	var fullResponse string
+	err := client.SendPrompt(context.Background(), sessionID, prompt, func(text string, isLast bool) error {
+		fullResponse += text
+		return nil
+	})
+	if err != nil {
+		return errJSON(err)
+	}
+
+	if db != nil {
+		_ = db.SaveMessage(conversationID, "assistant", fullResponse)
+	}
+
+	return resultJSON(map[string]string{"response": fullResponse})
 }
 
 // --- Conversations (local SQLite) ---
@@ -256,7 +294,7 @@ func GetConversations() string {
 	mu.Lock()
 	defer mu.Unlock()
 	if db == nil {
-		return errJSON(core.ErrNotInitialized)
+		return errJSON(errNotInit)
 	}
 	convos, err := db.ListConversations(100)
 	if err != nil {
@@ -270,7 +308,7 @@ func GetMessages(conversationID string) string {
 	mu.Lock()
 	defer mu.Unlock()
 	if db == nil {
-		return errJSON(core.ErrNotInitialized)
+		return errJSON(errNotInit)
 	}
 	msgs, err := db.GetMessages(conversationID)
 	if err != nil {
@@ -285,7 +323,7 @@ func SetPreference(key string, value string) string {
 	mu.Lock()
 	defer mu.Unlock()
 	if db == nil {
-		return errJSON(core.ErrNotInitialized)
+		return errJSON(errNotInit)
 	}
 	if err := db.SetPreference(key, value); err != nil {
 		return errJSON(err)
@@ -297,11 +335,32 @@ func GetPreference(key string) string {
 	mu.Lock()
 	defer mu.Unlock()
 	if db == nil {
-		return errJSON(core.ErrNotInitialized)
+		return errJSON(errNotInit)
 	}
 	val, err := db.GetPreference(key)
 	if err != nil {
 		return errJSON(err)
 	}
 	return resultJSON(map[string]string{"value": val})
+}
+
+// --- Helpers ---
+
+var errNotInit = &initError{}
+
+type initError struct{}
+
+func (e *initError) Error() string { return "not initialized — call Init() first" }
+
+func filterTEE(models []sdk.Model) []sdk.Model {
+	out := make([]sdk.Model, 0)
+	for _, m := range models {
+		for _, tag := range m.Tags {
+			if tag == "tee" || tag == "TEE" {
+				out = append(out, m)
+				break
+			}
+		}
+	}
+	return out
 }

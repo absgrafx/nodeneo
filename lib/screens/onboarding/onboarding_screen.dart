@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../../services/bridge.dart';
 import '../../theme.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -12,6 +14,8 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _mnemonicController = TextEditingController();
   bool _isCreating = false;
+  String? _createdMnemonic;
+  String? _createdAddress;
 
   @override
   void dispose() {
@@ -21,10 +25,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _createWallet() async {
     setState(() => _isCreating = true);
-    // TODO: call Go FFI — mobile.CreateWallet()
-    await Future.delayed(const Duration(milliseconds: 800));
-    setState(() => _isCreating = false);
-    widget.onComplete();
+    try {
+      final bridge = GoBridge();
+      final result = bridge.createWallet();
+      setState(() {
+        _createdMnemonic = result['mnemonic'] as String?;
+        _createdAddress = result['address'] as String?;
+        _isCreating = false;
+      });
+    } on GoBridgeException catch (e) {
+      setState(() => _isCreating = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.message}')),
+        );
+      }
+    }
   }
 
   Future<void> _importWallet() async {
@@ -35,12 +51,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
       return;
     }
-    // TODO: call Go FFI — mobile.ImportWalletMnemonic(mnemonic)
-    widget.onComplete();
+    try {
+      final bridge = GoBridge();
+      bridge.importWalletMnemonic(mnemonic);
+      widget.onComplete();
+    } on GoBridgeException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Import failed: ${e.message}')),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_createdMnemonic != null) {
+      return _MnemonicBackupScreen(
+        mnemonic: _createdMnemonic!,
+        address: _createdAddress ?? '',
+        onConfirm: widget.onComplete,
+      );
+    }
+    return _buildOnboardingForm(context);
+  }
+
+  Widget _buildOnboardingForm(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
       body: SafeArea(
@@ -54,7 +90,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 children: [
                   const SizedBox(height: 48),
 
-                  // Logo / shield
                   Container(
                     width: 80,
                     height: 80,
@@ -78,7 +113,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   const SizedBox(height: 48),
 
-                  // Create new wallet
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -87,31 +121,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
                           : const Text('Create New Wallet'),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  // Divider
                   Row(
                     children: [
                       const Expanded(child: Divider(color: Color(0xFF374151))),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Text('or import existing',
-                            style: theme.textTheme.bodySmall),
+                        child: Text('or import existing', style: theme.textTheme.bodySmall),
                       ),
                       const Expanded(child: Divider(color: Color(0xFF374151))),
                     ],
                   ),
                   const SizedBox(height: 16),
 
-                  // Import mnemonic
                   TextField(
                     controller: _mnemonicController,
                     maxLines: 3,
@@ -130,15 +158,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   const SizedBox(height: 48),
 
-                  // Privacy note
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: RedPillTheme.greenDark.withValues(alpha: 0.5),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: RedPillTheme.green.withValues(alpha: 0.15),
-                      ),
+                      border: Border.all(color: RedPillTheme.green.withValues(alpha: 0.15)),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -155,6 +180,130 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shows the generated mnemonic so the user can back it up.
+class _MnemonicBackupScreen extends StatelessWidget {
+  final String mnemonic;
+  final String address;
+  final VoidCallback onConfirm;
+
+  const _MnemonicBackupScreen({
+    required this.mnemonic,
+    required this.address,
+    required this.onConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final words = mnemonic.split(' ');
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 48),
+                  const Text('✅', style: TextStyle(fontSize: 48)),
+                  const SizedBox(height: 16),
+                  Text('Wallet Created', style: theme.textTheme.headlineMedium),
+                  const SizedBox(height: 8),
+                  Text(
+                    address,
+                    style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'JetBrains Mono'),
+                  ),
+                  const SizedBox(height: 32),
+
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: RedPillTheme.amber.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: RedPillTheme.amber.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('⚠️', style: TextStyle(fontSize: 16)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Write down these 12 words and store them safely. '
+                            'This is the ONLY way to recover your wallet.',
+                            style: TextStyle(color: RedPillTheme.amber.withValues(alpha: 0.9), fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: RedPillTheme.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFF374151)),
+                    ),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: List.generate(words.length, (i) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '${i + 1}. ${words[i]}',
+                            style: const TextStyle(
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 13,
+                              color: Color(0xFFF9FAFB),
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  TextButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: mnemonic));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Mnemonic copied to clipboard')),
+                      );
+                    },
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('Copy to clipboard'),
+                  ),
+                  const SizedBox(height: 24),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: onConfirm,
+                      child: const Text("I've Backed It Up — Continue"),
                     ),
                   ),
                   const SizedBox(height: 32),
