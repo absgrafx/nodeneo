@@ -5,14 +5,16 @@
 
 ---
 
-## Current Status: **Phase 0 — Foundation**
+## Current Status: **Phase 1 — Browse + Chat** (in progress)
 
-**Started:** 2026-03-17
+**Started:** 2026-03-17  
+**Latest milestone (2026-03-20):** End-to-end chat verified on **Base mainnet** (model tap → on-chain session → `SendPrompt` → assistant reply in UI).
+
 **Target platform:** macOS arm64 (M1) → iOS simulator → iOS device
 
 ---
 
-## Phase 0 — Foundation (current)
+## Phase 0 — Foundation
 
 Goal: Prove the architecture works. Go library compiles, Flutter talks to it, wallet works.
 
@@ -36,10 +38,11 @@ Goal: Prove the architecture works. Go library compiles, Flutter talks to it, wa
 | 0.15 | Home screen — live balance + models       | DONE        | Real chain balance + active models HTTP    |
 | 0.16 | Active models HTTP endpoint integration   | DONE        | 5-min cache, hash invalidation, chain fallback |
 | 0.17 | CocoaPods + entitlements setup            | DONE        | network.client, path_provider plugin       |
+| 1.0  | Model tap → session → chat (MVP)          | DONE        | CreateConversation FFI, ChatScreen, SendPrompt |
 
 
-**Phase 0 success criteria:** Launch app on macOS, create a wallet, see address. Wire to proxy-router for balance + model listing.
-**Phase 0 STATUS: ✅ COMPLETE** — App launches, SDK initializes to Base Sepolia, wallet creates real BIP-39 mnemonic, home screen shows live balance + 11 active models from HTTP endpoint.
+**Phase 0 success criteria:** Launch app on macOS, create a wallet, see address; embedded SDK for chain + models.
+**Phase 0 STATUS: ✅ COMPLETE** — Wallet, **Base mainnet** init, live balances, active models HTTP cache, **first successful provider chat** (e.g. TEE model).
 
 ---
 
@@ -54,13 +57,26 @@ Goal: User can browse models, open a session, and chat with a TEE-attested provi
 | 1.2 | Model marketplace screen                  |        | List, search, TEE badge               |
 | 1.3 | BestProvider() scoring                    |        | TEE-first, latency-aware              |
 | 1.4 | QuickSession() — one-tap session creation |        | Approve + initiate flow               |
-| 1.5 | Chat screen — streaming responses         |        | SSE, markdown rendering               |
+| 1.5 | Chat screen — streaming responses         | Partial | Provider `stream` toggle + persist (chat composer); **UI token stream backlog** — see Backlog below |
 | 1.6 | TEE verification indicator                |        | Green shield = attested               |
 | 1.7 | Per-prompt re-verification integration    |        | VerifyProviderQuick                   |
-| 1.8 | Basic error handling + retry              |        | Network failures, session expiry      |
+| 1.8 | Basic error handling + retry              | Partial | Friendly RPC/session errors, Retry on chat; expand as needed |
+| 1.9 | On-chain session list + close             | DONE   | `GetUnclosedUserSessions`, `OnChainSessionsScreen`, drawer + ⋮ + Network/RPC |
+| 1.10 | Reuse open session per model (chat)       |        | Skip `OpenSession` when valid session exists — faster follow-up prompts |
 
 
-**Phase 1 success criteria:** Chat with a live TEE-attested model on Arbitrum mainnet. See the green TEE shield. Streaming responses. All from the Mac app.
+**Phase 1 success criteria (revised):** Chat with a **live model on Base** from the Mac app; TEE path exercised; user can **see and close** open on-chain sessions. (Original “Arbitrum + SSE in UI” deferred: Arbitrum not current target; UI token stream → Backlog B.1.)
+
+---
+
+## Next up (priority — session management & chat history)
+
+| Priority | Work | Outcome |
+| -------- | ---- | ------- |
+| **P1** | **Session reuse in chat** | Before `OpenSession`, detect unclosed session for same model/provider (or user-picked session); attach `SendPrompt` to it → less latency + fewer hanging sessions |
+| **P2** | **Chat history browser** | Wire drawer / screen to `GetConversations` + `GetMessages`; open read-only or resume flow; delete conversation |
+| **P3** | **SQLite + on-chain alignment** | Optional: store `session_id` / `ends_at` on `conversations` row; show “open on-chain” in history list with quick link to close |
+| **P4** | **Titles + polish** | Auto title from first user message; markdown for assistant bubbles |
 
 ---
 
@@ -71,10 +87,10 @@ Goal: It feels like a real app. Chat history, settings, smooth UX.
 
 | #   | Task                                 | Status | Notes                              |
 | --- | ------------------------------------ | ------ | ---------------------------------- |
-| 2.1 | Chat persistence to SQLite           |        | Conversations + messages           |
-| 2.2 | Chat history browser                 |        | List, search, delete               |
+| 2.1 | Chat persistence to SQLite           | Partial | **On send:** `CreateConversation` + `SaveMessage` for user/assistant; **no history list UI yet** |
+| 2.2 | Chat history browser                 |        | **Next:** List, open, delete — see “Next up” above              |
 | 2.3 | Conversation titles (auto-generated) |        | From first prompt                  |
-| 2.4 | Settings screen                      |        | RPC endpoint, theme, default model |
+| 2.4 | Settings screen                      | Partial | **Network / RPC** + link to on-chain sessions; expand for theme / default model |
 | 2.5 | Dark / light theme                   |        | Adaptive to platform               |
 | 2.6 | Staking management screen            |        | Stake, unstake, view rewards       |
 | 2.7 | Transaction history                  |        | Recent sends, stakes, sessions     |
@@ -152,6 +168,14 @@ Goal: Running on a real iPhone. Same app, native feel.
 
 ---
 
+## Backlog (intentionally not built yet)
+
+| # | Item | Notes |
+|---|------|--------|
+| B.1 | **Token-by-token UI streaming** | Today Go aggregates chunks internally; Dart gets one JSON when `SendPrompt` returns. To paint tokens as they arrive: new cross-FFI contract (e.g. background isolate + `SendPort`, or registered native callback from Go with isolate-safe marshalling), cancellation, and error propagation. Chat “Streaming reply” already matches provider behavior; this item is **Flutter-visible** streaming. |
+
+---
+
 ## Architecture Decisions Log
 
 
@@ -168,5 +192,7 @@ Goal: Running on a real iPhone. Same app, native feel.
 | 2026-03-19 | BadgerDB skipped for mobile                  | BadgerDB is provider-only (sessions, auth, capacity). SDK uses in-memory storage. SQLite at app layer for chat |
 | 2026-03-19 | c-shared over gomobile for FFI               | `//export` C functions via dart:ffi gives more control than gomobile bind. Works across .dylib/.xcframework/.so |
 | 2026-03-19 | Active models via HTTP, not blockchain       | Marketplace API's `active_models.json` is pre-built, cached, fast. Blockchain Multicall as fallback only. Pattern from `DirectModelService` |
+| 2026-03-20 | Base mainnet consumer path                   | Production inference + staking on Base; docs and plan criteria updated from Sepolia/Arbitrum wording where obsolete |
+| 2026-03-20 | On-chain session UX                          | Unclosed session list + close in app; stake recovery without relying on session timeout alone |
 
 

@@ -1,6 +1,6 @@
 # RedPill — Chat Handoff Context
 
-> Snapshot of project state as of 2026-03-19 (evening session).
+> Snapshot of project state as of **2026-03-20**.
 > Use this to bootstrap a new AI chat session in a fresh workspace.
 
 ---
@@ -31,7 +31,7 @@ These two repos should be in the same workspace. The RedPill go module uses a `r
 
 ---
 
-## Architecture (as of 2026-03-19)
+## Architecture (as of 2026-03-20)
 
 ### Previous architecture (Phase 0 initial):
 ```
@@ -44,7 +44,7 @@ Flutter UI → dart:ffi → Go c-shared (.dylib) → proxy-router mobile SDK →
                                                                         → active models HTTP endpoint (cached)
 ```
 
-The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mobile` directly, which wraps the proxy-router's internal packages (wallet, blockchain service, proxy sender, registries) behind a clean public API. Model listings are fetched from the Marketplace API's active models endpoint (`https://active.dev.mor.org/active_models.json`) with 5-minute cache + hash-based invalidation, falling back to blockchain Multicall if the endpoint is unavailable.
+The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mobile` directly, which wraps the proxy-router's internal packages (wallet, blockchain service, proxy sender, registries) behind a clean public API. Model listings are fetched from the production active models endpoint (`https://active.mor.org/active_models.json`) — mainnet-only, does not mix testnet models — with 5-minute cache + hash-based invalidation, falling back to blockchain Multicall if the endpoint is unavailable.
 
 ---
 
@@ -59,8 +59,8 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
   - **Wallet:** `CreateWallet()`, `ImportMnemonic()`, `ImportPrivateKey()`, `ExportPrivateKey()`, `GetAddress()`
   - **Balance:** `GetBalance()`, `GetBalanceJSON()`
   - **Models:** `GetAllModels()`, `GetAllModelsJSON()`, `GetRatedBids()`, `GetRatedBidsJSON()`, `ResolveModelID()`
-  - **Sessions:** `OpenSession()`, `CloseSession()`, `GetSession()`, `GetSessionJSON()`
-  - **Chat:** `SendPrompt()` with `StreamCallback` for streaming responses
+  - **Sessions:** `OpenSession()`, `CloseSession()`, `GetSession()`, `GetSessionJSON()`, `GetUnclosedUserSessions` / `GetUnclosedUserSessionsJSON()`
+  - **Chat:** `SendPrompt(ctx, sessionID, prompt, stream, StreamCallback)` — provider stream flag; chunks aggregated in Go before FFI returns
   - Every method also has a `*JSON()` variant for FFI
 
 - `types.go` — Public types: `Balance`, `Model` (now with `ModelType`, `CreatedAt`), `ScoredBid`, `Session` (JSON-serializable)
@@ -73,7 +73,7 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
 - File-based chat storage (JSON files, portable, not BadgerDB)
 - Config is programmatic (no env vars), includes `ActiveModelsURL`
 - Consumer-only — no provider code, HTTP server, or auth config
-- **Active models via HTTP** — SDK fetches from the Marketplace API's `active_models.json` endpoint with 5-min cache + SHA-256 hash invalidation. Blockchain Multicall as fallback. Pattern borrowed from [Morpheus-Marketplace-API `DirectModelService`](https://github.com/MorpheusAIs/Morpheus-Marketplace-API/blob/dev/src/core/direct_model_service.py).
+- **Active models via HTTP** — SDK fetches from `https://active.mor.org/active_models.json` (production; mainnet-only) with 5-min cache + SHA-256 hash invalidation. Blockchain Multicall as fallback. Pattern borrowed from [Morpheus-Marketplace-API `DirectModelService`](https://github.com/MorpheusAIs/Morpheus-Marketplace-API/blob/dev/src/core/direct_model_service.py).
 
 **Init sequence** (simplified from proxy-router's 30-step main.go):
 1. Logger → RPC dial → ethclient → chain ID verification
@@ -94,8 +94,9 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
 - `GetActiveModels(teeOnly)` — with MAX Privacy TEE filter
 - `GetRatedBids(modelID)`
 - `OpenSession(modelID, durationSeconds, directPayment)`
-- `CloseSession(sessionID)`, `GetSession(sessionID)`
-- `SendPrompt(sessionID, conversationID, prompt)` — streaming aggregated, persisted to SQLite
+- `CloseSession(sessionID)`, `GetSession(sessionID)`, `GetUnclosedUserSessions()` — JSON array of open on-chain sessions for wallet
+- `SendPrompt(sessionID, conversationID, prompt, stream)` — provider streaming flag; full response aggregated in Go, persisted to SQLite
+- `CreateConversation(id, modelID, modelName, provider, isTEE)` — SQLite row before messages
 - `GetConversations()`, `GetMessages(conversationID)`
 - `SetPreference(key, value)`, `GetPreference(key)`
 
@@ -109,7 +110,7 @@ These were the original implementations before the SDK integration. They still e
 
 ### dart:ffi Bridge (WORKING)
 
-- `go/cmd/cshared/main.go` — C-exported wrapper (`//export` directives) for all 18 SDK functions
+- `go/cmd/cshared/main.go` — C-exported wrappers (`//export` directives) for the mobile API surface (incl. `SendPrompt` + `stream` int)
 - Built as `build/go/libredpill.dylib` (50MB, c-shared, `-ldflags="-s -w"`)
 - `lib/services/bridge.dart` — Dart FFI bindings, singleton `GoBridge` class, handles `Pointer<Utf8>` marshalling + `FreeString` cleanup
 - Xcode build phase (`Copy Go Library`) auto-copies dylib into app bundle `Frameworks/`
@@ -117,11 +118,16 @@ These were the original implementations before the SDK integration. They still e
 
 ### Flutter Frontend (`lib/`) — WIRED TO REAL SDK
 
-- `main.dart` → `app.dart` → initializes SDK on startup (Base Sepolia config), routes to loading/error/onboarding/home
+- `main.dart` → `app.dart` → initializes SDK on startup (Base mainnet config), routes to loading/error/onboarding/home
 - `theme.dart` — dark theme with green accent (RedPillTheme)
 - `screens/onboarding/onboarding_screen.dart` — **wired to real Go SDK**: `createWallet()` generates real BIP-39 mnemonic, shows backup screen with numbered words, `importWalletMnemonic()` for recovery
-- `screens/home/home_screen.dart` — **wired to real SDK**: live wallet address + balance from chain, live model listing from active models endpoint, MAX Privacy toggle filters to TEE-only, model tiles with TEE badges
-- `lib/services/bridge.dart` — dart:ffi bridge to Go c-shared library
+- `screens/home/home_screen.dart` — **wired to real SDK**: live wallet + balances, active models, MAX Privacy (TEE-only); **tap LLM** → `ChatScreen`; ⋮ menu + drawer → **Open on-chain sessions**
+- `screens/chat/chat_screen.dart` — `CreateConversation`, `OpenSession` (default 1h), **Streaming reply** switch (`chat_streaming_preference_store.dart`), `SendPrompt(..., stream)`
+- `screens/sessions/on_chain_sessions_screen.dart` — lists unclosed on-chain sessions, **Close** with confirm
+- `screens/settings/network_settings_screen.dart` — custom Base RPC override + link to on-chain sessions
+- `screens/wallet/wallet_tools_screen.dart` — **export private key**, **send ETH/MOR**, **erase wallet**. See `testing_notes.md` for Keychain / container reset.
+- `lib/services/bridge.dart` — dart:ffi bridge; `listUnclosedSessions()`, `sendPrompt(..., stream:)`
+- `lib/services/wallet_vault.dart` — **persists BIP-39 mnemonic** in Keychain (macOS) / Keystore (Android) via `flutter_secure_storage`. On each launch after `Init()`, if a mnemonic exists it is re-imported into the in-memory Go wallet so the same address and funds are used across sessions.
 - **Flutter 3.41.5** installed via Homebrew
 - `flutter analyze` → zero issues
 - Dependencies: `ffi: ^2.1.0`, `path_provider: ^2.1.0`
@@ -139,21 +145,20 @@ These were the original implementations before the SDK integration. They still e
 
 ## What's NOT Done Yet (next steps)
 
-### Immediate — Phase 0 Cleanup
+**Primary focus (see `redpill_plan.md` → “Next up”):**
 
-1. **Clean up legacy packages** — Remove or deprecate `internal/core/`, `internal/orchestrator/` now that SDK handles everything
+1. **Session reuse** — Avoid opening a **new** on-chain session for every chat when an unclosed session already exists for that model; faster follow-ups, fewer stuck stakes.
+2. **Chat history UI** — `GetConversations` / `GetMessages` exist in FFI but **no list screen** yet; drawer “Chats” area is still placeholder-ish.
+3. **Optional schema** — Store `session_id` (and maybe `ends_at`) on conversation rows to correlate SQLite history with on-chain session list.
 
-2. **Improve MAX Privacy toggle UX** — "Off" state now has TEE hint badge, but could be further improved with animation or explainer tooltip
+**Also on the radar**
 
-### Phase 1 — Browse + Chat (next major phase)
+- **Legacy Go cleanup** — Remove or quarantine `internal/core/`, `internal/orchestrator/` (HTTP client path unused).
+- **Markdown** assistant bubbles; **MOR approval** error surfacing; **TEE** per-response attestation UI.
+- **Backlog B.1** — Token-by-token **Flutter** streaming (new FFI contract).
+- **iOS** — `.xcframework`, Face ID for sensitive actions.
 
-1. **Model detail screen** — Tap a model to see bids, providers, pricing
-2. **Open a session** — Wire `OpenSession()` to UI, MOR approval flow
-3. **Chat screen** — Streaming responses via `SendPrompt()`, markdown rendering
-4. **TEE verification indicator** — Green shield for attested providers
-5. **iOS build** — `.xcframework` via gomobile, Face ID for key access
-
-See `.ai-docs/redpill_plan.md` for full phase breakdown.
+See `.ai-docs/redpill_plan.md` and `.ai-docs/redpill_architecture.md` for full detail.
 
 ---
 
@@ -175,7 +180,7 @@ See `.ai-docs/redpill_plan.md` for full phase breakdown.
 4. **absgrafx org** — Personal project under MIT license, bolted on top of MorpheusAIs.
 5. **Consumer-only** — No provider code, no IPFS, no Docker, no local LLM hosting.
 6. **Private key export** — Available via `ExportPrivateKey()`, UI should gate behind biometric re-auth.
-7. **Active models via HTTP, not blockchain** — Model listings fetched from Marketplace API's `active_models.json` (same source as Morpheus-Marketplace-API `DirectModelService`). 5-min cache, SHA-256 hash invalidation, blockchain Multicall as fallback. Much faster and more reliable for mobile.
+7. **Active models via HTTP, not blockchain** — Production URL `https://active.mor.org/active_models.json` (mainnet-only; not mixed with testnet). Same pattern as Morpheus-Marketplace-API `DirectModelService`. 5-min cache, SHA-256 hash invalidation, blockchain Multicall as fallback.
 8. **c-shared over gomobile** — dart:ffi with `//export` C functions gives more control than gomobile bind. Works for macOS `.dylib`, iOS `.xcframework`, Android `.so`.
 
 ---
@@ -187,6 +192,7 @@ RedPill/
 ├── .ai-docs/
 │   ├── redpill_architecture.md
 │   ├── redpill_plan.md
+│   ├── testing_notes.md           # Persistence, export/send, Keychain nuke
 │   └── handoff_context.md         # THIS FILE
 ├── build/
 │   └── go/
@@ -209,12 +215,17 @@ RedPill/
 │   ├── app.dart                   # SDK init on startup, routing
 │   ├── theme.dart
 │   ├── services/
-│   │   └── bridge.dart            # dart:ffi bindings to Go c-shared lib
+│   │   ├── bridge.dart                     # dart:ffi → c-shared
+│   │   ├── chat_streaming_preference_store.dart
+│   │   ├── rpc_settings_store.dart
+│   │   └── wallet_vault.dart
 │   └── screens/
-│       ├── onboarding/
-│       │   └── onboarding_screen.dart  # Real wallet create/import
-│       └── home/
-│           └── home_screen.dart        # Live balance, models, TEE toggle
+│       ├── onboarding/onboarding_screen.dart
+│       ├── home/home_screen.dart
+│       ├── chat/chat_screen.dart
+│       ├── sessions/on_chain_sessions_screen.dart
+│       ├── settings/network_settings_screen.dart
+│       └── wallet/wallet_tools_screen.dart
 ├── macos/
 │   └── Runner.xcodeproj/
 │       └── project.pbxproj        # Includes "Copy Go Library" build phase

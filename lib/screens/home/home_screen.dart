@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../services/bridge.dart';
 import '../../theme.dart';
+import '../../utils/token_amount.dart';
+import '../chat/chat_screen.dart';
+import '../sessions/on_chain_sessions_screen.dart';
+import '../wallet/wallet_tools_screen.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final Future<void> Function()? onWalletErased;
+  final Future<void> Function()? onOpenNetworkSettings;
+
+  const HomeScreen({super.key, this.onWalletErased, this.onOpenNetworkSettings});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -31,8 +39,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final summary = bridge.getWalletSummary();
       setState(() {
         _address = summary['address'] as String? ?? '';
-        _ethBalance = _formatBalance(summary['eth_balance'] as String? ?? '0');
-        _morBalance = _formatBalance(summary['mor_balance'] as String? ?? '0');
+        _ethBalance = formatWeiAsEthDecimal(summary['eth_balance'] as String? ?? '0');
+        _morBalance = formatWeiFixedDecimals(summary['mor_balance'] as String? ?? '0', 2);
       });
     } catch (_) {}
   }
@@ -62,25 +70,48 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  String _formatBalance(String weiStr) {
-    if (weiStr == '0' || weiStr.isEmpty) return '0';
-    final wei = BigInt.tryParse(weiStr);
-    if (wei == null) return weiStr;
-    if (wei == BigInt.zero) return '0';
-    final oneEth = BigInt.from(10).pow(18);
-    final oneGwei = BigInt.from(10).pow(9);
-    if (wei < oneGwei) return '$wei wei';
-    if (wei < oneEth) {
-      return '${(wei ~/ oneGwei)} gwei';
-    }
-    final whole = wei ~/ oneEth;
-    final frac = (wei % oneEth).toString().padLeft(18, '0').substring(0, 4);
-    return '$whole.$frac';
-  }
-
   String _shortenAddress(String addr) {
     if (addr.length < 12) return addr;
     return '${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}';
+  }
+
+  void _openOnChainSessions(BuildContext context) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const OnChainSessionsScreen()),
+    );
+  }
+
+  void _openModelChat(BuildContext context, Map<String, dynamic> m) {
+    final type = (m['model_type'] as String? ?? 'LLM').toUpperCase();
+    if (type != 'LLM') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Chat is only for LLM models (this one is $type).')),
+      );
+      return;
+    }
+    final id = m['id'] as String? ?? '';
+    if (id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Model has no id — cannot open session.')),
+      );
+      return;
+    }
+    final name = m['name'] as String? ?? 'Model';
+    final tags = (m['tags'] as List<dynamic>?)?.cast<String>() ?? [];
+    final isTEE = tags.any((t) => t.toUpperCase().contains('TEE'));
+    Navigator.of(context)
+        .push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatScreen(
+          modelId: id,
+          modelName: name,
+          isTEE: isTEE,
+        ),
+      ),
+    )
+        .then((_) {
+      if (mounted) _loadWallet();
+    });
   }
 
   @override
@@ -88,7 +119,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
+      drawer: _HistoryChatsDrawer(
+        theme: theme,
+        onOpenOnChainSessions: () => _openOnChainSessions(context),
+      ),
       appBar: AppBar(
+        automaticallyImplyLeading: true,
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -116,16 +152,51 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, size: 20),
-            onPressed: () {
-              _loadWallet();
-              _loadModels();
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            icon: const Icon(Icons.more_horiz, size: 24),
+            onSelected: (value) async {
+              if (value == 'refresh') {
+                _loadWallet();
+                _loadModels();
+              } else if (value == 'network') {
+                final cb = widget.onOpenNetworkSettings;
+                if (cb != null) await cb();
+              } else if (value == 'sessions') {
+                _openOnChainSessions(context);
+              }
             },
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, size: 20),
-            onPressed: () {},
+            itemBuilder: (context) => [
+              const PopupMenuItem<String>(
+                value: 'refresh',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.refresh, size: 22),
+                  title: Text('Refresh'),
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'network',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.settings_ethernet, size: 22),
+                  title: Text('Network / RPC'),
+                  subtitle: Text('Optional custom Base endpoint', style: TextStyle(fontSize: 11)),
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'sessions',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.hub_outlined, size: 22),
+                  title: Text('Open on-chain sessions'),
+                  subtitle: Text('Close early · reclaim stake', style: TextStyle(fontSize: 11)),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -136,9 +207,18 @@ class _HomeScreenState extends State<HomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _WalletCard(
-                address: _shortenAddress(_address),
+                fullAddress: _address,
                 ethBalance: _ethBalance,
                 morBalance: _morBalance,
+                onManageWallet: () {
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => WalletToolsScreen(onWalletErased: widget.onWalletErased),
+                    ),
+                  ).then((_) {
+                    if (mounted) _loadWallet();
+                  });
+                },
               ),
               const SizedBox(height: 16),
 
@@ -219,6 +299,7 @@ class _HomeScreenState extends State<HomeScreen> {
           owner: _shortenAddress(m['owner'] as String? ?? ''),
           isTEE: isTEE,
           tags: tags,
+          onTap: () => _openModelChat(ctx, m),
         );
       },
     );
@@ -412,19 +493,27 @@ class _EmptyState extends StatelessWidget {
 // --- Wallet Card ---
 
 class _WalletCard extends StatelessWidget {
-  final String address;
+  final String fullAddress;
   final String ethBalance;
   final String morBalance;
+  final VoidCallback onManageWallet;
 
   const _WalletCard({
-    required this.address,
+    required this.fullAddress,
     required this.ethBalance,
     required this.morBalance,
+    required this.onManageWallet,
   });
+
+  static String _shorten(String addr) {
+    if (addr.length < 12) return addr;
+    return '${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}';
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final display = fullAddress.isEmpty ? '—' : _shorten(fullAddress);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -453,21 +542,160 @@ class _WalletCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Text(
-              address,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontFamily: 'JetBrains Mono',
-                letterSpacing: 0.5,
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.only(right: 4, top: 0, bottom: 0),
+                              constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                              tooltip: 'Copy full address',
+                              icon: Icon(
+                                Icons.copy_rounded,
+                                size: 22,
+                                color: fullAddress.isEmpty
+                                    ? theme.disabledColor
+                                    : theme.colorScheme.onSurface.withValues(alpha: 0.85),
+                              ),
+                              onPressed: fullAddress.isEmpty
+                                  ? null
+                                  : () {
+                                      Clipboard.setData(ClipboardData(text: fullAddress));
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Wallet address copied'),
+                                          behavior: SnackBarBehavior.floating,
+                                          duration: Duration(seconds: 2),
+                                        ),
+                                      );
+                                    },
+                            ),
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 10),
+                                child: Text(
+                                  display,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontFamily: 'JetBrains Mono',
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          children: [
+                            _BalanceChip(label: 'MOR', value: morBalance, color: RedPillTheme.green),
+                            _BalanceChip(label: 'ETH', value: ethBalance, color: RedPillTheme.amber),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 100,
+                    child: Material(
+                      color: RedPillTheme.green.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(14),
+                      child: InkWell(
+                        onTap: onManageWallet,
+                        borderRadius: BorderRadius.circular(14),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
+                          child: Center(
+                            child: Text(
+                              'Manage',
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                color: RedPillTheme.green,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                _BalanceChip(label: 'MOR', value: morBalance, color: RedPillTheme.green),
-                _BalanceChip(label: 'ETH', value: ethBalance, color: RedPillTheme.amber),
-              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Drawer: on-chain sessions entry + chat history (placeholder).
+class _HistoryChatsDrawer extends StatelessWidget {
+  final ThemeData theme;
+  final VoidCallback onOpenOnChainSessions;
+
+  const _HistoryChatsDrawer({required this.theme, required this.onOpenOnChainSessions});
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      backgroundColor: theme.colorScheme.surface,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DrawerHeader(
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.fromLTRB(20, 16, 16, 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Chats & sessions', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Open Morpheus sessions live on Base. Close early to reclaim stake.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.hub_outlined, color: RedPillTheme.green.withValues(alpha: 0.9)),
+              title: const Text('Open on-chain sessions'),
+              subtitle: const Text('List · close · reclaim MOR stake'),
+              onTap: () {
+                Navigator.pop(context);
+                onOpenOnChainSessions();
+              },
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  ListTile(
+                    leading: Icon(Icons.chat_bubble_outline, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                    title: const Text('Chat history'),
+                    subtitle: const Text('Placeholder — local SQLite list coming soon'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -519,11 +747,13 @@ class _ModelTile extends StatelessWidget {
   final String owner;
   final bool isTEE;
   final List<String> tags;
+  final VoidCallback onTap;
 
   const _ModelTile({
     required this.name,
     required this.owner,
     required this.isTEE,
+    required this.onTap,
     this.tags = const [],
   });
 
@@ -590,7 +820,7 @@ class _ModelTile extends StatelessWidget {
                 ),
               )
             : null,
-        onTap: () {},
+        onTap: onTap,
       ),
     );
   }

@@ -15,21 +15,23 @@ A user installs RedPill, creates (or imports) a wallet, stakes MOR, picks a mode
 
 ---
 
-## Integration Strategy
+## Integration Strategy (current)
 
-RedPill uses a **two-tier approach** to integrate with the proxy-router:
+RedPill embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-router/mobile/`) as a Go module (`replace` to a local fork). There is **no separate proxy-router process** and **no HTTP hop** for consumer operations.
 
-### Tier 1 — Native Go (wallet operations)
-Wallet creation, mnemonic import, private key import, and key derivation are implemented natively in Go using the same upstream libraries the proxy-router uses (`go-ethereum`, `go-bip39`, `btcsuite`). This gives us:
-- Zero dependency on a running proxy-router for wallet ops
-- Deterministic, testable key derivation
-- Same addresses and key formats as the proxy-router
+### What the embedded SDK covers
+- **Wallet** — create / import mnemonic or private key, address, balances (same crypto stack as upstream: `go-ethereum`, `go-bip39`, etc.)
+- **Chain** — JSON-RPC to Base (multi-endpoint round-robin in the SDK’s eth client)
+- **Models** — active model list from `active_models.json` (cached) with blockchain fallback
+- **Sessions** — open / close / query on-chain sessions; list **unclosed** sessions for the wallet
+- **Chat** — `SendPrompt` → internal `SendPromptV2` / MOR-RPC to the provider (streaming aggregated in Go before returning over FFI)
 
-### Tier 2 — HTTP Client (blockchain/session/chat)
-Blockchain queries, session management, and chat completions are delegated to a running proxy-router instance via its REST API. The proxy-router's packages are all under `internal/` (Go import restriction), so we talk to it as an HTTP service.
+### Flutter ↔ Go
+- **dart:ffi** to a **c-shared** library (`libredpill.dylib` / future `.xcframework` / `.so`)
+- JSON in/out on the boundary; SQLite for **local** conversations/messages lives in RedPill’s `internal/store` and is driven from `go/mobile/api.go`
 
-### Future — Forked SDK (planned)
-A fork of `MorpheusAIs/Morpheus-Lumerin-Node` into `absgrafx/Morpheus-Lumerin-Node` will add a `proxy-router/mobile/` public SDK package that wraps the internal packages. This will let RedPill import the proxy-router directly as a Go module dependency — eliminating the HTTP intermediary for a true embedded integration.
+### Reference: standalone proxy-router HTTP API
+A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/chat/completions`, `/blockchain/sessions/...`). That surface is useful for **documentation and parity** with [Morpheus-Marketplace-API](https://github.com/MorpheusAIs/Morpheus-Marketplace-API); RedPill does **not** require it at runtime.
 
 ---
 
@@ -38,8 +40,8 @@ A fork of `MorpheusAIs/Morpheus-Lumerin-Node` into `absgrafx/Morpheus-Lumerin-No
 1. **Consumer-only** — This is NOT a provider tool. Strip all provider-side code, IPFS, Docker, local LLM hosting.
 2. **Mobile-first** — iOS and Android are first-class. Desktop (macOS first) is a bonus, not an afterthought.
 3. **Platform-native security** — Private keys live in the platform's secure enclave (iOS Keychain, Android Keystore). Auth via Face ID / Touch ID / fingerprint. Never roll our own crypto storage.
-4. **Smart orchestration** — Don't just expose raw proxy-router endpoints. Add an orchestration layer that provides consumer-friendly operations (active models, provider health, one-tap session creation).
-5. **Incremental integration** — Start with HTTP client → evolve to embedded once the fork SDK is ready.
+4. **Smart UX on top of the SDK** — Flutter screens filter models (e.g. MAX Privacy / TEE), surface RPC overrides, and manage on-chain session lists; the SDK still owns chain + provider I/O.
+5. **Embedded first** — HTTP client code in `internal/core/proxy_client.go` is **legacy**; the live path is `go/mobile/api.go` → SDK.
 
 ---
 
@@ -50,105 +52,70 @@ A fork of `MorpheusAIs/Morpheus-Lumerin-Node` into `absgrafx/Morpheus-Lumerin-No
 │                    Flutter UI Layer                       │
 │                                                           │
 │  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │
-│  │  Onboarding │  │   Models   │  │   Chat + History   │  │
-│  │  Wallet     │  │ Marketplace│  │   Streaming        │  │
-│  │  Biometric  │  │  TEE Badge │  │   Local persist    │  │
+│  │  Onboarding │  │   Home     │  │   Chat             │  │
+│  │  Wallet     │  │   Models   │  │   SendPrompt       │  │
+│  │             │  │   TEE      │  │   (provider stream │  │
+│  │             │  │   toggle   │  │    toggle → Go)    │  │
+│  └────────────┘  └────────────┘  └────────────────────┘  │
+│  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │
+│  │  Wallet    │  │  Network   │  │  On-chain sessions │  │
+│  │  send/erase│  │  / RPC     │  │  list + close      │  │
 │  └────────────┘  └────────────┘  └────────────────────┘  │
 │                         │                                 │
-│              dart:ffi (direct function calls)             │
+│              dart:ffi → c-shared lib (JSON strings)       │
 │                         │                                 │
 ├─────────────────────────────────────────────────────────┤
-│                 Orchestrator (Go)                         │
+│           RedPill Go mobile API (`go/mobile/api.go`)      │
 │                                                           │
-│  Smarter API surface for consumers:                      │
-│  • ActiveModels() — filtered, enriched, cached           │
-│  • QuickSession(modelID) — approve + initiate in one op  │
-│  • ChatStream(sessionID, prompt) — with auto-persist     │
-│  • WalletSummary() — MOR + ETH balances, staking info   │
-│  • ProxyReachable() — is the proxy-router running?       │
-│                                                           │
-│  Borrows patterns from the API Gateway's consolidated    │
-│  endpoints, minus multi-user/billing/auth overhead.      │
+│  • Init / Shutdown, wallet FFI wrappers                  │
+│  • SQLite: CreateConversation, SaveMessage (on SendPrompt)│
+│  • Delegates chain/session/chat → proxy-router mobile SDK │
 ├─────────────────────────────────────────────────────────┤
-│               Core (Go)                                   │
+│     Proxy-router mobile SDK (`proxy-router/mobile/`)      │
 │                                                           │
-│  NATIVE (no proxy-router needed):                        │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ Wallet: BIP-39 create, mnemonic import, key import │  │
-│  │ Uses: go-ethereum, go-bip39, btcsuite              │  │
-│  └────────────────────────────────────────────────────┘  │
+│  • Wallet, balance, OpenSession, CloseSession, GetSession │
+│  • GetUnclosedUserSessions (paginated, consumer wallet)   │
+│  • SendPrompt (stream flag → OpenAI-compatible request)   │
+│  • Active models HTTP + registries / proxy sender         │
 │                                                           │
-│  VIA HTTP CLIENT (talks to proxy-router REST API):       │
-│  ┌────────┐ ┌───────────┐ ┌──────────┐ ┌────────────┐  │
-│  │ Models │ │ Blockchain│ │ Sessions │ │    Chat    │  │
-│  │  list  │ │  balance  │ │ open/cls │ │ completions│  │
-│  └────────┘ └───────────┘ └──────────┘ └────────────┘  │
-│                                                           │
-│  EXCLUDED: IPFS, Docker, local LLM, provider-side code   │
+│  EXCLUDED: IPFS, Docker, local LLM, provider-node role    │
 ├─────────────────────────────────────────────────────────┤
-│                   Store (Go — SQLite)                    │
+│                   Store (Go — SQLite)                     │
 │                                                           │
-│  Embedded SQLite via modernc.org/sqlite (pure Go)        │
-│  • Chat history (conversations, messages, timestamps)    │
-│  • Model cache (avoid re-fetching every launch)          │
-│  • User preferences (theme, default model, etc.)         │
-│  Compiled into the same binary — no external DB process. │
+│  modernc.org/sqlite — conversations, messages, prefs      │
+│  (Chat **browser** UI = next; persistence on send = yes)   │
 ├─────────────────────────────────────────────────────────┤
-│                   Platform Layer                         │
+│                   Platform Layer                          │
 │                                                           │
-│  iOS:    Keychain Services, Secure Enclave, Face ID      │
-│  Android: Keystore, BiometricPrompt, StrongBox           │
-│  macOS:  Keychain, Touch ID                              │
-│                                                           │
-│  Private keys stored encrypted in platform secure store. │
-│  Biometric required to sign transactions.                │
+│  Keychain / Keystore (mnemonic), Application Support      │
+│  (RPC override file, chat_streaming_preference.txt, DB)    │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Proxy-Router HTTP API Surface
+## Parity: proxy-router HTTP API (reference)
 
-The proxy-router runs on a configurable port (default `:8082`) and exposes these endpoints that RedPill consumes:
+When running the **full** proxy-router binary, these routes mirror what the embedded SDK does internally (useful for Marketplace-API / ops tooling; **not** RedPill’s runtime path):
 
-| Endpoint | Method | RedPill Use |
-|----------|--------|-------------|
-| `/blockchain/balance` | GET | Wallet ETH+MOR balance |
-| `/blockchain/models` | GET | List all models |
-| `/blockchain/models/:id/bids/rated` | GET | Best providers for a model |
-| `/blockchain/models/:id/session` | POST | Open session by model |
+| Endpoint | Method | Role |
+|----------|--------|------|
+| `/blockchain/sessions/user` | GET | List sessions (SDK: `GetUnclosedUserSessions` / related) |
 | `/blockchain/sessions/:id/close` | POST | Close session |
-| `/blockchain/sessions/user` | GET | Active user sessions |
-| `/v1/chat/completions` | POST | Chat (OpenAI-compatible) |
-| `/healthcheck` | GET | Liveness probe |
+| `/blockchain/models/:id/session` | POST | Open session by model |
+| `/v1/chat/completions` | POST | Chat (OpenAI-compatible; SDK: `SendPrompt` / `SendPromptV2`) |
+| … | … | See proxy-router OpenAPI / `controller_http.go` |
 
 ---
 
-## Orchestrator Layer — Smarts from the API Gateway
+## Consumer smarts (Flutter + `api.go`)
 
-The raw proxy-router endpoints are "dumb" — `/blockchain/models` returns ALL models (active, inactive, delisted). The API Gateway has smarter consolidated endpoints. We want that intelligence WITHOUT the multi-user, billing, Cognito overhead.
+- **Active models** — SDK caches `active_models.json`; home screen applies **MAX Privacy** (TEE-only filter).
+- **Sessions** — `OpenSession` per chat (default 1h); **OnChainSessionsScreen** lists unclosed on-chain sessions and **Close** reclaims stake; entry from ⋮ menu, drawer, Network / RPC settings.
+- **Chat** — `SendPrompt(sessionID, conversationID, prompt, stream)`; user + assistant rows persisted to SQLite on each completed prompt.
+- **RPC** — Optional `eth_rpc_override.txt`; multi-endpoint + backoff in SDK eth client.
 
-### Key orchestrator functions
-
-**ActiveModels()**
-- Calls proxy-router's blockchain model listing
-- Filters to non-deleted models
-- Sorts by: LLM first, then alphabetically
-- Caches for 60s
-
-**QuickSession(modelID, duration)**
-- Delegates to proxy-router's `OpenSessionByModelId`
-- Proxy-router handles MOR approval, bid selection, provider handshake
-- One function call instead of multiple HTTP roundtrips
-
-**ChatStream(sessionID, modelID, prompt)**
-- Sends prompt via proxy-router's chat completions endpoint
-- Persists exchange to local SQLite
-- Returns full response (streaming in later phase)
-
-**WalletSummary()**
-- MOR + ETH balances from proxy-router
-- Address from native wallet
+**Backlog:** Token-by-token **UI** streaming over FFI (see `redpill_plan.md` → Backlog B.1). Provider-side streaming is already selectable via composer toggle.
 
 ---
 
@@ -205,9 +172,9 @@ CREATE TABLE preferences (
 
 ### Network Privacy
 - No analytics, no telemetry, no crash reporting
-- All traffic is direct: RedPill → proxy-router → Blockchain + P2P
-- TEE attestation verified by the proxy-router
-- No centralized intermediary ever sees prompts
+- Traffic is direct: **device → Base RPC + active models HTTP + provider (MOR-RPC)** via the embedded SDK (no separate C-node process in RedPill)
+- TEE flows use the same attestation paths as upstream proxy-router where applicable
+- No Marketplace-API or central relay in the hot path for chat
 
 ---
 
@@ -216,13 +183,12 @@ CREATE TABLE preferences (
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | UI | Flutter 3.x (Dart) | Single codebase: iOS, Android, macOS. Native compilation. |
-| Go bridge | gomobile + dart:ffi | Compile Go to native library. Direct function calls. |
-| Core wallet | Go (go-ethereum, go-bip39) | Native key derivation, same as proxy-router. |
-| Core blockchain | HTTP client → proxy-router | Access internal packages via REST API (for now). |
-| Orchestrator | Go | Smart consumer API on top of raw proxy-router calls. |
-| Local DB | SQLite (modernc.org/sqlite) | Pure-Go SQLite. No CGo. Embedded in binary. |
+| Go bridge | **c-shared** + dart:ffi | `//export` C API; `FreeString` + JSON payloads. |
+| Chain + inference | **proxy-router/mobile** SDK | Same logic as full node, in-process. |
+| Wallet | SDK + secure store | Go wallet in memory; mnemonic in Keychain / Keystore. |
+| Local DB | SQLite (modernc.org/sqlite) | Conversations + messages + preferences. |
 | Keychain | flutter_secure_storage | Platform-native keychain abstraction. |
-| Biometrics | local_auth | Face ID / Touch ID / fingerprint. |
+| Biometrics | local_auth (planned polish) | Face ID / Touch ID / fingerprint. |
 
 ---
 
@@ -250,20 +216,16 @@ CREATE TABLE preferences (
 
 ---
 
-## What We Pull From the API Gateway
+## What We Align With (Marketplace / Gateway patterns)
 
-| Gateway Pattern | RedPill Equivalent |
-|----------------|-------------------|
-| Active model listing (filtered, enriched) | `orchestrator.ActiveModels()` |
-| Session lifecycle management | `orchestrator.QuickSession(modelID)` |
-| Chat completions endpoint | `orchestrator.ChatStream()` |
-| Balance + staking summary | `orchestrator.WalletSummary()` |
+| Gateway / app pattern | RedPill equivalent |
+|----------------------|---------------------|
+| Curated active models | SDK `active_models.json` cache + home filters |
+| Session open / close / list | SDK + `OnChainSessionsScreen` |
+| OpenAI-shaped chat | `SendPrompt` → `SendPromptV2` |
+| Optional dedicated RPC | `eth_rpc_override.txt` + `chain_config` defaults |
 
-**What we DON'T take:**
-- Multi-user auth (Cognito, email, API keys)
-- Billing (Stripe, usage tracking)
-- Centralized C-Node management
-- Rate limiting / quota management
+**What we deliberately skip:** Cognito, API keys, billing, multi-tenant gateway as a dependency in the inference path.
 
 ---
 

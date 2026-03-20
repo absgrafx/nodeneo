@@ -39,7 +39,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		return resultJSON(map[string]string{"status": "already_initialized"})
 	}
 
-	activeModelsURL := "https://active.dev.mor.org/active_models.json"
+	activeModelsURL := "https://active.mor.org/active_models.json"
 
 	cfg := sdk.Config{
 		DataDir:         dataDir,
@@ -178,6 +178,34 @@ func GetWalletSummary() string {
 	})
 }
 
+// SendETH sends native ETH (amountWei as decimal string, unit wei). Waits for confirmation.
+func SendETH(toAddress, amountWei string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	tx, err := client.SendETH(context.Background(), toAddress, amountWei)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"tx_hash": tx})
+}
+
+// SendMOR sends MOR tokens (18 decimals, amountWei as decimal string). Waits for confirmation.
+func SendMOR(toAddress, amountWei string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	tx, err := client.SendMOR(context.Background(), toAddress, amountWei)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"tx_hash": tx})
+}
+
 // --- Models (direct blockchain via SDK) ---
 
 // GetActiveModels returns all registered models as a JSON array.
@@ -256,11 +284,26 @@ func GetSession(sessionID string) string {
 	return s
 }
 
+// GetUnclosedUserSessions returns JSON array of open sessions (ClosedAt == 0) for this wallet.
+func GetUnclosedUserSessions() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	js, err := client.GetUnclosedUserSessionsJSON(context.Background())
+	if err != nil {
+		return errJSON(err)
+	}
+	return js
+}
+
 // --- Chat (direct MOR-RPC via SDK — streaming) ---
 
 // SendPrompt sends a chat prompt through an open session and persists
 // the exchange locally. Returns the full response.
-func SendPrompt(sessionID string, conversationID string, prompt string) string {
+// stream: when true, request OpenAI-style streaming (SSE) from the provider; when false, non-streaming completion.
+func SendPrompt(sessionID string, conversationID string, prompt string, stream bool) string {
 	mu.Lock()
 	defer mu.Unlock()
 	if client == nil {
@@ -272,7 +315,7 @@ func SendPrompt(sessionID string, conversationID string, prompt string) string {
 	}
 
 	var fullResponse string
-	err := client.SendPrompt(context.Background(), sessionID, prompt, func(text string, isLast bool) error {
+	err := client.SendPrompt(context.Background(), sessionID, prompt, stream, func(text string, isLast bool) error {
 		fullResponse += text
 		return nil
 	})
@@ -288,6 +331,19 @@ func SendPrompt(sessionID string, conversationID string, prompt string) string {
 }
 
 // --- Conversations (local SQLite) ---
+
+// CreateConversation inserts a conversation row so messages can reference it (FK).
+func CreateConversation(id, modelID, modelName, provider string, isTEE bool) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.CreateConversation(id, modelID, modelName, provider, isTEE); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
 
 // GetConversations lists all saved conversations.
 func GetConversations() string {

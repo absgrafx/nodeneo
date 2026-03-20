@@ -82,6 +82,18 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetWalletSummary');
 
+  late final _sendETH = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SendETH');
+
+  late final _sendMOR = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SendMOR');
+
+  late final _createConversation = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)>('CreateConversation');
+
   late final _getActiveModels = _lib.lookupFunction<
       Pointer<Utf8> Function(Int32),
       Pointer<Utf8> Function(int)>('GetActiveModels');
@@ -102,9 +114,13 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('GetSession');
 
+  late final _getUnclosedUserSessions = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('GetUnclosedUserSessions');
+
   late final _sendPrompt = _lib.lookupFunction<
-      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),
-      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)>('SendPrompt');
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)>('SendPrompt');
 
   late final _getConversations = _lib.lookupFunction<
       Pointer<Utf8> Function(),
@@ -171,7 +187,8 @@ class GoBridge {
     calloc.free(scout);
 
     final json = jsonDecode(result) as Map<String, dynamic>;
-    initialized = json['status'] == 'ok';
+    final st = json['status'] as String?;
+    initialized = st == 'ok' || st == 'already_initialized';
     return json;
   }
 
@@ -220,6 +237,57 @@ class GoBridge {
 
   Map<String, dynamic> getWalletSummary() {
     return _callJSON(_getWalletSummary);
+  }
+
+  /// Sends native ETH. [amountWei] is wei as a decimal integer string.
+  Map<String, dynamic> sendETH({required String toAddress, required String amountWei}) {
+    final to = toAddress.toNativeUtf8();
+    final amt = amountWei.toNativeUtf8();
+    final ptr = _sendETH(to, amt);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(to);
+    calloc.free(amt);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Sends MOR (18 decimals). [amountWei] is smallest units as decimal string.
+  Map<String, dynamic> sendMOR({required String toAddress, required String amountWei}) {
+    final to = toAddress.toNativeUtf8();
+    final amt = amountWei.toNativeUtf8();
+    final ptr = _sendMOR(to, amt);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(to);
+    calloc.free(amt);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Creates a local SQLite conversation (required before [sendPrompt] persists messages).
+  void createConversation({
+    required String conversationId,
+    required String modelId,
+    required String modelName,
+    String provider = '',
+    bool isTEE = false,
+  }) {
+    final cid = conversationId.toNativeUtf8();
+    final mid = modelId.toNativeUtf8();
+    final mname = modelName.toNativeUtf8();
+    final prov = provider.toNativeUtf8();
+    final ptr = _createConversation(cid, mid, mname, prov, isTEE ? 1 : 0);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    calloc.free(mid);
+    calloc.free(mname);
+    calloc.free(prov);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
   }
 
   // --- Models ---
@@ -283,13 +351,31 @@ class GoBridge {
     return json;
   }
 
+  /// Open on-chain sessions for the wallet (not closed on-chain yet).
+  List<dynamic> listUnclosedSessions() {
+    final ptr = _getUnclosedUserSessions();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final decoded = jsonDecode(result);
+    if (decoded is Map && decoded.containsKey('error')) {
+      throw GoBridgeException(decoded['error'] as String);
+    }
+    return decoded as List<dynamic>;
+  }
+
   // --- Chat ---
 
-  Map<String, dynamic> sendPrompt(String sessionID, String conversationID, String prompt) {
+  /// [stream]: when true, ask the provider for SSE/token streaming; when false, non-streaming completion.
+  Map<String, dynamic> sendPrompt(
+    String sessionID,
+    String conversationID,
+    String prompt, {
+    bool stream = true,
+  }) {
     final sid = sessionID.toNativeUtf8();
     final cid = conversationID.toNativeUtf8();
     final p = prompt.toNativeUtf8();
-    final ptr = _sendPrompt(sid, cid, p);
+    final ptr = _sendPrompt(sid, cid, p, stream ? 1 : 0);
     final result = ptr.toDartString();
     _freeString(ptr);
     calloc.free(sid);

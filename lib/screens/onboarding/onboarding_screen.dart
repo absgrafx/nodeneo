@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/bridge.dart';
+import '../../services/wallet_vault.dart';
 import '../../theme.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -43,6 +44,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  Future<void> _confirmBackupAndFinish() async {
+    final m = _createdMnemonic;
+    if (m != null) {
+      await WalletVault.instance.saveMnemonic(m);
+    }
+    if (!mounted) return;
+    widget.onComplete();
+  }
+
   Future<void> _importWallet() async {
     final mnemonic = _mnemonicController.text.trim();
     if (mnemonic.split(' ').length < 12) {
@@ -54,6 +64,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       final bridge = GoBridge();
       bridge.importWalletMnemonic(mnemonic);
+      await WalletVault.instance.saveMnemonic(mnemonic);
+      if (!mounted) return;
       widget.onComplete();
     } on GoBridgeException catch (e) {
       if (mounted) {
@@ -70,7 +82,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       return _MnemonicBackupScreen(
         mnemonic: _createdMnemonic!,
         address: _createdAddress ?? '',
-        onConfirm: widget.onComplete,
+        onConfirm: _confirmBackupAndFinish,
       );
     }
     return _buildOnboardingForm(context);
@@ -197,7 +209,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 class _MnemonicBackupScreen extends StatelessWidget {
   final String mnemonic;
   final String address;
-  final VoidCallback onConfirm;
+  final Future<void> Function() onConfirm;
 
   const _MnemonicBackupScreen({
     required this.mnemonic,
@@ -302,7 +314,7 @@ class _MnemonicBackupScreen extends StatelessWidget {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: onConfirm,
+                      onPressed: () async => onConfirm(),
                       child: const Text("I've Backed It Up — Continue"),
                     ),
                   ),
