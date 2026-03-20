@@ -72,6 +72,16 @@ func GetWalletSummary() *C.char {
 	return C.CString(mobile.GetWalletSummary())
 }
 
+//export SendETH
+func SendETH(toAddr, amountWei *C.char) *C.char {
+	return C.CString(mobile.SendETH(C.GoString(toAddr), C.GoString(amountWei)))
+}
+
+//export SendMOR
+func SendMOR(toAddr, amountWei *C.char) *C.char {
+	return C.CString(mobile.SendMOR(C.GoString(toAddr), C.GoString(amountWei)))
+}
+
 // --- Models ---
 
 //export GetActiveModels
@@ -101,18 +111,35 @@ func GetSession(sessionID *C.char) *C.char {
 	return C.CString(mobile.GetSession(C.GoString(sessionID)))
 }
 
+//export GetUnclosedUserSessions
+func GetUnclosedUserSessions() *C.char {
+	return C.CString(mobile.GetUnclosedUserSessions())
+}
+
 // --- Chat ---
 
 //export SendPrompt
-func SendPrompt(sessionID, conversationID, prompt *C.char) *C.char {
+func SendPrompt(sessionID, conversationID, prompt *C.char, stream C.int) *C.char {
 	return C.CString(mobile.SendPrompt(
 		C.GoString(sessionID),
 		C.GoString(conversationID),
 		C.GoString(prompt),
+		stream != 0,
 	))
 }
 
 // --- Conversations ---
+
+//export CreateConversation
+func CreateConversation(convID, modelID, modelName, provider *C.char, isTEE C.int) *C.char {
+	return C.CString(mobile.CreateConversation(
+		C.GoString(convID),
+		C.GoString(modelID),
+		C.GoString(modelName),
+		C.GoString(provider),
+		isTEE != 0,
+	))
+}
 
 //export GetConversations
 func GetConversations() *C.char {
