@@ -2,6 +2,14 @@ package main
 
 /*
 #include <stdlib.h>
+
+typedef void (*redpill_stream_cb)(const char* text, int is_last);
+
+static inline void redpill_invoke_stream_cb(redpill_stream_cb cb, const char* t, int is_last) {
+	if (cb != NULL) {
+		cb(t, is_last);
+	}
+}
 */
 import "C"
 import (
@@ -136,6 +144,35 @@ func SendPrompt(sessionID, conversationID, prompt *C.char, stream C.int) *C.char
 		C.GoString(prompt),
 		stream != 0,
 	))
+}
+
+// SendPromptStream runs the same path as SendPrompt but forwards each streamed delta to [cb]
+// before returning the final JSON (including "response" with the full text).
+// [cb] may be NULL (no per-chunk delivery).
+//
+//export SendPromptStream
+func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, cb C.redpill_stream_cb) *C.char {
+	chunk := func(text string, last bool) error {
+		if cb == nil {
+			return nil
+		}
+		ct := C.CString(text)
+		var lastInt C.int
+		if last {
+			lastInt = 1
+		}
+		C.redpill_invoke_stream_cb(cb, ct, lastInt)
+		C.free(unsafe.Pointer(ct))
+		return nil
+	}
+	out := mobile.SendPromptWithStreamCallback(
+		C.GoString(sessionID),
+		C.GoString(conversationID),
+		C.GoString(prompt),
+		stream != 0,
+		chunk,
+	)
+	return C.CString(out)
 }
 
 // --- Conversations ---

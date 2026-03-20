@@ -354,6 +354,17 @@ func openAIMessagesFromSQLiteHistory(msgs []store.Message, newUserPrompt string)
 // sees full context after app restarts (provider session is separate from chat memory).
 // stream: when true, request OpenAI-style streaming (SSE) from the provider; when false, non-streaming completion.
 func SendPrompt(sessionID string, conversationID string, prompt string, stream bool) string {
+	return sendPromptWithOptionalChunk(sessionID, conversationID, prompt, stream, nil)
+}
+
+// SendPromptWithStreamCallback is like [SendPrompt] but invokes [chunk] for each provider delta
+// (and again with isLast=true on the final chunk). When [chunk] returns an error, streaming aborts.
+// [chunk] may be nil (same behavior as [SendPrompt]).
+func SendPromptWithStreamCallback(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isLast bool) error) string {
+	return sendPromptWithOptionalChunk(sessionID, conversationID, prompt, stream, chunk)
+}
+
+func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isLast bool) error) string {
 	mu.Lock()
 	defer mu.Unlock()
 	if client == nil {
@@ -374,6 +385,9 @@ func SendPrompt(sessionID string, conversationID string, prompt string, stream b
 	var fullResponse string
 	err := client.SendPromptWithMessages(context.Background(), sessionID, omsgs, stream, func(text string, isLast bool) error {
 		fullResponse += text
+		if chunk != nil {
+			return chunk(text, isLast)
+		}
 		return nil
 	})
 	if err != nil {
