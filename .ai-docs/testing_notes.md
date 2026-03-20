@@ -17,6 +17,8 @@ Hot-wallet demo on **Base mainnet**. This doc covers persistence, moving funds, 
 | **Active session clock** | Home → **Continue chatting** with open session | Subtitle shows **~N min left**; after wall-clock `ends_at`, row drops after refresh/timer reconcile |
 | **Second topic same model** | Open GLM-5 chat A, then tap GLM-5 again for new thread | New conversation; **same** `session_id` if still valid; **✕** on one thread does **not** chain-close if another thread shares session |
 
+**Planned UX checks (backlog)** — token symbols (ETH / Base / MOR), drawer width + swipe vs overflow menu, Markdown code in replies, clipboard in/out.
+
 ---
 
 ## Wallet persistence (normal use)

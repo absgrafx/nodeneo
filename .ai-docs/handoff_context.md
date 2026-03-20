@@ -176,11 +176,16 @@ Prioritized list to capture before wider alpha:
 6. **Lock + splash / onboarding polish** — Marketing-friendly first run; **quick links** (e.g. Coinbase, Base bridge, “get MOR”) for normie path.
 7. **Technical / power-user** — **Token usage** dashboard (input/output/total per model or session; stake vs direct pay); **response metadata drawer** (provider headers JSON); **tunable params** (temperature, etc.) where API allows.
 8. **Parity pass** — RedPill + embedded SDK vs **API Gateway** single-user/single-device flows; gap list doc.
+9. **Token symbols & labels** — Correct **ETH**, **Base** (network), and **MOR** symbols / copy everywhere balances and sends appear (not ambiguous “generic” token text).
+10. **History / drawer list layout** — Widen usable area so **titles** and **action icons** read clearly; prefer **swipe** gestures (e.g. pin / delete / close-on-chain conventions) **plus** visible icons — **drop redundant ⋮ overflow** where swipe + icons cover actions (don’t duplicate both).
+11. **Markdown in chat** — Render assistant replies as **Markdown** (headings, lists, **fenced code blocks**, inline code) so code and structure display properly (package: e.g. `flutter_markdown` + code theme).
+12. **Copy / paste** — **Copy** from assistant bubbles (text selection, “copy code block”, long-press); **paste** into the chat input from clipboard (normie + dev workflow).
+13. **Images / multimodal** — Farther out: inbound images, vision models, attachment UX (track after core text+MVP).
 
 **Also on the radar**
 
 - **Legacy Go cleanup** — `internal/core/`, `internal/orchestrator/` unused HTTP path.
-- **Markdown** assistant bubbles; TEE **per-message** attestation UI (optional).
+- TEE **per-message** attestation UI (optional).
 - **Backlog B.1** — Token-by-token **Flutter** streaming (new FFI contract).
 
 See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.

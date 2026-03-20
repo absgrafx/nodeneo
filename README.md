@@ -21,7 +21,7 @@ See [.ai-docs/redpill_architecture.md](.ai-docs/redpill_architecture.md) and [.a
 
 ## Status
 
-Active development on **Base mainnet**. Roadmap and **MVP alpha backlog**: [.ai-docs/redpill_plan.md](.ai-docs/redpill_plan.md) (items 1–8: dev setup, branding, settings polish, naming, autofill, onboarding, usage dashboard, gateway parity).
+Active development on **Base mainnet**. Roadmap and **MVP alpha backlog**: [.ai-docs/redpill_plan.md](.ai-docs/redpill_plan.md) (items **1–13** in the “Next up” table — includes token symbols, history/swipe UX, Markdown, copy/paste, deferred images).
 
 ## Quick Start (macOS)
 

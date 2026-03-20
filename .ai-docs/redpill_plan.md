@@ -81,6 +81,11 @@ Goal: User can browse models, open a session, and chat with a TEE-attested provi
 | 6 | **Splash / lock / onboarding** | Normie-friendly copy + quick links (e.g. get MOR / Coinbase) |
 | 7 | **Usage + power user** | Token counts dashboard; response metadata drawer; temperature / params |
 | 8 | **Gateway parity pass** | Doc gaps vs API Gateway single-user flows |
+| 9 | **Token symbols** | Proper **ETH**, **Base**, **MOR** labels in wallet + anywhere amounts show |
+| 10 | **History / drawer UX** | Wider list; clear titles + actions; **swipe** pin/delete/close; **icons** without duplicating ⋮ menu |
+| 11 | **Markdown replies** | Assistant bubbles render MD + **code fences** |
+| 12 | **Copy / paste** | Copy from responses (incl. code); paste into composer |
+| 13 | **Images / multimodal** | Deferred — after text MVP |
 
 **Recently done (no longer “next”):** session reuse per model, `session_ends_at` + minutes left + reconcile, stake estimate FFI, structured session errors, TEE verifier in `proxy-router/mobile`.
 
