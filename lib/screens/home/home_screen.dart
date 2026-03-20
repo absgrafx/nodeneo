@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/bridge.dart';
 import '../../theme.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -10,24 +11,81 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _maxPrivacy = false;
+  String _address = '';
+  String _ethBalance = '—';
+  String _morBalance = '—';
+  List<dynamic> _models = [];
+  bool _loadingModels = false;
+  String? _modelsError;
 
-  // Mock data — will be replaced with Go FFI calls
-  final List<_MockModel> _allModels = [
-    _MockModel('LLaMA 3.1 70B', '0xabc...def', true, ['LLM', 'TEE']),
-    _MockModel('Mistral Large', '0x123...456', true, ['LLM', 'TEE']),
-    _MockModel('GPT-4o (via proxy)', '0x789...012', false, ['LLM']),
-    _MockModel('Claude Sonnet', '0xdef...789', false, ['LLM']),
-    _MockModel('Whisper Large v3', '0x456...abc', true, ['STT', 'TEE']),
-    _MockModel('DeepSeek R1', '0xfed...321', false, ['LLM']),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadWallet();
+    _loadModels();
+  }
 
-  List<_MockModel> get _filteredModels =>
-      _maxPrivacy ? _allModels.where((m) => m.isTEE).toList() : _allModels;
+  void _loadWallet() {
+    try {
+      final bridge = GoBridge();
+      final summary = bridge.getWalletSummary();
+      setState(() {
+        _address = summary['address'] as String? ?? '';
+        _ethBalance = _formatBalance(summary['eth_balance'] as String? ?? '0');
+        _morBalance = _formatBalance(summary['mor_balance'] as String? ?? '0');
+      });
+    } catch (_) {}
+  }
+
+  void _loadModels() {
+    setState(() {
+      _loadingModels = true;
+      _modelsError = null;
+    });
+    try {
+      final bridge = GoBridge();
+      final models = bridge.getActiveModels(teeOnly: _maxPrivacy);
+      setState(() {
+        _models = models;
+        _loadingModels = false;
+      });
+    } on GoBridgeException catch (e) {
+      setState(() {
+        _modelsError = e.message;
+        _loadingModels = false;
+      });
+    } catch (e) {
+      setState(() {
+        _modelsError = e.toString();
+        _loadingModels = false;
+      });
+    }
+  }
+
+  String _formatBalance(String weiStr) {
+    if (weiStr == '0' || weiStr.isEmpty) return '0';
+    final wei = BigInt.tryParse(weiStr);
+    if (wei == null) return weiStr;
+    if (wei == BigInt.zero) return '0';
+    final oneEth = BigInt.from(10).pow(18);
+    final oneGwei = BigInt.from(10).pow(9);
+    if (wei < oneGwei) return '$wei wei';
+    if (wei < oneEth) {
+      return '${(wei ~/ oneGwei)} gwei';
+    }
+    final whole = wei ~/ oneEth;
+    final frac = (wei % oneEth).toString().padLeft(18, '0').substring(0, 4);
+    return '$whole.$frac';
+  }
+
+  String _shortenAddress(String addr) {
+    if (addr.length < 12) return addr;
+    return '${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}';
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final models = _filteredModels;
 
     return Scaffold(
       appBar: AppBar(
@@ -59,6 +117,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.refresh, size: 20),
+            onPressed: () {
+              _loadWallet();
+              _loadModels();
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_outlined, size: 20),
             onPressed: () {},
           ),
@@ -70,64 +135,94 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _WalletCard(),
+              _WalletCard(
+                address: _shortenAddress(_address),
+                ethBalance: _ethBalance,
+                morBalance: _morBalance,
+              ),
               const SizedBox(height: 16),
 
-              // MAX Privacy toggle
               _PrivacyToggle(
                 enabled: _maxPrivacy,
-                onChanged: (val) => setState(() => _maxPrivacy = val),
+                onChanged: (val) {
+                  setState(() => _maxPrivacy = val);
+                  _loadModels();
+                },
               ),
               const SizedBox(height: 20),
 
-              // Section header with count
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('MODELS', style: theme.textTheme.labelSmall),
                   Text(
-                    '${models.length} available',
+                    _loadingModels
+                        ? 'loading...'
+                        : '${_models.length} available',
                     style: theme.textTheme.bodySmall,
                   ),
                 ],
               ),
               const SizedBox(height: 12),
 
-              // Model list
               Expanded(
-                child: models.isEmpty
-                    ? _EmptyState(maxPrivacy: _maxPrivacy)
-                    : ListView.builder(
-                        itemCount: models.length,
-                        itemBuilder: (ctx, i) => _ModelTile(
-                          name: models[i].name,
-                          provider: models[i].provider,
-                          isTEE: models[i].isTEE,
-                          tags: models[i].tags,
-                        ),
-                      ),
+                child: _buildModelList(),
               ),
             ],
           ),
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // TODO: open new chat
-        },
+        onPressed: () {},
         backgroundColor: RedPillTheme.green,
         child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
       ),
     );
   }
-}
 
-class _MockModel {
-  final String name;
-  final String provider;
-  final bool isTEE;
-  final List<String> tags;
-  const _MockModel(this.name, this.provider, this.isTEE, this.tags);
+  Widget _buildModelList() {
+    if (_loadingModels) {
+      return const Center(child: CircularProgressIndicator(color: RedPillTheme.green));
+    }
+    if (_modelsError != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('⚠️', style: TextStyle(fontSize: 48)),
+            const SizedBox(height: 16),
+            Text(
+              'Could not load models',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _modelsError!,
+              style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
+    }
+    if (_models.isEmpty) {
+      return _EmptyState(maxPrivacy: _maxPrivacy);
+    }
+    return ListView.builder(
+      itemCount: _models.length,
+      itemBuilder: (ctx, i) {
+        final m = _models[i] as Map<String, dynamic>;
+        final tags = (m['tags'] as List<dynamic>?)?.cast<String>() ?? [];
+        final isTEE = tags.any((t) => t.toUpperCase().contains('TEE'));
+        return _ModelTile(
+          name: m['name'] as String? ?? 'Unknown',
+          owner: _shortenAddress(m['owner'] as String? ?? ''),
+          isTEE: isTEE,
+          tags: tags,
+        );
+      },
+    );
+  }
 }
 
 // --- MAX Privacy Toggle ---
@@ -180,20 +275,46 @@ class _PrivacyToggle extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    enabled ? 'MAX PRIVACY' : 'ALL PROVIDERS',
-                    style: TextStyle(
-                      color: enabled ? RedPillTheme.green : const Color(0xFF9CA3AF),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.2,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        enabled ? 'MAX PRIVACY' : 'ALL PROVIDERS',
+                        style: TextStyle(
+                          color: enabled ? RedPillTheme.green : const Color(0xFF9CA3AF),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      if (!enabled) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFF374151)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('🛡️', style: TextStyle(fontSize: 9)),
+                              SizedBox(width: 3),
+                              Text(
+                                'TEE available',
+                                style: TextStyle(color: Color(0xFF6B7280), fontSize: 9, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     enabled
                         ? 'TEE-attested providers only — encrypted inference'
-                        : 'All available models and providers',
+                        : 'Enable for TEE-only encrypted inference',
                     style: TextStyle(
                       color: enabled
                           ? RedPillTheme.green.withValues(alpha: 0.7)
@@ -257,7 +378,7 @@ class _AnimatedToggleSwitch extends StatelessWidget {
   }
 }
 
-// --- Empty state when MAX Privacy filters everything ---
+// --- Empty state ---
 
 class _EmptyState extends StatelessWidget {
   final bool maxPrivacy;
@@ -269,30 +390,18 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            maxPrivacy ? '🛡️' : '📡',
-            style: const TextStyle(fontSize: 48),
-          ),
+          Text(maxPrivacy ? '🛡️' : '📡', style: const TextStyle(fontSize: 48)),
           const SizedBox(height: 16),
           Text(
-            maxPrivacy
-                ? 'No TEE providers available'
-                : 'No models available',
-            style: const TextStyle(
-              color: Color(0xFF9CA3AF),
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
+            maxPrivacy ? 'No TEE providers available' : 'No models available',
+            style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 16, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Text(
             maxPrivacy
                 ? 'Try disabling MAX Privacy to see all providers'
-                : 'Check your proxy-router connection',
-            style: const TextStyle(
-              color: Color(0xFF6B7280),
-              fontSize: 13,
-            ),
+                : 'Check your network connection',
+            style: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
           ),
         ],
       ),
@@ -303,6 +412,16 @@ class _EmptyState extends StatelessWidget {
 // --- Wallet Card ---
 
 class _WalletCard extends StatelessWidget {
+  final String address;
+  final String ethBalance;
+  final String morBalance;
+
+  const _WalletCard({
+    required this.address,
+    required this.ethBalance,
+    required this.morBalance,
+  });
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -335,7 +454,7 @@ class _WalletCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              '0x742d...35Fa',
+              address,
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontFamily: 'JetBrains Mono',
                 letterSpacing: 0.5,
@@ -346,8 +465,8 @@ class _WalletCard extends StatelessWidget {
               spacing: 12,
               runSpacing: 8,
               children: [
-                _BalanceChip(label: 'MOR', value: '—', color: RedPillTheme.green),
-                _BalanceChip(label: 'ETH', value: '—', color: RedPillTheme.amber),
+                _BalanceChip(label: 'MOR', value: morBalance, color: RedPillTheme.green),
+                _BalanceChip(label: 'ETH', value: ethBalance, color: RedPillTheme.amber),
               ],
             ),
           ],
@@ -376,10 +495,7 @@ class _BalanceChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700),
-          ),
+          Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
           const SizedBox(width: 8),
           Text(
             value,
@@ -400,13 +516,13 @@ class _BalanceChip extends StatelessWidget {
 
 class _ModelTile extends StatelessWidget {
   final String name;
-  final String provider;
+  final String owner;
   final bool isTEE;
   final List<String> tags;
 
   const _ModelTile({
     required this.name,
-    required this.provider,
+    required this.owner,
     required this.isTEE,
     this.tags = const [],
   });
@@ -431,16 +547,13 @@ class _ModelTile extends StatelessWidget {
             ),
           ),
           child: Center(
-            child: Text(
-              isTEE ? '🛡️' : '🤖',
-              style: const TextStyle(fontSize: 18),
-            ),
+            child: Text(isTEE ? '🛡️' : '🤖', style: const TextStyle(fontSize: 18)),
           ),
         ),
         title: Text(name, style: theme.textTheme.titleMedium?.copyWith(fontSize: 14)),
         subtitle: Row(
           children: [
-            Text(provider, style: theme.textTheme.bodySmall),
+            Text(owner, style: theme.textTheme.bodySmall),
             if (tags.isNotEmpty) ...[
               const SizedBox(width: 8),
               ...tags.take(2).map((tag) => Padding(
@@ -470,26 +583,14 @@ class _ModelTile extends StatelessWidget {
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      '🛡️',
-                      style: TextStyle(fontSize: 10),
-                    ),
+                    Text('🛡️', style: TextStyle(fontSize: 10)),
                     SizedBox(width: 3),
-                    Text(
-                      'TEE',
-                      style: TextStyle(
-                        color: RedPillTheme.green,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                    Text('TEE', style: TextStyle(color: RedPillTheme.green, fontSize: 10, fontWeight: FontWeight.w700)),
                   ],
                 ),
               )
             : null,
-        onTap: () {
-          // TODO: open chat with this model via QuickSession
-        },
+        onTap: () {},
       ),
     );
   }
