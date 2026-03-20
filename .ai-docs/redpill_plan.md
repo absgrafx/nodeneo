@@ -8,7 +8,7 @@
 ## Current Status: **Phase 1 — Browse + Chat** (in progress)
 
 **Started:** 2026-03-17  
-**Latest milestone (2026-03-20):** End-to-end chat verified on **Base mainnet** (model tap → on-chain session → `SendPrompt` → assistant reply in UI).
+**Latest milestone (2026-03-20):** End-to-end chat on **Base mainnet**; **TEE attestation** enabled in embedded SDK (negative tests fail like web); session **reuse**, **stake estimate** UI, **friendly errors**, **active session** time remaining + reconcile.
 
 **Target platform:** macOS arm64 (M1) → iOS simulator → iOS device
 
@@ -58,25 +58,31 @@ Goal: User can browse models, open a session, and chat with a TEE-attested provi
 | 1.3 | BestProvider() scoring                    |        | TEE-first, latency-aware              |
 | 1.4 | QuickSession() — one-tap session creation |        | Approve + initiate flow               |
 | 1.5 | Chat screen — streaming responses         | Partial | Provider `stream` toggle + persist (chat composer); **UI token stream backlog** — see Backlog below |
-| 1.6 | TEE verification indicator                |        | Green shield = attested               |
-| 1.7 | Per-prompt re-verification integration    |        | VerifyProviderQuick                   |
-| 1.8 | Basic error handling + retry              | Partial | Friendly RPC/session errors, Retry on chat; expand as needed |
+| 1.6 | TEE verification indicator                | Partial | Green shield in UI; **on-chain open now runs attestation** in embedded SDK (was missing) |
+| 1.7 | Per-prompt re-verification integration    |        | VerifyProviderQuick / optional         |
+| 1.8 | Basic error handling + retry              | Partial | Structured “why” + expandable technical; provider `reason` JSON parsed |
 | 1.9 | On-chain session list + close             | DONE   | `GetUnclosedUserSessions`, `OnChainSessionsScreen`, drawer + ⋮ + Network/RPC |
-| 1.10 | Reuse open session per model (chat)       |        | Skip `OpenSession` when valid session exists — faster follow-up prompts |
+| 1.10 | Reuse open session per model (chat)       | DONE   | `ReusableSessionForModel` + shared-session safe delete |
 
 
 **Phase 1 success criteria (revised):** Chat with a **live model on Base** from the Mac app; TEE path exercised; user can **see and close** open on-chain sessions. (Original “Arbitrum + SSE in UI” deferred: Arbitrum not current target; UI token stream → Backlog B.1.)
 
 ---
 
-## Next up (priority — session management & chat history)
+## Next up — **MVP for alpha** (see `handoff_context.md` for detail)
 
-| Priority | Work | Outcome |
-| -------- | ---- | ------- |
-| **P1** | **Session reuse in chat** | Before `OpenSession`, detect unclosed session for same model/provider (or user-picked session); attach `SendPrompt` to it → less latency + fewer hanging sessions |
-| **P2** | **Chat history browser** | Wire drawer / screen to `GetConversations` + `GetMessages`; open read-only or resume flow; delete conversation |
-| **P3** | **SQLite + on-chain alignment** | Optional: store `session_id` / `ends_at` on `conversations` row; show “open on-chain” in history list with quick link to close |
-| **P4** | **Titles + polish** | Auto title from first user message; markdown for assistant bubbles |
+| # | Theme | Notes |
+|---|--------|--------|
+| 1 | **Dev setup + iPhone** | Step-by-step Mac + device signing, rebuild `libredpill`, distribute to alpha testers |
+| 2 | **Branding** | Morpheus-aligned colors/icons or one consistent design system |
+| 3 | **Settings cleanup** | Remove stray notes; tidy sections |
+| 4 | **Formal app name** | Replace working name in chrome/onboarding when chosen |
+| 5 | **Password manager fill** | Autofill hints / platform issues for seed + app lock |
+| 6 | **Splash / lock / onboarding** | Normie-friendly copy + quick links (e.g. get MOR / Coinbase) |
+| 7 | **Usage + power user** | Token counts dashboard; response metadata drawer; temperature / params |
+| 8 | **Gateway parity pass** | Doc gaps vs API Gateway single-user flows |
+
+**Recently done (no longer “next”):** session reuse per model, `session_ends_at` + minutes left + reconcile, stake estimate FFI, structured session errors, TEE verifier in `proxy-router/mobile`.
 
 ---
 
@@ -94,7 +100,7 @@ Goal: It feels like a real app. Chat history, settings, smooth UX.
 | 2.5 | Dark / light theme                   |        | Adaptive to platform               |
 | 2.6 | Staking management screen            |        | Stake, unstake, view rewards       |
 | 2.7 | Transaction history                  |        | Recent sends, stakes, sessions     |
-| 2.8 | Auto-lock + biometric unlock         |        | Configurable timeout               |
+| 2.8 | Auto-lock + biometric unlock         | Partial | App password + optional biometrics; lock on **paused**; **Autofill** for PW managers — see `app_security_plan.md` |
 | 2.9 | Onboarding polish                    |        | Smooth wallet setup flow           |
 
 
@@ -194,5 +200,6 @@ Goal: Running on a real iPhone. Same app, native feel.
 | 2026-03-19 | Active models via HTTP, not blockchain       | Marketplace API's `active_models.json` is pre-built, cached, fast. Blockchain Multicall as fallback only. Pattern from `DirectModelService` |
 | 2026-03-20 | Base mainnet consumer path                   | Production inference + staking on Base; docs and plan criteria updated from Sepolia/Arbitrum wording where obsolete |
 | 2026-03-20 | On-chain session UX                          | Unclosed session list + close in app; stake recovery without relying on session timeout alone |
+| 2026-03-20 | Mobile SDK TEE attestation                   | `attestation.NewVerifier` in `mobile/sdk.go` — Secure models must pass golden register check (aligned with daemon / web) |
 
 

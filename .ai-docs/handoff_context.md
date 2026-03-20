@@ -1,7 +1,9 @@
 # RedPill — Chat Handoff Context
 
-> Snapshot of project state as of **2026-03-20**.
+> Snapshot of project state as of **2026-03-20** (evening).
 > Use this to bootstrap a new AI chat session in a fresh workspace.
+
+**Repos:** Push targets are **`absgrafx/redpill`** and **`absgrafx/Morpheus-Lumerin-Node`** (fork). There is **no plan to merge the fork into MorpheusAIs upstream**; treat the fork as the long-lived SDK + mobile embedding branch (`feat-external_embedding`).
 
 ---
 
@@ -95,10 +97,14 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
 - `GetRatedBids(modelID)`
 - `OpenSession(modelID, durationSeconds, directPayment)`
 - `CloseSession(sessionID)`, `GetSession(sessionID)`, `GetUnclosedUserSessions()` — JSON array of open on-chain sessions for wallet
-- `SendPrompt(sessionID, conversationID, prompt, stream)` — provider streaming flag; full response aggregated in Go, persisted to SQLite
+- `SendPrompt(sessionID, conversationID, prompt, stream)` — provider streaming flag; full response aggregated in Go, persisted to SQLite; prior turns from SQLite included in `messages[]` (truncated window)
 - `CreateConversation(id, modelID, modelName, provider, isTEE)` — SQLite row before messages
 - `GetConversations()`, `GetMessages(conversationID)`
+- `SetConversationSession(conversationID, sessionID)`, `SetConversationTitle(conversationID, title)`, `SetConversationPinned(conversationID, pinned)` — correlate on-chain session; topic + pin for history UI
 - `SetPreference(key, value)`, `GetPreference(key)`
+- `EstimateOpenSessionStake(modelID, durationSeconds, directPayment)` — on-chain stake formula (supply/budget) for UI vs naive price×time
+- `ReusableSessionForModel(modelID)` — returns active non-expired on-chain `session_id` for that model (chat reuse)
+- `ClaimEmptyDraftForModel`, `SetConversationSession`, `DeleteConversation` — see `store.go` (shared-session delete only closes chain when last local thread)
 
 ### RedPill Go Internal Packages (legacy, still present)
 
@@ -110,7 +116,7 @@ These were the original implementations before the SDK integration. They still e
 
 ### dart:ffi Bridge (WORKING)
 
-- `go/cmd/cshared/main.go` — C-exported wrappers (`//export` directives) for the mobile API surface (incl. `SendPrompt` + `stream` int)
+- `go/cmd/cshared/main.go` — C-exported wrappers (`//export` directives) for the mobile API surface (incl. `SendPrompt`, `stream`, `EstimateOpenSessionStake`, `ReusableSessionForModel`)
 - Built as `build/go/libredpill.dylib` (50MB, c-shared, `-ldflags="-s -w"`)
 - `lib/services/bridge.dart` — Dart FFI bindings, singleton `GoBridge` class, handles `Pointer<Utf8>` marshalling + `FreeString` cleanup
 - Xcode build phase (`Copy Go Library`) auto-copies dylib into app bundle `Frameworks/`
@@ -121,10 +127,14 @@ These were the original implementations before the SDK integration. They still e
 - `main.dart` → `app.dart` → initializes SDK on startup (Base mainnet config), routes to loading/error/onboarding/home
 - `theme.dart` — dark theme with green accent (RedPillTheme)
 - `screens/onboarding/onboarding_screen.dart` — **wired to real Go SDK**: `createWallet()` generates real BIP-39 mnemonic, shows backup screen with numbered words, `importWalletMnemonic()` for recovery
-- `screens/home/home_screen.dart` — **wired to real SDK**: live wallet + balances, active models, MAX Privacy (TEE-only); **tap LLM** → `ChatScreen`; ⋮ menu + drawer → **Open on-chain sessions**
-- `screens/chat/chat_screen.dart` — `CreateConversation`, `OpenSession` (default 1h), **Streaming reply** switch (`chat_streaming_preference_store.dart`), `SendPrompt(..., stream)`
+- `screens/home/home_screen.dart` — **wired to real SDK**: live wallet + balances, active models, MAX Privacy (TEE-only); **Continue chatting** shows **~N min left** when `session_ends_at` from chain; **45s timer** refreshes conversations (reconcile closed/expired sessions). `GetConversations` runs chain snapshot: unclosed **and not past `ends_at`** clears stale `session_id`.
+- `screens/chat/chat_screen.dart` — Session length presets (min **10 min**), **stake panel** (estimated MOR moved vs wallet via `EstimateOpenSessionStake`), **structured session errors** (`session_open_errors.dart`: red “why”, expandable technical JSON). **Reuses** `ReusableSessionForModel` before `OpenSession` for new/empty threads (multiple conversations, one on-chain session per model).
+- `screens/chat/conversation_transcript_screen.dart` — read-only history; **Continue this thread** → chat without session until send
 - `screens/sessions/on_chain_sessions_screen.dart` — lists unclosed on-chain sessions, **Close** with confirm
-- `screens/settings/network_settings_screen.dart` — custom Base RPC override + link to on-chain sessions
+- `screens/settings/network_settings_screen.dart` — custom Base RPC override (**Test URLs** + **eth_chainId** check before save), default **chat session length**; **Clear** restores defaults; link to on-chain sessions
+- `lib/utils/session_cost_estimate.dart`, `session_open_errors.dart` — stake math + human-first errors + JSON `reason` extraction from `no provider accepting session`
+- `screens/security/*` — **App lock** (password + optional biometrics), `AutofillGroup` / `AutofillHints` for password managers; **⋮ → Security**
+- `widgets/app_lock_gate.dart` — lock on cold start / **paused** lifecycle
 - `screens/wallet/wallet_tools_screen.dart` — **export private key**, **send ETH/MOR**, **erase wallet**. See `testing_notes.md` for Keychain / container reset.
 - `lib/services/bridge.dart` — dart:ffi bridge; `listUnclosedSessions()`, `sendPrompt(..., stream:)`
 - `lib/services/wallet_vault.dart` — **persists BIP-39 mnemonic** in Keychain (macOS) / Keystore (Android) via `flutter_secure_storage`. On each launch after `Init()`, if a mnemonic exists it is re-imported into the in-memory Go wallet so the same address and funds are used across sessions.
@@ -143,22 +153,37 @@ These were the original implementations before the SDK integration. They still e
 
 ---
 
-## What's NOT Done Yet (next steps)
+## Recently shipped (2026-03-19 → 03-20)
 
-**Primary focus (see `redpill_plan.md` → “Next up”):**
+- **TEE attestation in mobile SDK** — `proxy-router/mobile/sdk.go` now passes `attestation.NewVerifier(...)` into `BlockchainService` (same path as `cmd/main.go` daemon). Fake / misconfigured TEE models **fail session open** with register mismatch, aligned with app.mor.org.
+- **On-chain stake estimate** — `EstimateOpenSessionStake` FFI + chat UI panel (supply/budget formula vs wallet MOR).
+- **Session reuse per model** — `ReusableSessionForModel` + chat bootstrap; **delete conversation** only calls `CloseSession` when **last** local thread using that `session_id`.
+- **Active session UX** — `session_ends_at` on conversations, minutes-left subtitle, periodic reconcile (wall-clock past `ends_at` + chain unclosed set).
+- **Session duration** — UI floor **10 minutes**; `SessionTooShort` / ERC20 copy improvements.
+- **Session open errors** — `explainSessionOpenError()` + red headline + expandable “Technical details”; parses provider `reason` from JSON failures.
 
-1. **Session reuse** — Avoid opening a **new** on-chain session for every chat when an unclosed session already exists for that model; faster follow-ups, fewer stuck stakes.
-2. **Chat history UI** — `GetConversations` / `GetMessages` exist in FFI but **no list screen** yet; drawer “Chats” area is still placeholder-ish.
-3. **Optional schema** — Store `session_id` (and maybe `ends_at`) on conversation rows to correlate SQLite history with on-chain session list.
+---
+
+## MVP backlog (do next — “kicking MVP”)
+
+Prioritized list to capture before wider alpha:
+
+1. **Dev setup & alpha distribution** — Step-by-step for **Mac + iPhone** (signing, TestFlight or ad-hoc, rebuilding `libredpill`, env). See also `.ai-docs/ios_device_signing.md` if present.
+2. **Visual branding pass** — Standardize **colors/icons** to Morpheus artwork or a single consistent kit (today: `RedPillTheme` green, ad hoc).
+3. **Settings / layout cleanup** — Remove dev notes, tighten boxes, consistent section spacing.
+4. **Product naming** — Replace working name **RedPill** in headers/onboarding with a **formal app name** when decided.
+5. **Password manager autofill** — Audit `TextField` / `AutofillHints` / `AutofillGroup` (import seed, app lock, wallet flows) so **1Password / Bitwarden / iCloud Keychain** reliably offer fill (platform quirks documented).
+6. **Lock + splash / onboarding polish** — Marketing-friendly first run; **quick links** (e.g. Coinbase, Base bridge, “get MOR”) for normie path.
+7. **Technical / power-user** — **Token usage** dashboard (input/output/total per model or session; stake vs direct pay); **response metadata drawer** (provider headers JSON); **tunable params** (temperature, etc.) where API allows.
+8. **Parity pass** — RedPill + embedded SDK vs **API Gateway** single-user/single-device flows; gap list doc.
 
 **Also on the radar**
 
-- **Legacy Go cleanup** — Remove or quarantine `internal/core/`, `internal/orchestrator/` (HTTP client path unused).
-- **Markdown** assistant bubbles; **MOR approval** error surfacing; **TEE** per-response attestation UI.
+- **Legacy Go cleanup** — `internal/core/`, `internal/orchestrator/` unused HTTP path.
+- **Markdown** assistant bubbles; TEE **per-message** attestation UI (optional).
 - **Backlog B.1** — Token-by-token **Flutter** streaming (new FFI contract).
-- **iOS** — `.xcframework`, Face ID for sensitive actions.
 
-See `.ai-docs/redpill_plan.md` and `.ai-docs/redpill_architecture.md` for full detail.
+See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.
 
 ---
 
@@ -237,8 +262,11 @@ RedPill/
 
 Morpheus-Lumerin-Node/                    # Fork (branch: feat-external_embedding)
 └── proxy-router/
-    └── mobile/
-        ├── sdk.go                        # SDK + active models HTTP cache
-        ├── types.go                      # Public types (Model w/ ModelType, Session, etc.)
-        └── storage.go                    # In-memory KeyValueStorage
+    ├── mobile/
+    │   ├── sdk.go                        # SDK + active models HTTP + TEE attestation.Verifier
+    │   ├── types.go
+    │   └── storage.go
+    └── internal/blockchainapi/
+        ├── service.go                    # stake estimate helper, OpenSession TEE path
+        └── structs/res.go                # OpenSessionStakeEstimate
 ```

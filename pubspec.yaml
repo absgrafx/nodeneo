@@ -38,6 +38,8 @@ dependencies:
   path_provider: ^2.1.0
   flutter_secure_storage: ^9.2.4
   url_launcher: ^6.2.5
+  crypto: ^3.0.6
+  local_auth: ^2.3.0
 
 dev_dependencies:
   flutter_test:

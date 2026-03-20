@@ -1,11 +1,49 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../../app_route_observer.dart';
 import '../../services/bridge.dart';
 import '../../theme.dart';
 import '../../utils/token_amount.dart';
 import '../chat/chat_screen.dart';
-import '../sessions/on_chain_sessions_screen.dart';
+import '../chat/conversation_transcript_screen.dart';
+import '../security/security_settings_screen.dart';
+import '../../widgets/session_close_flow.dart';
 import '../wallet/wallet_tools_screen.dart';
+
+/// Primary line for history / continue cards: saved topic, else model name.
+String conversationHeadline(Map<String, dynamic> c) {
+  final t = (c['title'] as String?)?.trim() ?? '';
+  if (t.isNotEmpty) return t;
+  return c['model_name'] as String? ?? 'Chat';
+}
+
+/// Subtitle: model, secure vs standard, session state (+ minutes left when [session_ends_at] set), relative time.
+String conversationMetaLine(Map<String, dynamic> c, String Function(Map<String, dynamic>) rel) {
+  final model = c['model_name'] as String? ?? 'Model';
+  final tee = c['is_tee'] == true;
+  final sid = c['session_id'];
+  final hasSession = sid is String && sid.isNotEmpty;
+  final endsAt = (c['session_ends_at'] as num?)?.toInt();
+  final String sessionBit;
+  if (!hasSession) {
+    sessionBit = 'Session closed';
+  } else if (endsAt != null && endsAt > 0) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final left = endsAt - nowSec;
+    if (left <= 0) {
+      sessionBit = 'Session ended';
+    } else {
+      final minutes = (left + 59) ~/ 60;
+      sessionBit = minutes <= 1 ? '~1 min left' : '~$minutes min left';
+    }
+  } else {
+    sessionBit = 'On-chain open';
+  }
+  return '$model · ${tee ? 'Secure' : 'Standard'} · $sessionBit · ${rel(c)}';
+}
 
 class HomeScreen extends StatefulWidget {
   final Future<void> Function()? onWalletErased;
@@ -17,7 +55,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
+  Timer? _sessionRefreshTimer;
   bool _maxPrivacy = false;
   String _address = '';
   String _ethBalance = '—';
@@ -25,12 +64,84 @@ class _HomeScreenState extends State<HomeScreen> {
   List<dynamic> _models = [];
   bool _loadingModels = false;
   String? _modelsError;
+  List<Map<String, dynamic>> _historyConvos = [];
+  List<Map<String, dynamic>> _activeResumeChats = [];
 
   @override
   void initState() {
     super.initState();
     _loadWallet();
     _loadModels();
+    _loadConversations();
+    // Re-fetch unclosed sessions + reconcile expired / closed (chain + wall clock).
+    _sessionRefreshTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+      if (mounted) _loadConversations();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute<dynamic>) {
+      redpillRouteObserver.unsubscribe(this);
+      redpillRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    _sessionRefreshTimer?.cancel();
+    redpillRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    _loadConversations();
+    _loadWallet();
+    _loadModels();
+  }
+
+  /// Conversations: SQLite order is pinned first, then updated_at (see Go ListConversations).
+  void _loadConversations() {
+    try {
+      final bridge = GoBridge();
+      final raw = bridge.getConversations();
+      final list = <Map<String, dynamic>>[];
+      for (final e in raw) {
+        if (e is Map) list.add(Map<String, dynamic>.from(e));
+      }
+      final active = list.where((m) {
+        final sid = m['session_id'];
+        return sid is String && sid.isNotEmpty;
+      }).take(12).toList();
+      if (mounted) {
+        setState(() {
+          _historyConvos = list;
+          _activeResumeChats = active;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _historyConvos = [];
+          _activeResumeChats = [];
+        });
+      }
+    }
+  }
+
+  String _relativeUpdated(Map<String, dynamic> c) {
+    final u = (c['updated_at'] as num?)?.toInt();
+    if (u == null) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(u * 1000);
+    final diff = DateTime.now().difference(t);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${t.month}/${t.day}';
   }
 
   void _loadWallet() {
@@ -70,17 +181,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  String _shortenAddress(String addr) {
-    if (addr.length < 12) return addr;
-    return '${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}';
-  }
-
-  void _openOnChainSessions(BuildContext context) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const OnChainSessionsScreen()),
-    );
-  }
-
   void _openModelChat(BuildContext context, Map<String, dynamic> m) {
     final type = (m['model_type'] as String? ?? 'LLM').toUpperCase();
     if (type != 'LLM') {
@@ -110,8 +210,172 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     )
         .then((_) {
-      if (mounted) _loadWallet();
+      if (mounted) {
+        _loadWallet();
+        _loadConversations();
+      }
     });
+  }
+
+  void _openResumeChat(BuildContext context, Map<String, dynamic> c) {
+    final id = c['id'] as String? ?? '';
+    final mid = c['model_id'] as String? ?? '';
+    final name = c['model_name'] as String? ?? 'Chat';
+    final sid = c['session_id'] as String? ?? '';
+    final isTee = c['is_tee'] == true;
+    if (id.isEmpty || mid.isEmpty || sid.isEmpty) return;
+    Navigator.of(context)
+        .push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatScreen(
+          modelId: mid,
+          modelName: name,
+          isTEE: isTee,
+          resumeConversationId: id,
+          resumeSessionId: sid,
+        ),
+      ),
+    )
+        .then((_) {
+      if (mounted) {
+        _loadWallet();
+        _loadConversations();
+      }
+    });
+  }
+
+  void _openTranscript(BuildContext context, Map<String, dynamic> c) {
+    final id = c['id'] as String? ?? '';
+    final mid = c['model_id'] as String? ?? '';
+    final name = c['model_name'] as String? ?? 'Chat';
+    final isTee = c['is_tee'] == true;
+    final sid = c['session_id'] as String? ?? '';
+    if (id.isEmpty) return;
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ConversationTranscriptScreen(
+          conversationId: id,
+          modelId: mid,
+          modelName: name,
+          isTEE: isTee,
+          onChainSessionId: sid.trim().isEmpty ? null : sid.trim(),
+        ),
+      ),
+    ).then((_) {
+      if (mounted) _loadConversations();
+    });
+  }
+
+  Future<void> _confirmDeleteConversation(BuildContext context, Map<String, dynamic> c) async {
+    final id = c['id'] as String? ?? '';
+    if (id.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete conversation?'),
+        content: const Text(
+          'Removes this thread from this device and submits an on-chain close if a session is still open '
+          '(same as ✕ — stake returns per contract rules). If the network refuses the close, the thread '
+          'is still removed locally and you can retry from Network / Open on-chain sessions.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      final res = GoBridge().deleteConversation(id);
+      _loadConversations();
+      final warn = res['close_warning'] as String?;
+      if (context.mounted && warn != null && warn.trim().isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Conversation removed locally. On-chain close failed — check Open on-chain sessions or retry.\n$warn',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  Future<void> _renameConversationDialog(BuildContext context, Map<String, dynamic> c) async {
+    final id = c['id'] as String? ?? '';
+    if (id.isEmpty) return;
+    final ctrl = TextEditingController(text: conversationHeadline(c));
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Rename thread'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Topic title',
+              hintText: 'Shown in history — model stays in subtitle',
+              border: OutlineInputBorder(),
+            ),
+            onSubmitted: (_) => Navigator.pop(ctx, true),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+          ],
+        ),
+      );
+      if (ok == true && mounted) {
+        try {
+          GoBridge().setConversationTitle(conversationId: id, title: ctrl.text.trim());
+          _loadConversations();
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+          }
+        }
+      }
+    } finally {
+      ctrl.dispose();
+    }
+  }
+
+  void _togglePin(Map<String, dynamic> c) {
+    final id = c['id'] as String? ?? '';
+    if (id.isEmpty) return;
+    try {
+      final next = c['pinned'] != true;
+      GoBridge().setConversationPinned(conversationId: id, pinned: next);
+      _loadConversations();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  /// Close on-chain session for this thread; Go clears SQLite session_id on success.
+  Future<void> _closeOnChainSessionForConversation(BuildContext context, Map<String, dynamic> c) async {
+    final sid = c['session_id'] as String? ?? '';
+    if (sid.isEmpty) return;
+    final ok = await confirmCloseOnChainSession(context);
+    if (ok != true || !mounted || !context.mounted) return;
+    try {
+      await runCloseOnChainSessionFlow(context, sid);
+      if (!mounted) return;
+      _loadConversations();
+    } on GoBridgeException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
   }
 
   @override
@@ -121,7 +385,13 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       drawer: _HistoryChatsDrawer(
         theme: theme,
-        onOpenOnChainSessions: () => _openOnChainSessions(context),
+        conversations: _historyConvos,
+        onOpenTranscript: (c) => _openTranscript(context, c),
+        onCloseActiveSession: (c) => _closeOnChainSessionForConversation(context, c),
+        onDeleteConversation: (c) => _confirmDeleteConversation(context, c),
+        onRename: (c) => _renameConversationDialog(context, c),
+        onTogglePin: _togglePin,
+        relativeTime: _relativeUpdated,
       ),
       appBar: AppBar(
         automaticallyImplyLeading: true,
@@ -159,11 +429,14 @@ class _HomeScreenState extends State<HomeScreen> {
               if (value == 'refresh') {
                 _loadWallet();
                 _loadModels();
+                _loadConversations();
               } else if (value == 'network') {
                 final cb = widget.onOpenNetworkSettings;
                 if (cb != null) await cb();
-              } else if (value == 'sessions') {
-                _openOnChainSessions(context);
+              } else if (value == 'security') {
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(builder: (_) => const SecuritySettingsScreen()),
+                );
               }
             },
             itemBuilder: (context) => [
@@ -177,6 +450,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const PopupMenuItem<String>(
+                value: 'security',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.lock_outline, size: 22),
+                  title: Text('Security'),
+                  subtitle: Text('App lock · biometrics', style: TextStyle(fontSize: 11)),
+                ),
+              ),
+              const PopupMenuItem<String>(
                 value: 'network',
                 child: ListTile(
                   dense: true,
@@ -184,16 +467,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   leading: Icon(Icons.settings_ethernet, size: 22),
                   title: Text('Network / RPC'),
                   subtitle: Text('Optional custom Base endpoint', style: TextStyle(fontSize: 11)),
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'sessions',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.hub_outlined, size: 22),
-                  title: Text('Open on-chain sessions'),
-                  subtitle: Text('Close early · reclaim stake', style: TextStyle(fontSize: 11)),
                 ),
               ),
             ],
@@ -229,6 +502,125 @@ class _HomeScreenState extends State<HomeScreen> {
                   _loadModels();
                 },
               ),
+              if (_activeResumeChats.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Icon(Icons.forum_outlined, size: 16, color: RedPillTheme.green.withValues(alpha: 0.9)),
+                    const SizedBox(width: 8),
+                    Text(
+                      'CONTINUE CHATTING',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: RedPillTheme.green.withValues(alpha: 0.85),
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, fontSize: 11, height: 1.3),
+                ),
+                const SizedBox(height: 10),
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _activeResumeChats.length,
+                  separatorBuilder: (context, i) => const SizedBox(height: 8),
+                  itemBuilder: (ctx, i) {
+                    final c = _activeResumeChats[i];
+                    final name = conversationHeadline(c);
+                    final tee = c['is_tee'] == true;
+                    return Material(
+                      color: RedPillTheme.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => _openResumeChat(context, c),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Close on-chain session',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                icon: Icon(Icons.close_rounded, size: 22, color: Colors.red.shade400),
+                                onPressed: () => _closeOnChainSessionForConversation(context, c),
+                              ),
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: tee ? RedPillTheme.greenDark : const Color(0xFF1E293B),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: tee
+                                        ? RedPillTheme.green.withValues(alpha: 0.35)
+                                        : const Color(0xFF374151),
+                                  ),
+                                ),
+                                child: Center(child: Text(tee ? '🛡️' : '💬', style: const TextStyle(fontSize: 16))),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      name,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                                    ),
+                                    Text(
+                                      conversationMetaLine(c, _relativeUpdated),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.bodySmall?.copyWith(
+                                        color: const Color(0xFF6B7280),
+                                        fontSize: 10,
+                                        height: 1.25,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (tee)
+                                Container(
+                                  margin: const EdgeInsets.only(right: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: RedPillTheme.greenDark,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: RedPillTheme.green.withValues(alpha: 0.3)),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text('🛡️', style: TextStyle(fontSize: 10)),
+                                      SizedBox(width: 3),
+                                      Text(
+                                        'SECURE',
+                                        style: TextStyle(
+                                          color: RedPillTheme.green,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              Icon(Icons.chevron_right, color: theme.hintColor, size: 22),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
               const SizedBox(height: 20),
 
               Row(
@@ -294,9 +686,10 @@ class _HomeScreenState extends State<HomeScreen> {
         final m = _models[i] as Map<String, dynamic>;
         final tags = (m['tags'] as List<dynamic>?)?.cast<String>() ?? [];
         final isTEE = tags.any((t) => t.toUpperCase().contains('TEE'));
+        final modelType = (m['model_type'] as String? ?? 'LLM').toUpperCase();
         return _ModelTile(
           name: m['name'] as String? ?? 'Unknown',
-          owner: _shortenAddress(m['owner'] as String? ?? ''),
+          modelType: modelType,
           isTEE: isTEE,
           tags: tags,
           onTap: () => _openModelChat(ctx, m),
@@ -382,7 +775,7 @@ class _PrivacyToggle extends StatelessWidget {
                               Text('🛡️', style: TextStyle(fontSize: 9)),
                               SizedBox(width: 3),
                               Text(
-                                'TEE available',
+                                'Secure available',
                                 style: TextStyle(color: Color(0xFF6B7280), fontSize: 9, fontWeight: FontWeight.w600),
                               ),
                             ],
@@ -394,8 +787,8 @@ class _PrivacyToggle extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     enabled
-                        ? 'TEE-attested providers only — encrypted inference'
-                        : 'Enable for TEE-only encrypted inference',
+                        ? 'MAX Security providers only — hardware-attested inference'
+                        : 'Enable for MAX Security (hardware-attested) inference',
                     style: TextStyle(
                       color: enabled
                           ? RedPillTheme.green.withValues(alpha: 0.7)
@@ -474,7 +867,7 @@ class _EmptyState extends StatelessWidget {
           Text(maxPrivacy ? '🛡️' : '📡', style: const TextStyle(fontSize: 48)),
           const SizedBox(height: 16),
           Text(
-            maxPrivacy ? 'No TEE providers available' : 'No models available',
+            maxPrivacy ? 'No MAX Security providers available' : 'No models available',
             style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 16, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
@@ -640,12 +1033,27 @@ class _WalletCard extends StatelessWidget {
   }
 }
 
-/// Drawer: on-chain sessions entry + chat history (placeholder).
+/// Drawer: local SQLite chat history (on-chain open/close + close action inline).
 class _HistoryChatsDrawer extends StatelessWidget {
   final ThemeData theme;
-  final VoidCallback onOpenOnChainSessions;
+  final List<Map<String, dynamic>> conversations;
+  final void Function(Map<String, dynamic> c) onOpenTranscript;
+  final void Function(Map<String, dynamic> c) onCloseActiveSession;
+  final void Function(Map<String, dynamic> c) onDeleteConversation;
+  final void Function(Map<String, dynamic> c) onRename;
+  final void Function(Map<String, dynamic> c) onTogglePin;
+  final String Function(Map<String, dynamic> c) relativeTime;
 
-  const _HistoryChatsDrawer({required this.theme, required this.onOpenOnChainSessions});
+  const _HistoryChatsDrawer({
+    required this.theme,
+    required this.conversations,
+    required this.onOpenTranscript,
+    required this.onCloseActiveSession,
+    required this.onDeleteConversation,
+    required this.onRename,
+    required this.onTogglePin,
+    required this.relativeTime,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -664,10 +1072,11 @@ class _HistoryChatsDrawer extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Chats & sessions', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                  Text('Chats & Sessions', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Text(
-                    'Open Morpheus sessions live on Base. Close early to reclaim stake.',
+                    'Tap a topic for history, then Continue chatting. Pin favorites. '
+                    '✕ closes on-chain; 🗑 deletes locally and closes on-chain if a session is open.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.hintColor,
                     ),
@@ -675,27 +1084,101 @@ class _HistoryChatsDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            ListTile(
-              leading: Icon(Icons.hub_outlined, color: RedPillTheme.green.withValues(alpha: 0.9)),
-              title: const Text('Open on-chain sessions'),
-              subtitle: const Text('List · close · reclaim MOR stake'),
-              onTap: () {
-                Navigator.pop(context);
-                onOpenOnChainSessions();
-              },
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                children: [
-                  ListTile(
-                    leading: Icon(Icons.chat_bubble_outline, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-                    title: const Text('Chat history'),
-                    subtitle: const Text('Placeholder — local SQLite list coming soon'),
-                  ),
-                ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+              child: Text(
+                'LOCAL HISTORY',
+                style: theme.textTheme.labelSmall?.copyWith(letterSpacing: 0.8, color: theme.hintColor),
               ),
+            ),
+            Expanded(
+              child: conversations.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'No saved conversations yet.\nOpen a model to start chatting.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.4),
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                      itemCount: conversations.length,
+                      separatorBuilder: (context, i) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) {
+                        final c = conversations[i];
+                        final headline = conversationHeadline(c);
+                        final sid = c['session_id'];
+                        final hasSession = sid is String && sid.isNotEmpty;
+                        final pinned = c['pinned'] == true;
+                        return ListTile(
+                          leading: Icon(
+                            hasSession ? Icons.play_circle_outline : Icons.history,
+                            color: hasSession
+                                ? RedPillTheme.green.withValues(alpha: 0.9)
+                                : theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                          ),
+                          title: Text(headline, maxLines: 2, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(
+                            conversationMetaLine(c, relativeTime),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 10, height: 1.25),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (hasSession)
+                                IconButton(
+                                  tooltip: 'Close on-chain session',
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                                  icon: Icon(Icons.close_rounded, size: 20, color: Colors.red.shade400),
+                                  onPressed: () => onCloseActiveSession(c),
+                                ),
+                              IconButton(
+                                tooltip: pinned ? 'Unpin' : 'Pin to top',
+                                icon: Icon(
+                                  pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                                  size: 20,
+                                  color: pinned ? Colors.amber.shade600 : theme.hintColor,
+                                ),
+                                onPressed: () => onTogglePin(c),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete conversation',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                                icon: Icon(Icons.delete_outline_rounded, size: 20, color: theme.hintColor),
+                                onPressed: () => onDeleteConversation(c),
+                              ),
+                              PopupMenuButton<String>(
+                                icon: Icon(Icons.more_vert, color: theme.hintColor, size: 20),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                onSelected: (v) {
+                                  if (v == 'rename') onRename(c);
+                                  if (v == 'delete') onDeleteConversation(c);
+                                },
+                                itemBuilder: (mctx) => [
+                                  const PopupMenuItem(value: 'rename', child: Text('Rename topic')),
+                                  const PopupMenuItem(
+                                    value: 'delete',
+                                    child: Text('Delete conversation'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            onOpenTranscript(c);
+                          },
+                        );
+                      },
+                    ),
             ),
           ],
         ),
@@ -744,14 +1227,14 @@ class _BalanceChip extends StatelessWidget {
 
 class _ModelTile extends StatelessWidget {
   final String name;
-  final String owner;
+  final String modelType;
   final bool isTEE;
   final List<String> tags;
   final VoidCallback onTap;
 
   const _ModelTile({
     required this.name,
-    required this.owner,
+    required this.modelType,
     required this.isTEE,
     required this.onTap,
     this.tags = const [],
@@ -781,14 +1264,24 @@ class _ModelTile extends StatelessWidget {
           ),
         ),
         title: Text(name, style: theme.textTheme.titleMedium?.copyWith(fontSize: 14)),
-        subtitle: Row(
-          children: [
-            Text(owner, style: theme.textTheme.bodySmall),
-            if (tags.isNotEmpty) ...[
-              const SizedBox(width: 8),
-              ...tags.take(2).map((tag) => Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Text(
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (modelType.isNotEmpty)
+                Text(
+                  modelType,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF6B7280),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ...tags.take(4).map(
+                    (tag) => Text(
                       tag,
                       style: TextStyle(
                         color: tag.toUpperCase() == 'TEE'
@@ -798,9 +1291,9 @@ class _ModelTile extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  )),
+                  ),
             ],
-          ],
+          ),
         ),
         trailing: isTEE
             ? Container(
@@ -815,7 +1308,7 @@ class _ModelTile extends StatelessWidget {
                   children: [
                     Text('🛡️', style: TextStyle(fontSize: 10)),
                     SizedBox(width: 3),
-                    Text('TEE', style: TextStyle(color: RedPillTheme.green, fontSize: 10, fontWeight: FontWeight.w700)),
+                    Text('SECURE', style: TextStyle(color: RedPillTheme.green, fontSize: 10, fontWeight: FontWeight.w700)),
                   ],
                 ),
               )

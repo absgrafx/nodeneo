@@ -6,10 +6,13 @@ import 'config/chain_config.dart';
 import 'screens/onboarding/onboarding_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/settings/network_settings_screen.dart';
+import 'services/app_lock_service.dart';
 import 'services/bridge.dart';
 import 'services/rpc_settings_store.dart';
 import 'services/wallet_vault.dart';
+import 'app_route_observer.dart';
 import 'theme.dart';
+import 'widgets/app_lock_gate.dart';
 
 class RedPillApp extends StatefulWidget {
   const RedPillApp({super.key});
@@ -18,7 +21,7 @@ class RedPillApp extends StatefulWidget {
   State<RedPillApp> createState() => _RedPillAppState();
 }
 
-class _RedPillAppState extends State<RedPillApp> {
+class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
   bool _hasWallet = false;
   bool _sdkReady = false;
   String? _sdkError;
@@ -26,7 +29,25 @@ class _RedPillAppState extends State<RedPillApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initSDK();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      Future<void>.microtask(() async {
+        if (await AppLockService.instance.isLockEnabled) {
+          AppLockService.instance.markLocked();
+        }
+      });
+    }
   }
 
   Future<void> _initSDK() async {
@@ -111,7 +132,12 @@ class _RedPillAppState extends State<RedPillApp> {
       title: 'RedPill',
       debugShowCheckedModeBanner: false,
       theme: RedPillTheme.dark,
-      home: _buildHome(context),
+      navigatorObservers: <NavigatorObserver>[redpillRouteObserver],
+      // Builder gives a context that is *below* MaterialApp's Navigator.
+      // Using State.context here would break Navigator.of in callbacks (e.g. Network / RPC).
+      home: Builder(
+        builder: (context) => _buildHome(context),
+      ),
     );
   }
 
@@ -138,15 +164,17 @@ class _RedPillAppState extends State<RedPillApp> {
     if (!_hasWallet) {
       return OnboardingScreen(onComplete: _onWalletCreated);
     }
-    return HomeScreen(
-      onWalletErased: _handleWalletErased,
-      onOpenNetworkSettings: () async {
-        final changed = await Navigator.of(context).push<bool>(
-          MaterialPageRoute<bool>(builder: (_) => const NetworkSettingsScreen()),
-        );
-        if (!mounted) return;
-        if (changed == true) await _restartSdkAfterRpcChange();
-      },
+    return AppLockGate(
+      child: HomeScreen(
+        onWalletErased: _handleWalletErased,
+        onOpenNetworkSettings: () async {
+          final changed = await Navigator.of(context).push<bool>(
+            MaterialPageRoute<bool>(builder: (_) => const NetworkSettingsScreen()),
+          );
+          if (!mounted) return;
+          if (changed == true) await _restartSdkAfterRpcChange();
+        },
+      ),
     );
   }
 }

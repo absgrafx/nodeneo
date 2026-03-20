@@ -9,9 +9,13 @@ Hot-wallet demo on **Base mainnet**. This doc covers persistence, moving funds, 
 | Check | What to do | Pass criteria |
 | ----- | ---------- | ------------- |
 | **Chat E2E** | Home → tap an LLM (e.g. TEE) → wait for session → send a short prompt | Assistant reply appears; no Go panic |
-| **On-chain sessions** | ⋮ → **Open on-chain sessions** (or drawer / Network → RPC → same) | **Close** shows a sheet with **full tx hash**, **Copy**, and **View on Blockscout**; list refreshes after |
+| **Close on-chain** | **Continue chatting** card **✕**, or drawer row **✕** on an open thread, or **Network / RPC → Open on-chain sessions** | Same confirm + tx sheet; after success, home/history show **Session closed** (SQLite `session_id` cleared + reconcile on refresh) |
 | **Streaming flag** | In chat, toggle **Streaming reply** off/on, send two prompts | Both complete; preference survives app restart (`chat_streaming_preference.txt`) |
 | **RPC override** | ⋮ → Network / RPC → save custom URL → restart | Init uses override; clear restores defaults |
+| **TEE negative test** | Pick a known-bad Secure model (e.g. fake TEE) → open chat | Session open **fails**; red **“Secure (TEE) verification failed”**; expandable technical shows register mismatch (not a silent success) |
+| **Stake panel** | Open chat to a model (before/after error) | Green block shows **Estimated MOR moved** vs **wallet MOR** (not only price×time) |
+| **Active session clock** | Home → **Continue chatting** with open session | Subtitle shows **~N min left**; after wall-clock `ends_at`, row drops after refresh/timer reconcile |
+| **Second topic same model** | Open GLM-5 chat A, then tap GLM-5 again for new thread | New conversation; **same** `session_id` if still valid; **✕** on one thread does **not** chain-close if another thread shares session |
 
 ---
 
@@ -96,7 +100,43 @@ Default URLs live in **`lib/config/chain_config.dart`** (`defaultBaseMainnetRpcU
 
 **Optional custom RPC:** **⋮ → Network / RPC** (or **Edit custom RPC** if init fails). Saves to **`Application Support/.../redpill/eth_rpc_override.txt`** (plain text, not secret). **Clear — use built-in public RPCs** removes that file. Saving triggers **SDK shutdown + re-init**; the wallet is re-imported from the vault automatically.
 
-If chat open still fails on defaults, **Retry** after a short wait; home **Refresh** re-queries balances.
+**Before save:** each URL is probed with JSON-RPC **`eth_chainId`**; it must match **Base mainnet (8453)**. Use **Test URLs (no save)** to validate without switching the running app off the current RPC. If chat still fails on defaults, **Retry** after a short wait; home **Refresh** re-queries balances.
+
+---
+
+## App lock & biometrics
+
+**⋮ → Security** — optional app password + Face ID / Touch ID (when enabled). Uses **`AutofillGroup`** with a fixed read-only **Password manager ID** (`RedPill` + **`AutofillHints.username`**) plus password fields so **1Password / iCloud Keychain** can match the item (not wallet-specific). **Unlock** calls `finishAutofillContext(shouldSave: false)` so you are not prompted to “save” on every unlock. After **background (paused)**, the app locks again if app lock is on.
+
+**Continue chatting** — Lists conversations with a stored **`session_id`** (on-chain still open per local DB, reconciled with chain on **`GetConversations`**). **✕** starts the same close flow as the full sessions screen. Tap the row to **resume** SQLite + on-chain session.
+
+**After app restart:** The embedded SDK used to lose the in-memory **provider URL / pubkey** map while the **on-chain session** was still valid → `provider not found`. The proxy-router **re-pings the provider** and re-registers that row before `SendPrompt`. Rebuild **dylib** after pulling Morpheus `proxy-router` + redpill Go changes.
+
+**Chat “memory”:** SQLite stores turns per **conversation id**; each `SendPrompt` sends the **last ~80 prior messages** from SQLite plus the new user line as an OpenAI-style `messages[]` payload (not just the latest utterance). Separate conversations = separate threads; switching models starts a different conversation row. Very long threads are truncated from the oldest side to control tokens.
+
+**History drawer:** Title **Chats & Sessions**. Tap row → **transcript** → **Continue chatting** (passes open `session_id` when set). **🗑** / menu **Delete conversation** → **`DeleteConversation`**: attempts **on-chain close** when `session_id` is set, then removes SQLite rows; **`close_warning`** in JSON if close failed (local delete still happens). **`ClaimEmptyDraftForModel`** reuses empty-per-model draft so re-opening a model before the first message does not spawn duplicate threads.
+
+**User-facing copy:** **Secure** / **SECURE** / **MAX Security** in UI where we used to say TEE; model list **tags** stay as returned from the API (may still show `TEE`). Provider addresses hidden on model tiles.
+
+**App lock:** Near-invisible username field for autofill pairing; password fields use `visiblePassword` + `AutofillHints` + no autocorrect/suggestions.
+
+**Session open errors:** Plain-language MOR vs ETH gas hints (`session_open_errors.dart`). **Estimated MOR stake** from top bid × duration (`session_cost_estimate.dart`). **Default session length** persisted (`session_duration_store.txt`) — **Network** screen + chat error **Retry** UI (optional “save as default”).
+
+- **macOS:** If Keychain returns **-34018** (missing entitlement / unsigned debug), app-lock secrets fall back to **`Application Support/redpill/.app_lock_vault.json`** (JSON map of the same logical keys as Keychain). After a successful Keychain write, the corresponding file keys are removed. **Treat like the mnemonic fallback:** fine for local dev; for distribution builds, use proper **Keychain** entitlements / signing so storage is hardware-backed.
+
+See **`.ai-docs/app_security_plan.md`**.
+
+---
+
+## iPhone device builds
+
+Apple signing and TestFlight: **`.ai-docs/ios_device_signing.md`**. Note: **Go `libredpill` is currently wired for macOS**; iOS needs a native library build/embed step before FFI works on device.
+
+---
+
+## Open sessions list (empty)
+
+Go’s `json.Marshal` of a **nil** slice encodes as JSON **`null`**, not `[]`. The Dart bridge now maps `null` → empty list, and the SDK returns a non-nil empty slice so JSON is `[]`. Rebuild the dylib after SDK changes.
 
 ---
 

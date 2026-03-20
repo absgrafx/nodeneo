@@ -90,9 +90,25 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SendMOR');
 
+  late final _claimEmptyDraftForModel = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)>('ClaimEmptyDraftForModel');
+
   late final _createConversation = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32),
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)>('CreateConversation');
+
+  late final _setConversationSession = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SetConversationSession');
+
+  late final _setConversationTitle = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SetConversationTitle');
+
+  late final _setConversationPinned = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Int32),
+      Pointer<Utf8> Function(Pointer<Utf8>, int)>('SetConversationPinned');
 
   late final _getActiveModels = _lib.lookupFunction<
       Pointer<Utf8> Function(Int32),
@@ -101,6 +117,14 @@ class GoBridge {
   late final _getRatedBids = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('GetRatedBids');
+
+  late final _reusableSessionForModel = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('ReusableSessionForModel');
+
+  late final _estimateOpenSessionStake = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Int64, Int32),
+      Pointer<Utf8> Function(Pointer<Utf8>, int, int)>('EstimateOpenSessionStake');
 
   late final _openSession = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>, Int64, Int32),
@@ -121,6 +145,10 @@ class GoBridge {
   late final _sendPrompt = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32),
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)>('SendPrompt');
+
+  late final _deleteConversation = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('DeleteConversation');
 
   late final _getConversations = _lib.lookupFunction<
       Pointer<Utf8> Function(),
@@ -267,6 +295,27 @@ class GoBridge {
     return json;
   }
 
+  /// Reuses the latest message-less draft for [modelId] if any (see Go [ClaimEmptyDraftForModel]).
+  Map<String, dynamic> claimEmptyDraftForModel({
+    required String modelId,
+    required String modelName,
+    String provider = '',
+    bool isTEE = false,
+  }) {
+    final mid = modelId.toNativeUtf8();
+    final mname = modelName.toNativeUtf8();
+    final prov = provider.toNativeUtf8();
+    final ptr = _claimEmptyDraftForModel(mid, mname, prov, isTEE ? 1 : 0);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(mid);
+    calloc.free(mname);
+    calloc.free(prov);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
   /// Creates a local SQLite conversation (required before [sendPrompt] persists messages).
   void createConversation({
     required String conversationId,
@@ -288,6 +337,54 @@ class GoBridge {
     calloc.free(prov);
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
+  }
+
+  /// Associates an open on-chain session with a local conversation (for resume from home / history).
+  void setConversationSession({required String conversationId, required String sessionId}) {
+    final cid = conversationId.toNativeUtf8();
+    final sid = sessionId.toNativeUtf8();
+    final ptr = _setConversationSession(cid, sid);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    calloc.free(sid);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  void setConversationTitle({required String conversationId, required String title}) {
+    final cid = conversationId.toNativeUtf8();
+    final t = title.toNativeUtf8();
+    final ptr = _setConversationTitle(cid, t);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    calloc.free(t);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  void setConversationPinned({required String conversationId, required bool pinned}) {
+    final cid = conversationId.toNativeUtf8();
+    final ptr = _setConversationPinned(cid, pinned ? 1 : 0);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Deletes local messages and the conversation row. Attempts on-chain [CloseSession] when
+  /// [session_id] was set; see returned [close_warning] if that step failed.
+  Map<String, dynamic> deleteConversation(String conversationId) {
+    final cid = conversationId.toNativeUtf8();
+    final ptr = _deleteConversation(cid);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
   }
 
   // --- Models ---
@@ -314,6 +411,38 @@ class GoBridge {
       throw GoBridgeException(decoded['error'] as String);
     }
     return decoded as List<dynamic>;
+  }
+
+  /// Active on-chain session for [modelID] if one exists and is not past [ends_at] (see Go).
+  Map<String, dynamic> reusableSessionForModel(String modelID) {
+    final id = modelID.toNativeUtf8();
+    final ptr = _reusableSessionForModel(id);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(id);
+    final decoded = jsonDecode(result);
+    if (decoded is Map && decoded.containsKey('error')) {
+      throw GoBridgeException(decoded['error'] as String);
+    }
+    return decoded as Map<String, dynamic>;
+  }
+
+  /// On-chain MOR stake for opening with the top-scored bid ([EstimateOpenSessionStake] in Go).
+  Map<String, dynamic> estimateOpenSessionStake(
+    String modelID,
+    int durationSeconds, {
+    bool directPayment = false,
+  }) {
+    final id = modelID.toNativeUtf8();
+    final ptr = _estimateOpenSessionStake(id, durationSeconds, directPayment ? 1 : 0);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(id);
+    final decoded = jsonDecode(result);
+    if (decoded is Map && decoded.containsKey('error')) {
+      throw GoBridgeException(decoded['error'] as String);
+    }
+    return decoded as Map<String, dynamic>;
   }
 
   // --- Sessions ---
@@ -360,7 +489,14 @@ class GoBridge {
     if (decoded is Map && decoded.containsKey('error')) {
       throw GoBridgeException(decoded['error'] as String);
     }
-    return decoded as List<dynamic>;
+    // Go `json.Marshal` of nil slice is JSON `null`; treat as empty list.
+    if (decoded == null) return <dynamic>[];
+    if (decoded is! List) {
+      throw GoBridgeException(
+        'GetUnclosedUserSessions: expected JSON array, got ${decoded.runtimeType}',
+      );
+    }
+    return List<dynamic>.from(decoded);
   }
 
   // --- Chat ---

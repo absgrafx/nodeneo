@@ -3,10 +3,14 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"math/big"
+	"strings"
 	"sync"
+	"time"
 
 	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
 	"github.com/absgrafx/redpill/internal/store"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 var (
@@ -240,6 +244,21 @@ func GetRatedBids(modelID string) string {
 	return resultJSON(bids)
 }
 
+// EstimateOpenSessionStake returns JSON matching proxy-router OpenSessionStakeEstimate
+// (actual MOR pull for the top-scored bid, supply/budget formula, allowance note).
+func EstimateOpenSessionStake(modelID string, durationSeconds int64, directPayment bool) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	s, err := client.EstimateOpenSessionStakeJSON(context.Background(), modelID, durationSeconds, directPayment)
+	if err != nil {
+		return errJSON(err)
+	}
+	return s
+}
+
 // --- Sessions (direct blockchain via SDK) ---
 
 // OpenSession opens a session for a model. durationSeconds is the session length.
@@ -266,6 +285,10 @@ func CloseSession(sessionID string) string {
 	txHash, err := client.CloseSession(context.Background(), sessionID)
 	if err != nil {
 		return errJSON(err)
+	}
+	// Local UI uses SQLite session_id for "On-chain open"; clear it when the chain close succeeds.
+	if db != nil {
+		_ = db.ClearConversationSessionBySessionID(sessionID)
 	}
 	return resultJSON(map[string]string{"status": "closed", "tx_hash": txHash})
 }
@@ -300,8 +323,35 @@ func GetUnclosedUserSessions() string {
 
 // --- Chat (direct MOR-RPC via SDK — streaming) ---
 
+// maxChatHistoryMessages caps how many prior SQLite turns we attach (user+assistant); avoids huge prompts.
+const maxChatHistoryMessages = 80
+
+func openAIMessagesFromSQLiteHistory(msgs []store.Message, newUserPrompt string) []openai.ChatCompletionMessage {
+	n := len(msgs)
+	start := 0
+	if n > maxChatHistoryMessages {
+		start = n - maxChatHistoryMessages
+	}
+	out := make([]openai.ChatCompletionMessage, 0, n-start+1)
+	for _, m := range msgs[start:] {
+		role := m.Role
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		or := openai.ChatMessageRoleUser
+		if role == "assistant" {
+			or = openai.ChatMessageRoleAssistant
+		}
+		out = append(out, openai.ChatCompletionMessage{Role: or, Content: m.Content})
+	}
+	out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: newUserPrompt})
+	return out
+}
+
 // SendPrompt sends a chat prompt through an open session and persists
 // the exchange locally. Returns the full response.
+// Prior messages for [conversationID] are loaded from SQLite and sent as OpenAI-style history so the model
+// sees full context after app restarts (provider session is separate from chat memory).
 // stream: when true, request OpenAI-style streaming (SSE) from the provider; when false, non-streaming completion.
 func SendPrompt(sessionID string, conversationID string, prompt string, stream bool) string {
 	mu.Lock()
@@ -310,12 +360,19 @@ func SendPrompt(sessionID string, conversationID string, prompt string, stream b
 		return errJSON(errNotInit)
 	}
 
+	var omsgs []openai.ChatCompletionMessage
 	if db != nil {
-		_ = db.SaveMessage(conversationID, "user", prompt)
+		prev, err := db.GetMessages(conversationID)
+		if err != nil {
+			return errJSON(err)
+		}
+		omsgs = openAIMessagesFromSQLiteHistory(prev, prompt)
+	} else {
+		omsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	}
 
 	var fullResponse string
-	err := client.SendPrompt(context.Background(), sessionID, prompt, stream, func(text string, isLast bool) error {
+	err := client.SendPromptWithMessages(context.Background(), sessionID, omsgs, stream, func(text string, isLast bool) error {
 		fullResponse += text
 		return nil
 	})
@@ -323,7 +380,9 @@ func SendPrompt(sessionID string, conversationID string, prompt string, stream b
 		return errJSON(err)
 	}
 
+	// Persist only after success so a failed/retry round does not duplicate the user row in SQLite.
 	if db != nil {
+		_ = db.SaveMessage(conversationID, "user", prompt)
 		_ = db.SaveMessage(conversationID, "assistant", fullResponse)
 	}
 
@@ -345,6 +404,199 @@ func CreateConversation(id, modelID, modelName, provider string, isTEE bool) str
 	return resultJSON(map[string]string{"status": "ok"})
 }
 
+// SetConversationSession persists the open MOR-RPC session id for local resume (home screen / drawer).
+func SetConversationSession(conversationID, sessionID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.SetConversationSession(conversationID, sessionID); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// SetConversationTitle updates the thread title shown in local history.
+func SetConversationTitle(conversationID, title string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.SetConversationTitle(conversationID, title); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// SetConversationPinned pins or unpins a thread in local history.
+func SetConversationPinned(conversationID string, pinned bool) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.SetConversationPinned(conversationID, pinned); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// ClaimEmptyDraftForModel returns the newest message-less conversation for this model, deletes
+// other empty duplicates for that model, and refreshes model_name / is_tee. Empty JSON ids mean
+// the UI should create a brand-new conversation (no draft to reuse).
+func ClaimEmptyDraftForModel(modelID, modelName, provider string, isTEE bool) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	c, ok, err := db.LatestEmptyConversationForModel(modelID)
+	if err != nil {
+		return errJSON(err)
+	}
+	if !ok {
+		return resultJSON(map[string]string{"conversation_id": "", "session_id": ""})
+	}
+	if err := db.DeleteOtherEmptyConversationsForModel(modelID, c.ID); err != nil {
+		return errJSON(err)
+	}
+	if err := db.UpdateConversationModelMeta(c.ID, modelName, provider, isTEE); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"conversation_id": c.ID, "session_id": c.SessionID})
+}
+
+// DeleteConversation removes local messages and the conversation row. If a session_id is stored,
+// attempts to close that session on-chain first (same as the Close Session flow). Local rows are
+// always removed; if on-chain close fails, close_warning explains why.
+func DeleteConversation(conversationID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	sid, err := db.GetConversationSessionID(conversationID)
+	if err != nil {
+		return errJSON(err)
+	}
+	var closeWarning string
+	if sid != "" && client != nil {
+		nShare, nerr := db.CountConversationsWithSessionID(sid)
+		if nerr != nil {
+			nShare = 1
+		}
+		// Only submit on-chain close when this is the last local thread using the session.
+		if nShare <= 1 {
+			_, cerr := client.CloseSession(context.Background(), sid)
+			if cerr != nil {
+				closeWarning = cerr.Error()
+			} else {
+				_ = db.ClearConversationSessionBySessionID(sid)
+			}
+		}
+	}
+	if err := db.DeleteConversation(conversationID); err != nil {
+		return errJSON(err)
+	}
+	if closeWarning != "" {
+		return resultJSON(map[string]string{"status": "ok", "close_warning": closeWarning})
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+func normalizeChainSessionKey(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.TrimPrefix(s, "0x")
+	return s
+}
+
+func parseEndsAtUnix(endsAt string) int64 {
+	endsAt = strings.TrimSpace(endsAt)
+	if endsAt == "" || endsAt == "0" {
+		return 0
+	}
+	v, ok := new(big.Int).SetString(endsAt, 10)
+	if !ok || v == nil {
+		return 0
+	}
+	if !v.IsInt64() {
+		return 0
+	}
+	return v.Int64()
+}
+
+// chainSessionSnapshot is built from on-chain unclosed sessions (ClosedAt==0) minus wall-clock expired.
+type chainSessionSnapshot struct {
+	UsableKeys map[string]bool
+	EndsAt     map[string]int64
+}
+
+// loadChainSessionSnapshot fetches open sessions and marks past ends_at as unusable for local UI.
+func loadChainSessionSnapshot() (*chainSessionSnapshot, bool) {
+	if client == nil {
+		return &chainSessionSnapshot{UsableKeys: map[string]bool{}, EndsAt: map[string]int64{}}, true
+	}
+	list, err := client.GetUnclosedUserSessions(context.Background())
+	if err != nil {
+		return nil, false
+	}
+	now := time.Now().Unix()
+	snap := &chainSessionSnapshot{
+		UsableKeys: make(map[string]bool),
+		EndsAt:     make(map[string]int64),
+	}
+	for _, ses := range list {
+		k := normalizeChainSessionKey(ses.ID)
+		if k == "" {
+			continue
+		}
+		end := parseEndsAtUnix(ses.EndsAt)
+		if end > 0 && now >= end {
+			continue
+		}
+		snap.UsableKeys[k] = true
+		if end > 0 {
+			snap.EndsAt[k] = end
+		}
+	}
+	return snap, true
+}
+
+// ReusableSessionForModel returns an active, non-expired on-chain session id for this model, if any.
+func ReusableSessionForModel(modelID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	want := strings.ToLower(strings.TrimSpace(modelID))
+	if want == "" {
+		return resultJSON(map[string]string{"session_id": ""})
+	}
+	list, err := client.GetUnclosedUserSessions(context.Background())
+	if err != nil {
+		return errJSON(err)
+	}
+	now := time.Now().Unix()
+	for _, ses := range list {
+		if strings.ToLower(strings.TrimSpace(ses.ModelAgentID)) != want {
+			continue
+		}
+		end := parseEndsAtUnix(ses.EndsAt)
+		if end > 0 && now >= end {
+			continue
+		}
+		id := strings.TrimSpace(ses.ID)
+		if id == "" {
+			continue
+		}
+		return resultJSON(map[string]string{"session_id": id})
+	}
+	return resultJSON(map[string]string{"session_id": ""})
+}
+
 // GetConversations lists all saved conversations.
 func GetConversations() string {
 	mu.Lock()
@@ -352,9 +604,24 @@ func GetConversations() string {
 	if db == nil {
 		return errJSON(errNotInit)
 	}
+	snap, ok := loadChainSessionSnapshot()
+	if ok {
+		_ = db.ReconcileConversationSessions(snap.UsableKeys)
+	}
 	convos, err := db.ListConversations(100)
 	if err != nil {
 		return errJSON(err)
+	}
+	if ok {
+		for i := range convos {
+			if convos[i].SessionID == "" {
+				continue
+			}
+			k := normalizeChainSessionKey(convos[i].SessionID)
+			if end, has := snap.EndsAt[k]; has && end > 0 {
+				convos[i].SessionEndsAt = end
+			}
+		}
 	}
 	return resultJSON(convos)
 }

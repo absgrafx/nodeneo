@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../config/chain_config.dart';
+import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
+import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../sessions/on_chain_sessions_screen.dart';
 
@@ -18,7 +20,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   final _ctrl = TextEditingController();
   bool _loading = true;
   bool _saving = false;
+  bool _testing = false;
   String? _overridePreview;
+  int _sessionDurationSeconds = SessionDurationStore.defaultSeconds;
 
   @override
   void initState() {
@@ -28,12 +32,23 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
 
   Future<void> _load() async {
     final o = await RpcSettingsStore.instance.readOverride();
+    final sec = await SessionDurationStore.instance.readSeconds();
     if (!mounted) return;
     setState(() {
       _ctrl.text = o ?? '';
       _overridePreview = o;
+      _sessionDurationSeconds = sec;
       _loading = false;
     });
+  }
+
+  Future<void> _saveSessionDuration(int seconds) async {
+    await SessionDurationStore.instance.writeSeconds(seconds);
+    if (!mounted) return;
+    setState(() => _sessionDurationSeconds = seconds);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Default chat session: ${SessionDurationStore.formatDurationLabel(seconds)}')),
+    );
   }
 
   @override
@@ -54,6 +69,20 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     }
     setState(() => _saving = true);
     try {
+      final probe = await RpcEndpointValidator.validateUrls(
+        _ctrl.text.trim(),
+        expectedChainId: defaultBaseChainId,
+      );
+      if (!mounted) return;
+      if (probe != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('RPC check failed: $probe'),
+            duration: const Duration(seconds: 8),
+          ),
+        );
+        return;
+      }
       await RpcSettingsStore.instance.writeOverride(_ctrl.text.trim());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -62,6 +91,36 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       Navigator.of(context).pop(true);
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Validate reachability + Base chain ID without saving.
+  Future<void> _testOnly() async {
+    final err = RpcSettingsStore.validateUserInput(_ctrl.text);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    setState(() => _testing = true);
+    try {
+      final probe = await RpcEndpointValidator.validateUrls(
+        _ctrl.text.trim(),
+        expectedChainId: defaultBaseChainId,
+      );
+      if (!mounted) return;
+      if (probe != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(probe), duration: const Duration(seconds: 8)),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All URLs responded with eth_chainId for Base (8453).'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _testing = false);
     }
   }
 
@@ -97,7 +156,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   'Most users should stay on the built-in public Base endpoints. '
                   'Add your own only if you hit rate limits and have a URL you trust '
                   '(e.g. from your own node or a provider you pay). '
-                  'RedPill does not use a central relay — traffic goes straight from this device to the RPC(s) you configure.',
+                  'RedPill does not use a central relay — traffic goes straight from this device to the RPC(s) you configure.\n\n'
+                  'Before saving, each URL is checked with a live JSON-RPC call (eth_chainId must be Base mainnet, $defaultBaseChainId). '
+                  'Use Test URLs to verify without switching the app off the current RPC.',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.4),
                 ),
                 const SizedBox(height: 20),
@@ -125,8 +186,20 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
                 ),
                 const SizedBox(height: 24),
+                OutlinedButton.icon(
+                  onPressed: (_saving || _testing || _ctrl.text.trim().isEmpty) ? null : _testOnly,
+                  icon: _testing
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.wifi_tethering, size: 20),
+                  label: Text(_testing ? 'Testing…' : 'Test URLs (no save)'),
+                ),
+                const SizedBox(height: 12),
                 FilledButton(
-                  onPressed: _saving ? null : _save,
+                  onPressed: (_saving || _testing) ? null : _save,
                   style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
                   child: _saving
                       ? const SizedBox(
@@ -138,8 +211,39 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton(
-                  onPressed: _saving ? null : _useDefaults,
+                  onPressed: (_saving || _testing) ? null : _useDefaults,
                   child: const Text('Clear — use built-in public RPCs'),
+                ),
+                const SizedBox(height: 28),
+                Text('Chat session length', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(
+                  'Default time window for new on-chain inference sessions (affects estimated MOR stake). '
+                  'You can override this on the error screen when opening a chat fails, or change it here anytime.',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.35),
+                ),
+                const SizedBox(height: 12),
+                InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Default duration',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<int>(
+                      isExpanded: true,
+                      value: _sessionDurationSeconds,
+                      items: [
+                        for (final (label, sec) in SessionDurationStore.presets)
+                          DropdownMenuItem<int>(value: sec, child: Text(label)),
+                      ],
+                      onChanged: (_saving || _testing)
+                          ? null
+                          : (v) {
+                              if (v != null) _saveSessionDuration(v);
+                            },
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 28),
                 Text('Sessions', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
@@ -150,7 +254,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 ),
                 const SizedBox(height: 10),
                 OutlinedButton.icon(
-                  onPressed: _saving
+                  onPressed: (_saving || _testing)
                       ? null
                       : () {
                           Navigator.of(context).push<void>(

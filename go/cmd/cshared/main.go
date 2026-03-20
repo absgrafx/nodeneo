@@ -94,6 +94,16 @@ func GetRatedBids(modelID *C.char) *C.char {
 	return C.CString(mobile.GetRatedBids(C.GoString(modelID)))
 }
 
+//export ReusableSessionForModel
+func ReusableSessionForModel(modelID *C.char) *C.char {
+	return C.CString(mobile.ReusableSessionForModel(C.GoString(modelID)))
+}
+
+//export EstimateOpenSessionStake
+func EstimateOpenSessionStake(modelID *C.char, durationSeconds C.longlong, directPayment C.int) *C.char {
+	return C.CString(mobile.EstimateOpenSessionStake(C.GoString(modelID), int64(durationSeconds), directPayment != 0))
+}
+
 // --- Sessions ---
 
 //export OpenSession
@@ -130,6 +140,16 @@ func SendPrompt(sessionID, conversationID, prompt *C.char, stream C.int) *C.char
 
 // --- Conversations ---
 
+//export ClaimEmptyDraftForModel
+func ClaimEmptyDraftForModel(modelID, modelName, provider *C.char, isTEE C.int) *C.char {
+	return C.CString(mobile.ClaimEmptyDraftForModel(
+		C.GoString(modelID),
+		C.GoString(modelName),
+		C.GoString(provider),
+		isTEE != 0,
+	))
+}
+
 //export CreateConversation
 func CreateConversation(convID, modelID, modelName, provider *C.char, isTEE C.int) *C.char {
 	return C.CString(mobile.CreateConversation(
@@ -139,6 +159,32 @@ func CreateConversation(convID, modelID, modelName, provider *C.char, isTEE C.in
 		C.GoString(provider),
 		isTEE != 0,
 	))
+}
+
+//export SetConversationSession
+func SetConversationSession(conversationID, sessionID *C.char) *C.char {
+	return C.CString(mobile.SetConversationSession(
+		C.GoString(conversationID),
+		C.GoString(sessionID),
+	))
+}
+
+//export SetConversationTitle
+func SetConversationTitle(conversationID, title *C.char) *C.char {
+	return C.CString(mobile.SetConversationTitle(
+		C.GoString(conversationID),
+		C.GoString(title),
+	))
+}
+
+//export SetConversationPinned
+func SetConversationPinned(conversationID *C.char, pinned C.int) *C.char {
+	return C.CString(mobile.SetConversationPinned(C.GoString(conversationID), pinned != 0))
+}
+
+//export DeleteConversation
+func DeleteConversation(conversationID *C.char) *C.char {
+	return C.CString(mobile.DeleteConversation(C.GoString(conversationID)))
 }
 
 //export GetConversations
