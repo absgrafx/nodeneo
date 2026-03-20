@@ -57,7 +57,7 @@ Goal: User can browse models, open a session, and chat with a TEE-attested provi
 | 1.2 | Model marketplace screen                  |        | List, search, TEE badge               |
 | 1.3 | BestProvider() scoring                    |        | TEE-first, latency-aware              |
 | 1.4 | QuickSession() — one-tap session creation |        | Approve + initiate flow               |
-| 1.5 | Chat screen — streaming responses         | Partial | Provider `stream` toggle + persist (chat composer); **UI token stream backlog** — see Backlog below |
+| 1.5 | Chat screen — streaming responses         | DONE (Mac) | Provider `stream` + **`SendPromptStream`** / `NativeCallable` chunk UI when toggle on; non-streaming uses `SendPrompt` |
 | 1.6 | TEE verification indicator                | Partial | Green shield in UI; **on-chain open now runs attestation** in embedded SDK (was missing) |
 | 1.7 | Per-prompt re-verification integration    |        | VerifyProviderQuick / optional         |
 | 1.8 | Basic error handling + retry              | Partial | Structured “why” + expandable technical; provider `reason` JSON parsed |
@@ -183,7 +183,8 @@ Goal: Running on a real iPhone. Same app, native feel.
 
 | # | Item | Notes |
 |---|------|--------|
-| B.1 | **Token-by-token UI streaming** | Today Go aggregates chunks internally; Dart gets one JSON when `SendPrompt` returns. To paint tokens as they arrive: new cross-FFI contract (e.g. background isolate + `SendPort`, or registered native callback from Go with isolate-safe marshalling), cancellation, and error propagation. Chat “Streaming reply” already matches provider behavior; this item is **Flutter-visible** streaming. |
+| B.1 | **Token-by-token UI streaming** | **Addressed (chunk UI):** `SendPromptStream` + C callback → `NativeCallable.listener`; assistant bubble updates per SDK delta. Optional follow-ups: cancellation, throttle/`SchedulerBinding`, finer token cadence if provider batches. |
+| B.2 | **Chat footer — background activity status** | At the **very bottom** of the chat screen (above/beside composer), show **what’s happening** while work runs: e.g. **Setting up session** → **Session secured** (or **Attestation passed** when TEE provider) → **Sending prompt** → **Waiting for response**, with a **clear active / progress** treatment (spinner, pulsing dot, or linear stepper) so the user knows the app isn’t frozen. Wire labels to real phases (open session, attestation outcome, FFI send, stream wait). *Not implemented yet.* |
 
 ---
 

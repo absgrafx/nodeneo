@@ -115,7 +115,7 @@ When running the **full** proxy-router binary, these routes mirror what the embe
 - **Chat** — `SendPrompt(sessionID, conversationID, prompt, stream)`; user + assistant rows persisted to SQLite on each completed prompt.
 - **RPC** — Optional `eth_rpc_override.txt`; multi-endpoint + backoff in SDK eth client.
 
-**Backlog:** Token-by-token **UI** streaming over FFI (see `redpill_plan.md` → Backlog B.1). Provider-side streaming is already selectable via composer toggle.
+**Streaming UI:** With **Streaming reply** on, Dart uses **`SendPromptStream`** + **`NativeCallable.listener`** so provider deltas update the chat before the final JSON returns. Non-streaming mode uses **`SendPrompt`** with `stream: false`.
 
 ---
 

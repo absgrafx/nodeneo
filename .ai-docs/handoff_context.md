@@ -186,7 +186,8 @@ Prioritized list to capture before wider alpha:
 
 - **Legacy Go cleanup** — `internal/core/`, `internal/orchestrator/` unused HTTP path.
 - TEE **per-message** attestation UI (optional).
-- **Backlog B.1** — Token-by-token **Flutter** streaming (new FFI contract).
+- **Backlog B.1** — Chunk-level **Flutter** streaming via `SendPromptStream` (optional polish: throttle, cancel).
+- **Backlog B.2** — **Chat footer activity strip** — labels for session setup, **Session secured** / **Attestation passed** (TEE), **Sending prompt**, **Waiting for response**, plus an **active** indicator so background work feels alive (see `redpill_plan.md`).
 
 See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.
 

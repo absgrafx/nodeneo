@@ -303,18 +303,67 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    var streamingAssistantPending = false;
     try {
       final bridge = GoBridge();
-      final res = bridge.sendPrompt(sid, cid, text, stream: _preferStreaming);
-      final reply = res['response'] as String? ?? '';
-      if (!mounted) return;
-      setState(() {
-        _messages.add(_ChatBubble(role: 'assistant', text: reply.isEmpty ? '(empty response)' : reply));
-        _sending = false;
-      });
+      if (_preferStreaming) {
+        var accumulated = '';
+        if (mounted) {
+          setState(() {
+            _messages.add(_ChatBubble(role: 'assistant', text: ''));
+          });
+          streamingAssistantPending = true;
+        }
+        final res = bridge.sendPromptWithStream(
+          sid,
+          cid,
+          text,
+          stream: true,
+          onDelta: (delta, isLast) {
+            accumulated += delta;
+            if (!mounted) return;
+            setState(() {
+              if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+                _messages.removeLast();
+              }
+              _messages.add(_ChatBubble(role: 'assistant', text: accumulated));
+            });
+            if (isLast) {
+              _scrollToBottom();
+            }
+          },
+        );
+        final reply = res['response'] as String? ?? accumulated;
+        if (!mounted) return;
+        setState(() {
+          if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
+            _messages.removeLast();
+          }
+          _messages.add(
+            _ChatBubble(
+              role: 'assistant',
+              text: reply.isEmpty ? '(empty response)' : reply,
+            ),
+          );
+          _sending = false;
+        });
+      } else {
+        final res = bridge.sendPrompt(sid, cid, text, stream: false);
+        final reply = res['response'] as String? ?? '';
+        if (!mounted) return;
+        setState(() {
+          _messages.add(_ChatBubble(role: 'assistant', text: reply.isEmpty ? '(empty response)' : reply));
+          _sending = false;
+        });
+      }
     } on GoBridgeException catch (e) {
       if (!mounted) return;
       setState(() {
+        if (streamingAssistantPending &&
+            _messages.isNotEmpty &&
+            _messages.last.role == 'assistant') {
+          _messages.removeLast();
+        }
         _messages.add(
           _ChatBubble(
             role: 'assistant',
@@ -328,6 +377,11 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        if (streamingAssistantPending &&
+            _messages.isNotEmpty &&
+            _messages.last.role == 'assistant') {
+          _messages.removeLast();
+        }
         _messages.add(_ChatBubble(role: 'assistant', text: 'Error: $e', isError: true));
         _sending = false;
       });

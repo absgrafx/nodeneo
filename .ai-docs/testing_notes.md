@@ -146,7 +146,7 @@ Go’s `json.Marshal` of a **nil** slice encodes as JSON **`null`**, not `[]`. T
 
 Streaming completions can include **usage-only** SSE chunks (no `choices`). The proxy-router used to panic in `ChunkStreaming.String()` on those; that is fixed in `Morpheus-Lumerin-Node` (`genericchatstorage/completion.go`). **Rebuild the macOS dylib** (`make go-macos` or your usual target) after pulling that change.
 
-**Streaming vs one-shot:** Chat has a **Streaming reply** switch (default on). It is stored in **`Application Support/.../redpill/chat_streaming_preference.txt`** (`1` / `0`) and is passed into Go as `SendPrompt(..., stream)`. That controls the OpenAI `stream` flag to the provider; the UI still shows the full reply when the FFI call returns.
+**Streaming vs one-shot:** Chat has a **Streaming reply** switch (default on). It is stored in **`Application Support/.../redpill/chat_streaming_preference.txt`** (`1` / `0`). When on, Flutter calls **`SendPromptStream`** with a native chunk callback so the assistant bubble grows as deltas arrive; when off, **`SendPrompt`** is used with `stream: false` and the reply appears when the FFI call returns. Rebuild **`libredpill`** after Go changes (`make go-macos`).
 
 ---
 

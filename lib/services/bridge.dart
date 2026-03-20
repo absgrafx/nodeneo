@@ -4,6 +4,9 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+/// Native signature for [GoBridge.sendPromptWithStream] / `SendPromptStream` chunk callback.
+typedef RedpillStreamDeltaNative = Void Function(Pointer<Utf8> text, Int32 isLast);
+
 /// FFI bridge to the Go c-shared library (libredpill).
 /// All Go functions return JSON strings; this bridge handles
 /// marshalling and memory management.
@@ -145,6 +148,22 @@ class GoBridge {
   late final _sendPrompt = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Int32),
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int)>('SendPrompt');
+
+  late final _sendPromptStream = _lib.lookupFunction<
+      Pointer<Utf8> Function(
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Int32,
+        Pointer<NativeFunction<RedpillStreamDeltaNative>>,
+      ),
+      Pointer<Utf8> Function(
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        int,
+        Pointer<NativeFunction<RedpillStreamDeltaNative>>,
+      )>('SendPromptStream');
 
   late final _deleteConversation = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>),
@@ -520,6 +539,49 @@ class GoBridge {
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
     return json;
+  }
+
+  /// Like [sendPrompt], but invokes [onDelta] for each streamed chunk from the provider.
+  ///
+  /// [onDelta] may run on a background thread; copy [delta] synchronously before awaiting.
+  /// The returned map matches [sendPrompt] (includes `response` with the full assistant text).
+  Map<String, dynamic> sendPromptWithStream(
+    String sessionID,
+    String conversationID,
+    String prompt, {
+    bool stream = true,
+    required void Function(String delta, bool isLast) onDelta,
+  }) {
+    final sid = sessionID.toNativeUtf8();
+    final cid = conversationID.toNativeUtf8();
+    final p = prompt.toNativeUtf8();
+
+    final callable = NativeCallable<RedpillStreamDeltaNative>.listener(
+      (Pointer<Utf8> text, int isLast) {
+        final piece = text.toDartString();
+        onDelta(piece, isLast != 0);
+      },
+    );
+
+    try {
+      final ptr = _sendPromptStream(
+        sid,
+        cid,
+        p,
+        stream ? 1 : 0,
+        callable.nativeFunction,
+      );
+      final result = ptr.toDartString();
+      _freeString(ptr);
+      final json = jsonDecode(result) as Map<String, dynamic>;
+      _throwIfError(json);
+      return json;
+    } finally {
+      calloc.free(sid);
+      calloc.free(cid);
+      calloc.free(p);
+      callable.close();
+    }
   }
 
   // --- Conversations ---
