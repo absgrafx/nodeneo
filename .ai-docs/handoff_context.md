@@ -9,7 +9,7 @@
 
 ## What Is RedPill
 
-A mobile-first client for the [MorpheusAIs](https://github.com/MorpheusAIs) decentralized AI network. Think "Signal for decentralized AI inference." Part of the [absgrafx](https://github.com/absgrafx) org.
+A mobile-first client for the **Morpheus** decentralized AI network. Think "Signal for decentralized AI inference." **Published by [absgrafx](https://github.com/absgrafx)** (`com.absgrafx.redpill`); upstream protocol/repos: [MorpheusAIs](https://github.com/MorpheusAIs) on GitHub.
 
 - **Flutter** UI (iOS, Android, macOS) in `lib/`
 - **Go** backend — embeds the proxy-router SDK directly, no external process needed
@@ -176,10 +176,10 @@ Prioritized list to capture before wider alpha:
 6. **Lock + splash / onboarding polish** — Marketing-friendly first run; **quick links** (e.g. Coinbase, Base bridge, “get MOR”) for normie path.
 7. **Technical / power-user** — **Token usage** dashboard (input/output/total per model or session; stake vs direct pay); **response metadata drawer** (provider headers JSON); **tunable params** (temperature, etc.) where API allows.
 8. **Parity pass** — RedPill + embedded SDK vs **API Gateway** single-user/single-device flows; gap list doc.
-9. **Token symbols & labels** — Correct **ETH**, **Base** (network), and **MOR** symbols / copy everywhere balances and sends appear (not ambiguous “generic” token text).
-10. **History / drawer list layout** — Widen usable area so **titles** and **action icons** read clearly; prefer **swipe** gestures (e.g. pin / delete / close-on-chain conventions) **plus** visible icons — **drop redundant ⋮ overflow** where swipe + icons cover actions (don’t duplicate both).
-11. **Markdown in chat** — Render assistant replies as **Markdown** (headings, lists, **fenced code blocks**, inline code) so code and structure display properly (package: e.g. `flutter_markdown` + code theme).
-12. **Copy / paste** — **Copy** from assistant bubbles (text selection, “copy code block”, long-press); **paste** into the chat input from clipboard (normie + dev workflow).
+9. **Token symbols & labels** — **Shipped:** `lib/constants/network_tokens.dart` + home wallet chips + wallet send screen.
+10. **History / drawer list layout** — **Shipped:** wider drawer + `flutter_slidable` actions + pencil rename (overflow menu removed).
+11. **Markdown in chat** — **Shipped:** `flutter_markdown` via `lib/widgets/chat_message_body.dart` (chat + read-only transcript).
+12. **Copy / paste** — **Shipped:** copy icon on bubbles + paste hint on composer; transcript matches.
 13. **Images / multimodal** — Farther out: inbound images, vision models, attachment UX (track after core text+MVP).
 
 **Also on the radar**
@@ -208,7 +208,7 @@ See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.
 1. **MAX Privacy mode** — Toggle in UI that filters to TEE-only providers.
 2. **Embedded SDK, no HTTP** — RedPill imports `proxy-router/mobile` directly. No separate process, no REST API, no network hop. True embedded Go integration.
 3. **BadgerDB is provider-only** — SDK uses in-memory storage for session tracking. Local persistence is SQLite (conversations, preferences) at the app layer.
-4. **absgrafx org** — Personal project under MIT license, bolted on top of MorpheusAIs.
+4. **absgrafx org** — Personal project under MIT license, built on the open Morpheus stack (upstream: MorpheusAIs GitHub org).
 5. **Consumer-only** — No provider code, no IPFS, no Docker, no local LLM hosting.
 6. **Private key export** — Available via `ExportPrivateKey()`, UI should gate behind biometric re-auth.
 7. **Active models via HTTP, not blockchain** — Production URL `https://active.mor.org/active_models.json` (mainnet-only; not mixed with testnet). Same pattern as Morpheus-Marketplace-API `DirectModelService`. 5-min cache, SHA-256 hash invalidation, blockchain Multicall as fallback.

@@ -3,13 +3,18 @@ import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../services/app_lock_service.dart';
+import '../../constants/app_brand.dart';
 import '../../theme.dart';
+import '../../widgets/app_lock_recovery_sheet.dart';
+import '../../widgets/morpheus_logo.dart';
 import 'app_lock_autofill.dart';
 
-/// Full-screen unlock. Password field uses [AutofillHints.password] for iCloud Keychain /
-/// 1Password / Google Password Manager.
+/// Full-screen unlock.
 class AppLockScreen extends StatefulWidget {
-  const AppLockScreen({super.key});
+  /// Clears wallet, lock, SQLite, RPC — returns app to onboarding (see [RedPillApp]).
+  final Future<void> Function()? onFullFactoryReset;
+
+  const AppLockScreen({super.key, this.onFullFactoryReset});
 
   @override
   State<AppLockScreen> createState() => _AppLockScreenState();
@@ -46,11 +51,44 @@ class _AppLockScreenState extends State<AppLockScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (ok) {
-      // Do not prompt to "save" on unlock — only when setting/changing password.
       TextInput.finishAutofillContext(shouldSave: false);
       AppLockService.instance.markUnlocked();
     } else {
       setState(() => _error = 'Incorrect password.');
+    }
+  }
+
+  Future<void> _confirmFullFactoryReset() async {
+    final go = widget.onFullFactoryReset;
+    if (go == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Factory reset?'),
+        content: const Text(
+          'This removes the app lock, saved wallet, custom RPC URL, and all local chat history on this device. '
+          'You will return to setup and must restore with your recovery phrase or private key.\n\n'
+          'Your funds stay on-chain — nothing is moved. Only proceed if you have a backup.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: RedPillTheme.red),
+            child: const Text('Erase everything'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await go();
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -68,7 +106,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
         return;
       }
       final ok = await _auth.authenticate(
-        localizedReason: 'Unlock RedPill',
+        localizedReason: 'Unlock ${AppBrand.displayName}',
         options: const AuthenticationOptions(
           stickyAuth: true,
           biometricOnly: true,
@@ -97,14 +135,22 @@ class _AppLockScreenState extends State<AppLockScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 32),
-                Text('RedPill', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
-                const SizedBox(height: 8),
-                Text(
-                  'App is locked',
-                  style: theme.textTheme.titleMedium?.copyWith(color: theme.hintColor),
+                const SizedBox(height: 24),
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const MorpheusLogo(size: 96, variant: MorpheusLogoVariant.green),
+                      const SizedBox(height: 16),
+                      Text(
+                        AppBrand.displayName,
+                        style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 40),
+                const SizedBox(height: 32),
                 AppLockHiddenUsernameForAutofill(controller: _user),
                 const SizedBox(height: 8),
                 TextField(
@@ -121,8 +167,21 @@ class _AppLockScreenState extends State<AppLockScreen> {
                   keyboardType: TextInputType.visiblePassword,
                   onSubmitted: (_) => _unlockWithPassword(),
                   decoration: InputDecoration(
-                    labelText: 'App password',
-                    border: const OutlineInputBorder(),
+                    filled: true,
+                    fillColor: RedPillTheme.mainPanelFill,
+                    hintText: 'Password',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: RedPillTheme.mainPanelOutline(0.4)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: RedPillTheme.mainPanelOutline(0.4)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: RedPillTheme.mainPanelOutline(0.85)),
+                    ),
                     suffixIcon: IconButton(
                       icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
                       onPressed: () => setState(() => _obscure = !_obscure),
@@ -161,10 +220,25 @@ class _AppLockScreenState extends State<AppLockScreen> {
                   },
                 ),
                 const Spacer(),
-                Text(
-                  'Your password manager can save and fill the app password (same as Security → Set app password).',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor, height: 1.35),
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () {
+                          showAppLockRecoverySheet(context);
+                        },
+                  child: Text(
+                    'Forgot password? Recover with phrase or key',
+                    style: TextStyle(color: theme.hintColor, fontSize: 13),
+                  ),
                 ),
+                if (widget.onFullFactoryReset != null)
+                  TextButton(
+                    onPressed: _busy ? null : _confirmFullFactoryReset,
+                    child: Text(
+                      'Erase app data (factory reset)',
+                      style: TextStyle(color: RedPillTheme.red.withValues(alpha: 0.9), fontSize: 13),
+                    ),
+                  ),
               ],
             ),
           ),

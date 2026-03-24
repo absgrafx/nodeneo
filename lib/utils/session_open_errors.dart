@@ -85,6 +85,18 @@ bool _teeFailure(String lower) {
       (lower.contains('register mismatch') && (lower.contains('rtmr') || lower.contains('measurement')));
 }
 
+/// Public check for TEE attestation failure — used by the chat UI to show a
+/// specialised error screen instead of the generic session-open error.
+bool isTeeAttestationFailure(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return false;
+  final lower = raw.toLowerCase();
+  final reasons = extractProviderFailureReasons(raw);
+  final combinedReasons = reasons.join(' ').toLowerCase();
+  return _teeFailure(lower) ||
+      reasons.any((r) => _teeFailure(r.toLowerCase())) ||
+      _teeFailure(combinedReasons);
+}
+
 bool _morFailure(String lower) {
   return lower.contains('erc20') &&
       (lower.contains('transfer amount exceeds balance') ||
@@ -187,7 +199,7 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
     return SessionOpenErrorParts(
       headline: 'Secure (TEE) verification failed.',
       supporting:
-          'The provider did not pass the hardware attestation check (trusted build measurements). Fake or misconfigured TEE endpoints are blocked on purpose — same idea as the Morpheus web app.',
+          'The provider did not pass the hardware attestation check (trusted build measurements). Fake or misconfigured TEE endpoints are blocked on purpose.',
       whatNext: 'Use the non-Secure model variant, try another provider, or pick another model.',
       rawTechnical: technical,
     );

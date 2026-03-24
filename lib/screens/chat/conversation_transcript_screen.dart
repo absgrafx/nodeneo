@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/bridge.dart';
 import '../../theme.dart';
+import '../../widgets/chat_message_body.dart';
 import 'chat_screen.dart';
 
 /// Read-only message list; use **Continue** to return to chat (same on-chain session if [onChainSessionId] is set).
@@ -135,9 +137,47 @@ class _ConversationTranscriptScreenState extends State<ConversationTranscriptScr
                                     borderRadius: BorderRadius.circular(14),
                                     border: Border.all(color: const Color(0xFF374151)),
                                   ),
-                                  child: SelectableText(
-                                    text,
-                                    style: theme.textTheme.bodyMedium?.copyWith(height: 1.35),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (isUser)
+                                        Row(
+                                          children: [
+                                            const Spacer(),
+                                            IconButton(
+                                              tooltip: 'Copy message',
+                                              padding: EdgeInsets.zero,
+                                              visualDensity: VisualDensity.compact,
+                                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                              icon: Icon(
+                                                Icons.copy_rounded,
+                                                size: 18,
+                                                color: theme.hintColor,
+                                              ),
+                                              onPressed: text.isEmpty
+                                                  ? null
+                                                  : () async {
+                                                      await Clipboard.setData(ClipboardData(text: text));
+                                                      if (!ctx.mounted) return;
+                                                      ScaffoldMessenger.of(ctx).showSnackBar(
+                                                        const SnackBar(
+                                                          content: Text('Message copied'),
+                                                          behavior: SnackBarBehavior.floating,
+                                                          duration: Duration(seconds: 2),
+                                                        ),
+                                                      );
+                                                    },
+                                            ),
+                                          ],
+                                        ),
+                                      buildChatMessageBody(
+                                        theme,
+                                        role: role,
+                                        text: text,
+                                        isError: false,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               );

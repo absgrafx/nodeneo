@@ -27,16 +27,18 @@ class GoBridge {
 
   static DynamicLibrary _openLibrary() {
     if (Platform.isMacOS) {
-      // App bundle: Contents/Frameworks/libredpill.dylib (via @rpath set by Xcode)
+      // Prefer absolute bundle path — Dart's dlopen often does not resolve @rpath the same as the linker.
+      final exe = Platform.resolvedExecutable;
+      final macosIdx = exe.lastIndexOf('/MacOS/');
+      if (macosIdx != -1) {
+        final contentsDir = exe.substring(0, macosIdx);
+        final bundlePath = '$contentsDir/Frameworks/libredpill.dylib';
+        if (File(bundlePath).existsSync()) {
+          return DynamicLibrary.open(bundlePath);
+        }
+      }
       try {
         return DynamicLibrary.open('@rpath/libredpill.dylib');
-      } catch (_) {}
-      // Explicit path inside bundle
-      final exe = Platform.resolvedExecutable;
-      final contentsDir = exe.substring(0, exe.lastIndexOf('/MacOS/'));
-      final bundlePath = '$contentsDir/Frameworks/libredpill.dylib';
-      try {
-        return DynamicLibrary.open(bundlePath);
       } catch (_) {}
       return DynamicLibrary.open('libredpill.dylib');
     } else if (Platform.isIOS) {
@@ -84,6 +86,14 @@ class GoBridge {
   late final _getWalletSummary = _lib.lookupFunction<
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetWalletSummary');
+
+  late final _verifyRecoveryMnemonic = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('VerifyRecoveryMnemonic');
+
+  late final _verifyRecoveryPrivateKey = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('VerifyRecoveryPrivateKey');
 
   late final _sendETH = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
@@ -239,9 +249,17 @@ class GoBridge {
     return json;
   }
 
+  /// Tear down native state. Safe to call after a failed [init]: if we never
+  /// initialized successfully, skips native calls (avoids dlsym on missing iOS symbols).
   void shutdown() {
-    _shutdown();
-    initialized = false;
+    if (!initialized) return;
+    try {
+      _shutdown();
+    } catch (_) {
+      // Native teardown failed; still drop Dart-side flag.
+    } finally {
+      initialized = false;
+    }
   }
 
   bool get isReady => _isReady() != 0;
@@ -284,6 +302,30 @@ class GoBridge {
 
   Map<String, dynamic> getWalletSummary() {
     return _callJSON(_getWalletSummary);
+  }
+
+  /// True if the recovery phrase matches the loaded wallet (read-only; does not re-import).
+  bool verifyRecoveryMnemonic(String mnemonic) {
+    final m = mnemonic.toNativeUtf8();
+    final ptr = _verifyRecoveryMnemonic(m);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(m);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json['ok'] == true;
+  }
+
+  /// True if the hex private key matches the loaded wallet (read-only).
+  bool verifyRecoveryPrivateKey(String hexKey) {
+    final k = hexKey.toNativeUtf8();
+    final ptr = _verifyRecoveryPrivateKey(k);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(k);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json['ok'] == true;
   }
 
   /// Sends native ETH. [amountWei] is wei as a decimal integer string.

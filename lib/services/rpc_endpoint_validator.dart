@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../config/chain_config.dart';
+import '../constants/app_brand.dart';
 import 'rpc_settings_store.dart';
 
 /// Pre-flight JSON-RPC checks before persisting a custom `ETH_RPC_URL` override.
@@ -10,7 +11,7 @@ class RpcEndpointValidator {
   RpcEndpointValidator._();
 
   static const _jsonRpcBody = '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}';
-  static const _userAgent = 'RedPill-RPC-Check/1.0';
+  static const _userAgent = AppBrand.rpcCheckUserAgent;
 
   /// Splits URLs the same way as Go's multi-RPC parser (comma / newline / etc.).
   static List<String> parseUrlList(String raw) {
@@ -23,6 +24,21 @@ class RpcEndpointValidator {
 
   /// Returns `null` if every URL responds with `eth_chainId` matching [expectedChainId].
   /// Otherwise a single user-facing error string (first failure).
+  /// True if **at least one** URL in [rawUrls] responds to `eth_chainId` with [expectedChainId].
+  /// Mirrors what makes the app usable: any working endpoint in the configured list (custom or defaults).
+  static Future<bool> anyReachable(
+    String rawUrls, {
+    int expectedChainId = defaultBaseChainId,
+  }) async {
+    final urls = parseUrlList(rawUrls);
+    if (urls.isEmpty) return false;
+    for (final url in urls) {
+      final err = await _probeOne(url, expectedChainId);
+      if (err == null) return true;
+    }
+    return false;
+  }
+
   static Future<String?> validateUrls(
     String rawUrls, {
     int expectedChainId = defaultBaseChainId,

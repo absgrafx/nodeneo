@@ -1,6 +1,6 @@
 # RedPill — Architecture
 
-> A mobile-first, privacy-maximizing client for the MorpheusAIs decentralized AI network.
+> A mobile-first, privacy-maximizing client for the **Morpheus** decentralized AI network (published by **absgrafx**).
 > "The Signal of decentralized AI inference."
 > 
 > Part of the [absgrafx](https://github.com/absgrafx) project.
@@ -9,7 +9,7 @@
 
 ## Vision
 
-Replace the bloated Electron desktop app and the Swagger-driven developer experience with a **clean, consumer-grade app** that provides a beautiful UI for the MorpheusAIs network — running on phones, tablets, and desktops from a single codebase.
+Replace the bloated Electron desktop app and the Swagger-driven developer experience with a **clean, consumer-grade app** that provides a beautiful UI for the Morpheus network — running on phones, tablets, and desktops from a single codebase.
 
 A user installs RedPill, creates (or imports) a wallet, stakes MOR, picks a model, and chats. That's it. No IPFS. No Docker. No Swagger.
 

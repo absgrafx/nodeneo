@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../../constants/app_brand.dart';
 import '../../services/bridge.dart';
 import '../../services/wallet_vault.dart';
 import '../../theme.dart';
+import '../../widgets/morpheus_logo.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -102,25 +105,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 children: [
                   const SizedBox(height: 48),
 
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      color: RedPillTheme.greenDark,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: RedPillTheme.green.withValues(alpha: 0.3)),
-                    ),
-                    child: const Center(
-                      child: Text('🛡️', style: TextStyle(fontSize: 36)),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
+                  const MorpheusLogo(size: 96, variant: MorpheusLogoVariant.green),
+                  const SizedBox(height: 16),
 
-                  Text('RedPill', style: theme.textTheme.headlineLarge),
+                  Text(
+                    AppBrand.displayName,
+                    style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 8),
                   Text(
-                    'Private AI inference on the\nMorpheusAIs network',
-                    style: theme.textTheme.bodyMedium,
+                    'Private AI inference on the\nMorpheus network',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.hintColor,
+                      height: 1.35,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 48),
@@ -180,7 +179,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('🔒', style: TextStyle(fontSize: 16)),
+                        Icon(
+                          Icons.lock_outline_rounded,
+                          size: 20,
+                          color: RedPillTheme.amber.withValues(alpha: 0.95),
+                        ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
@@ -233,8 +236,14 @@ class _MnemonicBackupScreen extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const SizedBox(height: 48),
-                  const Text('✅', style: TextStyle(fontSize: 48)),
-                  const SizedBox(height: 16),
+                  const MorpheusLogo(size: 64, variant: MorpheusLogoVariant.green),
+                  const SizedBox(height: 12),
+                  Icon(
+                    Icons.check_circle_outline_rounded,
+                    size: 40,
+                    color: RedPillTheme.green.withValues(alpha: 0.9),
+                  ),
+                  const SizedBox(height: 12),
                   Text('Wallet Created', style: theme.textTheme.headlineMedium),
                   const SizedBox(height: 8),
                   Text(

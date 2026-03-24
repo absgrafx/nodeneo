@@ -61,14 +61,14 @@ Use this when you want to be sure **no RedPill secrets** remain, or the app stil
 
 1. Open **Keychain Access** (Spotlight: “Keychain Access”).
 2. Search for **`redpill`**, **`flutter_secure_storage`**, or your app name.
-3. Delete entries tied to **RedPill** / **com.morpheusais.redpill** (inspect “Kind” / account if unsure).
+3. Delete entries tied to **RedPill** / **com.absgrafx.redpill** (inspect “Kind” / account if unsure).
 
 ### B. App sandbox data (SQLite, chats, preferences)
 
 Sandboxed macOS app data lives under the **container** (paths can vary slightly by install):
 
 ```text
-~/Library/Containers/com.morpheusais.redpill/Data/Library/Application Support/
+~/Library/Containers/com.absgrafx.redpill/Data/Library/Application Support/
 ```
 
 Look for a **`redpill`** folder (contains `redpill.db`, chat files, etc.). **Quit the app**, then delete that folder to wipe local DBs.  
@@ -79,7 +79,7 @@ This does **not** remove Keychain items by itself — do **A** or in-app **Erase
 Quit RedPill, then remove the entire container (you will lose **all** app-local state):
 
 ```bash
-rm -rf ~/Library/Containers/com.morpheusais.redpill
+rm -rf ~/Library/Containers/com.absgrafx.redpill
 ```
 
 Re-open the app from Xcode / `flutter run` / Finder — it’s a fresh install from the OS’s perspective.

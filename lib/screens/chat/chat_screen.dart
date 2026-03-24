@@ -1,13 +1,33 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../services/bridge.dart';
+import '../../widgets/chat_message_body.dart';
 import '../../services/chat_streaming_preference_store.dart';
 import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../../utils/session_cost_estimate.dart';
 import '../../utils/session_open_errors.dart';
 import '../../utils/token_amount.dart';
+
+/// Top-level so [compute] can serialize it across isolate boundaries.
+Map<String, dynamic> _openSessionInBackground(Map<String, dynamic> p) {
+  return GoBridge().openSession(
+    p['modelId'] as String,
+    p['duration'] as int,
+    directPayment: false,
+  );
+}
+
+enum _LogLevel { working, info, warn, error, ok }
+
+class _LogEntry {
+  String message;
+  _LogLevel level;
+  _LogEntry(this.message, this.level);
+}
 
 class ChatScreen extends StatefulWidget {
   final String modelId;
@@ -36,9 +56,12 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
+  final _logScroll = ScrollController();
 
   _BootstrapPhase _phase = _BootstrapPhase.bootstrapping;
   String? _error;
+  final List<_LogEntry> _bootLog = [];
+  bool _showBootLog = true;
   String? _conversationId;
   String? _sessionId;
   final List<_ChatBubble> _messages = [];
@@ -89,7 +112,47 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _input.dispose();
     _scroll.dispose();
+    _logScroll.dispose();
     super.dispose();
+  }
+
+  void _addLog(String message, {_LogLevel level = _LogLevel.info}) {
+    if (!mounted) return;
+    setState(() => _bootLog.add(_LogEntry(message, level)));
+    _scrollLogToBottom();
+  }
+
+  /// Start a step that will be marked complete later via [_completeStep].
+  void _startStep(String message) {
+    if (!mounted) return;
+    setState(() => _bootLog.add(_LogEntry(message, _LogLevel.working)));
+    _scrollLogToBottom();
+  }
+
+  /// Mark the last [_LogLevel.working] entry as done, optionally changing the message.
+  void _completeStep({String? message, _LogLevel level = _LogLevel.ok}) {
+    if (!mounted) return;
+    setState(() {
+      for (var i = _bootLog.length - 1; i >= 0; i--) {
+        if (_bootLog[i].level == _LogLevel.working) {
+          _bootLog[i].level = level;
+          if (message != null) _bootLog[i].message = message;
+          break;
+        }
+      }
+    });
+  }
+
+  void _scrollLogToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_logScroll.hasClients) {
+        _logScroll.animateTo(
+          _logScroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   String _newConversationId() {
@@ -101,10 +164,15 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _phase = _BootstrapPhase.bootstrapping;
       _error = null;
+      _bootLog.clear();
     });
+
     final resumeCid = widget.resumeConversationId;
     final resumeSid = widget.resumeSessionId;
+
+    // --- Resume existing conversation (history tap) ---
     if (resumeCid != null && resumeCid.isNotEmpty) {
+      _startStep('Resuming conversation…');
       try {
         final bridge = GoBridge();
         final raw = bridge.getMessages(resumeCid);
@@ -118,6 +186,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         if (!mounted) return;
         final sid = (resumeSid != null && resumeSid.isNotEmpty) ? resumeSid : null;
+        _completeStep(message: 'Conversation loaded');
         setState(() {
           _conversationId = resumeCid;
           _sessionId = sid;
@@ -129,19 +198,24 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
         return;
       } catch (e) {
+        _completeStep(message: 'Failed to load conversation', level: _LogLevel.error);
         if (mounted) {
-          setState(() {
-            _error = e.toString();
-            _phase = _BootstrapPhase.error;
-          });
+          setState(() { _error = e.toString(); _phase = _BootstrapPhase.error; });
         }
         return;
       }
     }
 
+    // --- New session flow ---
     try {
       final bridge = GoBridge();
+
+      // 1. Connect to network (RPC / Diamond contract)
+      _startStep('Connecting to Morpheus network…');
       await _refreshCostHint();
+      _completeStep(message: 'Connected to network');
+
+      // Internal: check if there's already a draft conversation with a live session
       final draft = bridge.claimEmptyDraftForModel(
         modelId: widget.modelId,
         modelName: widget.modelName,
@@ -151,71 +225,145 @@ class _ChatScreenState extends State<ChatScreen> {
       var convId = draft['conversation_id'] as String? ?? '';
       var sid = draft['session_id'] as String? ?? '';
 
-      if (convId.isNotEmpty) {
-        if (sid.isEmpty) {
-          final reuse = bridge.reusableSessionForModel(widget.modelId);
-          var newSid = (reuse['session_id'] as String?)?.trim() ?? '';
-          if (newSid.isEmpty) {
-            final sess = bridge.openSession(widget.modelId, _sessionDurationSeconds, directPayment: false);
-            final opened = sess['session_id'] as String?;
-            if (opened == null || opened.isEmpty) {
-              throw GoBridgeException('open session: missing session_id in response');
-            }
-            newSid = opened;
-          }
-          bridge.setConversationSession(conversationId: convId, sessionId: newSid);
-          sid = newSid;
-        }
+      // Fast path: draft already has a live session
+      if (convId.isNotEmpty && sid.isNotEmpty) {
+        _addLog('Existing session found — reusing', level: _LogLevel.ok);
         if (!mounted) return;
-        setState(() {
-          _conversationId = convId;
-          _sessionId = sid;
-          _phase = _BootstrapPhase.ready;
-        });
+        await _transitionToReady(convId, sid);
         return;
       }
 
-      convId = _newConversationId();
-      bridge.createConversation(
-        conversationId: convId,
-        modelId: widget.modelId,
-        modelName: widget.modelName,
-        provider: '',
-        isTEE: widget.isTEE,
-      );
+      // 2. Check for a reusable on-chain session for this model
+      _startStep('Checking for reusable on-chain session…');
       final reuse = bridge.reusableSessionForModel(widget.modelId);
-      var opened = (reuse['session_id'] as String?)?.trim() ?? '';
-      if (opened.isEmpty) {
-        final sess = bridge.openSession(widget.modelId, _sessionDurationSeconds, directPayment: false);
-        final sid = sess['session_id'] as String?;
-        if (sid == null || sid.isEmpty) {
-          throw GoBridgeException('open session: missing session_id in response');
-        }
-        opened = sid;
+      var sessionId = (reuse['session_id'] as String?)?.trim() ?? '';
+
+      if (sessionId.isNotEmpty) {
+        _completeStep(message: 'Reusing existing session');
+      } else {
+        _completeStep(message: 'No reusable session');
+
+        // 3. Open a new session (provider selection → TEE attestation → on-chain stake)
+        await _openSessionWithLog(widget.modelId);
+        if (_phase == _BootstrapPhase.error) return;
+        sessionId = _lastOpenedSessionId!;
       }
-      bridge.setConversationSession(conversationId: convId, sessionId: opened);
+
+      // 4. Create local conversation and link the session
+      _startStep('Creating conversation…');
+      if (convId.isEmpty) {
+        convId = _newConversationId();
+        bridge.createConversation(
+          conversationId: convId,
+          modelId: widget.modelId,
+          modelName: widget.modelName,
+          provider: '',
+          isTEE: widget.isTEE,
+        );
+      }
+      bridge.setConversationSession(conversationId: convId, sessionId: sessionId);
+      _completeStep(message: 'Conversation created');
+
+      // 5. Ready
       if (!mounted) return;
-      setState(() {
-        _conversationId = convId;
-        _sessionId = opened;
-        _phase = _BootstrapPhase.ready;
-      });
+      await _transitionToReady(convId, sessionId);
     } on GoBridgeException catch (e) {
-      if (mounted) {
-        await _refreshCostHint();
-        setState(() {
-          _error = e.message;
-          _phase = _BootstrapPhase.error;
-        });
+      if (_phase != _BootstrapPhase.error) {
+        _completeStep(message: e.message, level: _LogLevel.error);
+        if (mounted) {
+          await _refreshCostHint();
+          setState(() { _error = e.message; _phase = _BootstrapPhase.error; });
+        }
       }
     } catch (e) {
+      if (_phase != _BootstrapPhase.error) {
+        _completeStep(message: e.toString(), level: _LogLevel.error);
+        if (mounted) {
+          await _refreshCostHint();
+          setState(() { _error = e.toString(); _phase = _BootstrapPhase.error; });
+        }
+      }
+    }
+  }
+
+  Future<void> _transitionToReady(String convId, String sessionId) async {
+    _addLog(
+      widget.isTEE
+          ? 'Secure session established — you can begin'
+          : 'Session established — you can begin',
+      level: _LogLevel.ok,
+    );
+    // Let the user see the completed log for a moment
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    if (!mounted) return;
+    setState(() {
+      _conversationId = convId;
+      _sessionId = sessionId;
+      _showBootLog = true;
+      _phase = _BootstrapPhase.ready;
+    });
+  }
+
+  String? _lastOpenedSessionId;
+
+  /// Runs the real proxy-router OpenSession flow on a background isolate.
+  /// Go internally: select provider → TEE attestation (if secure) → on-chain open.
+  Future<void> _openSessionWithLog(String modelId) async {
+    // The Go SDK's OpenSession does these steps internally in order:
+    //   1. Select provider from bids
+    //   2. If TEE: verify hardware attestation (TLS fingerprint, RTMR registers)
+    //   3. Open on-chain session (MOR stake transaction)
+    // We show the TEE step as the active spinner since it's the first meaningful wait.
+    if (widget.isTEE) {
+      _startStep('Verifying secure (TEE) attestation with provider…');
+    } else {
+      _startStep('Opening on-chain session (staking MOR)…');
+    }
+
+    // Let the UI render before the blocking compute call
+    await Future<void>.delayed(Duration.zero);
+
+    try {
+      final result = await compute(_openSessionInBackground, {
+        'modelId': modelId,
+        'duration': _sessionDurationSeconds,
+      }).timeout(
+        const Duration(seconds: 120),
+        onTimeout: () => <String, dynamic>{'error': 'Session open timed out after 120s'},
+      );
+
+      if (!mounted) return;
+
+      if (result.containsKey('error')) {
+        throw GoBridgeException(result['error'] as String);
+      }
+
+      final sid = result['session_id'] as String?;
+      if (sid == null || sid.isEmpty) {
+        throw GoBridgeException('open session: missing session_id in response');
+      }
+
+      if (widget.isTEE) {
+        _completeStep(message: 'TEE attestation verified');
+        _addLog('On-chain session opened (MOR staked)', level: _LogLevel.ok);
+      } else {
+        _completeStep(message: 'On-chain session opened (MOR staked)');
+      }
+      _lastOpenedSessionId = sid;
+    } on GoBridgeException catch (e) {
+      _completeStep(message: e.message, level: _LogLevel.error);
       if (mounted) {
         await _refreshCostHint();
-        setState(() {
-          _error = e.toString();
-          _phase = _BootstrapPhase.error;
-        });
+        setState(() { _error = e.message; _phase = _BootstrapPhase.error; });
       }
+      rethrow;
+    } catch (e) {
+      _completeStep(message: e.toString(), level: _LogLevel.error);
+      if (mounted) {
+        await _refreshCostHint();
+        setState(() { _error = e.toString(); _phase = _BootstrapPhase.error; });
+      }
+      rethrow;
     }
   }
 
@@ -253,6 +401,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty || cid == null || _sending) return;
 
     setState(() {
+      _showBootLog = false;
       _messages.add(_ChatBubble(role: 'user', text: text));
       _input.clear();
       _sending = true;
@@ -431,114 +580,191 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Text(widget.modelName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-            if (widget.isTEE)
-              Text(
-                '🛡️ SECURE session',
-                style: TextStyle(fontSize: 11, color: RedPillTheme.green.withValues(alpha: 0.85)),
+            if (widget.isTEE) ...[
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: RedPillTheme.green.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: RedPillTheme.green.withValues(alpha: 0.35)),
+                ),
+                child: const Center(child: Text('🛡️', style: TextStyle(fontSize: 14))),
               ),
+              const SizedBox(width: 8),
+            ],
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(widget.modelName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                if (widget.isTEE)
+                  Text(
+                    'Secure Session',
+                    style: TextStyle(fontSize: 11, color: RedPillTheme.green.withValues(alpha: 0.85)),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
       body: switch (_phase) {
-        _BootstrapPhase.bootstrapping => Center(
+        _BootstrapPhase.bootstrapping => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const CircularProgressIndicator(color: RedPillTheme.green),
-                const SizedBox(height: 20),
-                Text(
-                  'Opening on-chain session (${SessionDurationStore.formatDurationLabel(_sessionDurationSeconds)})…',
-                  style: const TextStyle(color: Color(0xFF9CA3AF)),
-                  textAlign: TextAlign.center,
+                Row(
+                  children: [
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: RedPillTheme.green),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Setting up session (${SessionDurationStore.formatDurationLabel(_sessionDurationSeconds)})',
+                        style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
                 ),
-                if (_stakePanel != null) ...[
-                  const SizedBox(height: 10),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: _StakePanelBody(panel: _stakePanel!, headlineGreen: false),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ListView.builder(
+                    controller: _logScroll,
+                    itemCount: _bootLog.length,
+                    itemBuilder: (ctx, i) {
+                      final e = _bootLog[i];
+                      final Color color;
+                      final Widget leading;
+                      switch (e.level) {
+                        case _LogLevel.working:
+                          color = const Color(0xFF9CA3AF);
+                          leading = const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF)),
+                          );
+                        case _LogLevel.info:
+                          color = const Color(0xFF6B7280);
+                          leading = Icon(Icons.chevron_right_rounded, size: 14, color: color);
+                        case _LogLevel.warn:
+                          color = const Color(0xFFF59E0B);
+                          leading = Icon(Icons.warning_amber_rounded, size: 14, color: color);
+                        case _LogLevel.error:
+                          color = const Color(0xFFF87171);
+                          leading = Icon(Icons.error_outline_rounded, size: 14, color: color);
+                        case _LogLevel.ok:
+                          color = RedPillTheme.green;
+                          leading = Icon(Icons.check_circle_outline_rounded, size: 14, color: color);
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            leading,
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                e.message,
+                                style: TextStyle(
+                                  color: color,
+                                  fontSize: 12,
+                                  height: 1.4,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
-                ],
+                ),
                 const SizedBox(height: 8),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 32),
-                  child: Text(
-                    'This can take a minute (MOR stake / gas). Keep the app open.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF6B7280), fontSize: 12),
-                  ),
+                const Text(
+                  'This can take a minute (MOR stake + provider handshake). Keep the app open.',
+                  style: TextStyle(color: Color(0xFF525252), fontSize: 11),
                 ),
               ],
             ),
           ),
-        _BootstrapPhase.error => SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('⚠️', style: TextStyle(fontSize: 40), textAlign: TextAlign.center),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Could not open session',
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                    textAlign: TextAlign.center,
-                  ),
-                  if (_stakePanel != null) ...[
-                    const SizedBox(height: 10),
-                    _StakePanelBody(panel: _stakePanel!, headlineGreen: true),
-                  ],
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: _SessionOpenErrorCopy(theme: theme, rawError: _error),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Session length (next retry)',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<int>(
-                        isExpanded: true,
-                        value: _sessionDurationSeconds,
-                        items: [
-                          for (final (label, sec) in SessionDurationStore.presets)
-                            DropdownMenuItem<int>(value: sec, child: Text(label)),
-                        ],
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          setState(() => _sessionDurationSeconds = v);
-                          await _refreshCostHint();
-                        },
+        _BootstrapPhase.error => isTeeAttestationFailure(_error)
+            ? _TeeFailureScreen(rawError: _error, theme: theme)
+            : SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('⚠️', style: TextStyle(fontSize: 40), textAlign: TextAlign.center),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Could not open session',
+                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                        textAlign: TextAlign.center,
                       ),
-                    ),
+                      if (_stakePanel != null) ...[
+                        const SizedBox(height: 10),
+                        _StakePanelBody(panel: _stakePanel!, headlineGreen: true),
+                      ],
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: _SessionOpenErrorCopy(theme: theme, rawError: _error),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Session length (next retry)',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<int>(
+                            isExpanded: true,
+                            value: _sessionDurationSeconds,
+                            items: [
+                              for (final (label, sec) in SessionDurationStore.presets)
+                                DropdownMenuItem<int>(value: sec, child: Text(label)),
+                            ],
+                            onChanged: (v) async {
+                              if (v == null) return;
+                              setState(() => _sessionDurationSeconds = v);
+                              await _refreshCostHint();
+                            },
+                          ),
+                        ),
+                      ),
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Save as default for new chats', style: TextStyle(fontSize: 13)),
+                        subtitle: const Text('Also stored under Network → Chat session length', style: TextStyle(fontSize: 11)),
+                        value: _saveDurationAsDefaultOnRetry,
+                        onChanged: (v) => setState(() => _saveDurationAsDefaultOnRetry = v),
+                      ),
+                      const SizedBox(height: 8),
+                      FilledButton(
+                        onPressed: () => _retryBootstrap(),
+                        style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                        child: const Text('Retry'),
+                      ),
+                    ],
                   ),
-                  SwitchListTile.adaptive(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Save as default for new chats', style: TextStyle(fontSize: 13)),
-                    subtitle: const Text('Also stored under Network → Chat session length', style: TextStyle(fontSize: 11)),
-                    value: _saveDurationAsDefaultOnRetry,
-                    onChanged: (v) => setState(() => _saveDurationAsDefaultOnRetry = v),
-                  ),
-                  const SizedBox(height: 8),
-                  FilledButton(
-                    onPressed: () => _retryBootstrap(),
-                    style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
-                    child: const Text('Retry'),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
         _BootstrapPhase.ready => Column(
             children: [
+              if (_showBootLog && _messages.isEmpty && _bootLog.isNotEmpty)
+                _BootLogBanner(entries: _bootLog, isTEE: widget.isTEE),
               if (_sessionId == null || _sessionId!.isEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -607,12 +833,43 @@ class _ChatScreenState extends State<ChatScreen> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            SelectableText(
-                              b.text,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: b.isError ? const Color(0xFFFECACA) : null,
-                                height: 1.35,
+                            if (!isUser)
+                              Row(
+                                children: [
+                                  const Spacer(),
+                                  IconButton(
+                                    tooltip: b.isError ? 'Copy error text' : 'Copy response',
+                                    padding: EdgeInsets.zero,
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                    icon: Icon(
+                                      Icons.copy_rounded,
+                                      size: 18,
+                                      color: theme.hintColor,
+                                    ),
+                                    onPressed: b.text.isEmpty
+                                        ? null
+                                        : () async {
+                                            await Clipboard.setData(ClipboardData(text: b.text));
+                                            if (!ctx.mounted) return;
+                                            ScaffoldMessenger.of(ctx).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  b.isError ? 'Error text copied' : 'Response copied',
+                                                ),
+                                                behavior: SnackBarBehavior.floating,
+                                                duration: const Duration(seconds: 2),
+                                              ),
+                                            );
+                                          },
+                                  ),
+                                ],
                               ),
+                            buildChatMessageBody(
+                              theme,
+                              role: b.role,
+                              text: b.text,
+                              isError: b.isError,
                             ),
                             if (b.isError && b.onReconnect != null) ...[
                               const SizedBox(height: 10),
@@ -636,33 +893,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Material(
-                        color: RedPillTheme.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        child: SwitchListTile.adaptive(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                          dense: true,
-                          title: const Text(
-                            'Streaming reply',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                          ),
-                          subtitle: Text(
-                            _preferStreaming
-                                ? 'Provider sends tokens as they are generated (recommended).'
-                                : 'Provider returns one complete message (can reduce overhead).',
-                            style: TextStyle(fontSize: 11, color: theme.hintColor, height: 1.25),
-                          ),
-                          value: _preferStreaming,
-                          activeThumbColor: RedPillTheme.green,
-                          onChanged: _sending
-                              ? null
-                              : (v) {
-                                  setState(() => _preferStreaming = v);
-                                  ChatStreamingPreferenceStore.instance.writePreferStreaming(v);
-                                },
-                        ),
-                      ),
-                      const SizedBox(height: 8),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -700,6 +930,7 @@ class _ChatScreenState extends State<ChatScreen> {
       },
     );
   }
+
 }
 
 /// Red “why it failed” + grey guidance; raw chain/proxy text tucked under expansion.
@@ -782,6 +1013,123 @@ class _SessionOpenErrorCopy extends StatelessWidget {
   }
 }
 
+/// Dedicated screen for TEE attestation failures — no MOR info, no retry,
+/// just a clear warning and a back button.
+class _TeeFailureScreen extends StatelessWidget {
+  const _TeeFailureScreen({required this.rawError, required this.theme});
+
+  final String? rawError;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = explainSessionOpenError(rawError);
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Spacer(flex: 1),
+            // Red circle-slash shield icon
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFFEF4444).withValues(alpha: 0.12),
+                    border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.35), width: 2),
+                  ),
+                  child: const Center(child: Text('🛡️', style: TextStyle(fontSize: 30))),
+                ),
+                Positioned(
+                  child: Icon(Icons.block_rounded, size: 72, color: const Color(0xFFEF4444).withValues(alpha: 0.55)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Secure (TEE) Verification Failed',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFFF87171),
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'This provider did not pass hardware attestation.\nPrompts are not permitted on unverified endpoints.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFFEF4444),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+            if (parts.supporting != null && parts.supporting!.trim().isNotEmpty)
+              Text(
+                parts.supporting!,
+                style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13, height: 1.4),
+              ),
+            if (parts.whatNext != null && parts.whatNext!.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                parts.whatNext!,
+                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13, height: 1.4),
+              ),
+            ],
+            if (parts.showTechnicalSection && parts.rawTechnical.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  collapsedShape: const RoundedRectangleBorder(side: BorderSide.none),
+                  shape: const RoundedRectangleBorder(side: BorderSide.none),
+                  title: Text(
+                    'Technical details (optional)',
+                    style: TextStyle(color: theme.hintColor, fontSize: 12, fontWeight: FontWeight.w500),
+                  ),
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(
+                        parts.rawTechnical,
+                        style: const TextStyle(
+                          color: Color(0xFF64748B),
+                          fontSize: 11,
+                          height: 1.35,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const Spacer(flex: 2),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              child: const Text('Go Back', style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Stake headline + wallet + shortfall + footnotes for open-session UX.
 class _StakePanelBody extends StatelessWidget {
   const _StakePanelBody({required this.panel, required this.headlineGreen});
@@ -846,6 +1194,75 @@ class _StakePanelBody extends StatelessWidget {
 }
 
 enum _BootstrapPhase { bootstrapping, error, ready }
+
+class _BootLogBanner extends StatelessWidget {
+  final List<_LogEntry> entries;
+  final bool isTEE;
+  const _BootLogBanner({required this.entries, required this.isTEE});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+      decoration: BoxDecoration(
+        color: RedPillTheme.mainPanelFill,
+        border: Border(
+          bottom: BorderSide(
+            color: RedPillTheme.green.withValues(alpha: 0.2),
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final e in entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _iconForLevel(e.level),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      e.message,
+                      style: TextStyle(
+                        color: _colorForLevel(e.level),
+                        fontSize: 11,
+                        height: 1.35,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static Color _colorForLevel(_LogLevel l) => switch (l) {
+        _LogLevel.working => const Color(0xFF9CA3AF),
+        _LogLevel.info => const Color(0xFF6B7280),
+        _LogLevel.warn => const Color(0xFFF59E0B),
+        _LogLevel.error => const Color(0xFFF87171),
+        _LogLevel.ok => RedPillTheme.green,
+      };
+
+  static Widget _iconForLevel(_LogLevel l) => switch (l) {
+        _LogLevel.working => const SizedBox(
+            width: 12, height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF)),
+          ),
+        _LogLevel.info => Icon(Icons.chevron_right_rounded, size: 12, color: _colorForLevel(l)),
+        _LogLevel.warn => Icon(Icons.warning_amber_rounded, size: 12, color: _colorForLevel(l)),
+        _LogLevel.error => Icon(Icons.error_outline_rounded, size: 12, color: _colorForLevel(l)),
+        _LogLevel.ok => Icon(Icons.check_circle_outline_rounded, size: 12, color: _colorForLevel(l)),
+      };
+}
 
 class _ChatBubble {
   final String role;

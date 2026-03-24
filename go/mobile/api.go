@@ -182,6 +182,34 @@ func GetWalletSummary() string {
 	})
 }
 
+// VerifyRecoveryMnemonic returns {"ok":true} if the phrase matches the loaded wallet (read-only).
+func VerifyRecoveryMnemonic(mnemonic string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	ok, err := client.VerifyMnemonicMatchesCurrent(mnemonic)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]bool{"ok": ok})
+}
+
+// VerifyRecoveryPrivateKey returns {"ok":true} if the hex key matches the loaded wallet (read-only).
+func VerifyRecoveryPrivateKey(hexKey string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	ok, err := client.VerifyPrivateKeyMatchesCurrent(hexKey)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]bool{"ok": ok})
+}
+
 // SendETH sends native ETH (amountWei as decimal string, unit wei). Waits for confirmation.
 func SendETH(toAddress, amountWei string) string {
 	mu.Lock()

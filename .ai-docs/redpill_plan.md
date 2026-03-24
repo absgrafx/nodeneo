@@ -81,10 +81,10 @@ Goal: User can browse models, open a session, and chat with a TEE-attested provi
 | 6 | **Splash / lock / onboarding** | Normie-friendly copy + quick links (e.g. get MOR / Coinbase) |
 | 7 | **Usage + power user** | Token counts dashboard; response metadata drawer; temperature / params |
 | 8 | **Gateway parity pass** | Doc gaps vs API Gateway single-user flows |
-| 9 | **Token symbols** | Proper **ETH**, **Base**, **MOR** labels in wallet + anywhere amounts show |
-| 10 | **History / drawer UX** | Wider list; clear titles + actions; **swipe** pin/delete/close; **icons** without duplicating ⋮ menu |
-| 11 | **Markdown replies** | Assistant bubbles render MD + **code fences** |
-| 12 | **Copy / paste** | Copy from responses (incl. code); paste into composer |
+| 9 | **Token symbols** | **DONE** — `constants/network_tokens.dart`; wallet card + **Manage** send labels; **MOR · Base** / **ETH · Base** chips + gas hint |
+| 10 | **History / drawer UX** | **DONE** — Drawer **~92% width (max 420px)**; **slidable** pin / close session / delete; **rename** pencil; overflow ⋮ removed |
+| 11 | **Markdown replies** | **DONE** — `flutter_markdown` + shared `widgets/chat_message_body.dart` (chat + transcript) |
+| 12 | **Copy / paste** | **DONE** — Copy icon per bubble; composer hint “paste supported”; transcript copy |
 | 13 | **Images / multimodal** | Deferred — after text MVP |
 
 **Recently done (no longer “next”):** session reuse per model, `session_ends_at` + minutes left + reconcile, stake estimate FFI, structured session errors, TEE verifier in `proxy-router/mobile`.
@@ -169,7 +169,7 @@ Goal: Running on a real iPhone. Same app, native feel.
 | go-ethereum            | `github.com/ethereum/go-ethereum`                           | Key derivation, Ethereum addresses     |
 | go-bip39               | `github.com/tyler-smith/go-bip39`                           | BIP-39 mnemonic generation             |
 | btcsuite               | `github.com/btcsuite/btcd`, `btcutil`                       | HD key derivation (BIP-32)             |
-| proxy-router SDK       | `github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile` | Embedded blockchain, sessions, chat (direct, no HTTP) |
+| proxy-router SDK       | `github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile` | Embedded blockchain, sessions, chat (direct, no HTTP). Go **import path** stays upstream; `go.mod` **`replace`** → local **absgrafx** fork. |
 | modernc.org/sqlite     | Pure-Go SQLite                                              | Embedded DB, no CGo                    |
 | Flutter SDK            | flutter.dev                                                 | Cross-platform UI                      |
 | gomobile               | `golang.org/x/mobile/cmd/gomobile`                          | Compile Go → native libraries          |
@@ -199,7 +199,7 @@ Goal: Running on a real iPhone. Same app, native feel.
 | 2026-03-17 | Consumer-only, strip provider code           | Smaller binary, simpler UX, focused scope                                                                      |
 | 2026-03-17 | Native wallet, HTTP for blockchain ops       | go-ethereum/bip39 for wallet (no deps), proxy-router REST API for blockchain (pragmatic)                       |
 | 2026-03-17 | Planned fork into absgrafx org               | Will add `mobile/` SDK package so RedPill can import proxy-router directly — eliminates HTTP intermediary      |
-| 2026-03-17 | absgrafx org, MIT license                    | Personal project bolted on top of MorpheusAIs, compatible with upstream MIT license                            |
+| 2026-03-17 | absgrafx org, MIT license                    | Personal project (absgrafx) on the open Morpheus stack; upstream repos under MorpheusAIs; compatible MIT license |
 | 2026-03-19 | Embedded SDK replaces HTTP proxy client      | `proxy-router/mobile/` created, RedPill imports it directly. No external process, no REST API, no network hop  |
 | 2026-03-19 | BadgerDB skipped for mobile                  | BadgerDB is provider-only (sessions, auth, capacity). SDK uses in-memory storage. SQLite at app layer for chat |
 | 2026-03-19 | c-shared over gomobile for FFI               | `//export` C functions via dart:ffi gives more control than gomobile bind. Works across .dylib/.xcframework/.so |

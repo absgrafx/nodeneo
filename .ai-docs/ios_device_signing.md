@@ -4,6 +4,63 @@ Stepwise checklist. You already have a **paid Apple Developer Program** account.
 
 ---
 
+## 0. Preview & run from Xcode (simulator or device)
+
+**Open the Flutter iOS workspace (required for CocoaPods):**
+
+```bash
+cd redpill
+open ios/Runner.xcworkspace
+```
+
+**Pick a destination** in Xcode's toolbar (e.g. **iPhone 16** simulator or your **plugged-in iPhone**).
+
+**Run:**
+
+- **Product → Run** (▶), **or**
+- From the repo root, same result: `flutter run` (Xcode builds under the hood when you use Flutter CLI).
+
+**Flutter-only workflow (no Xcode UI):**
+
+```bash
+flutter devices
+flutter run -d <device_id_or_name>
+```
+
+### Cursor-first (recommended)
+
+You do **not** need two IDEs for daily runs.
+
+1. **One-time / occasional:** Use **Xcode** only for **Signing & Capabilities**, adding **capabilities** (e.g. Face ID), or **Archive** for TestFlight. Save the project; commit what changed under `ios/` (see **Git** below).
+2. **Every build:** In Cursor's terminal from repo root:
+
+   ```bash
+   cd redpill
+   flutter run -d Phlame    # or: flutter run -d 00008140-000E10601E29801C
+   ```
+
+   Flutter invokes **xcodebuild** with the correct **`.xcworkspace`** and CocoaPods layout. Prefer this over clicking **Run** on `Runner.xcodeproj` (that path often breaks pods).
+
+3. If Xcode or a stale build shows **`Module 'flutter_native_splash' not found`** (or any plugin module):
+
+   ```bash
+   flutter pub get
+   cd ios && pod install --repo-update && cd ..
+   flutter run -d <device>
+   ```
+
+   Still broken: `flutter clean`, then the same `pub get` → `pod install` → `flutter run`.
+
+### Git (two IDEs)
+
+- **`ios/Pods/`** is **gitignored** — each machine runs `pod install` after clone / `pub get`.
+- **Do commit** `ios/Podfile`, **`ios/Podfile.lock`**, and Xcode project changes you intend to keep.
+- Opening Xcode does not create mystery noise if you only touch signing; avoid editing **generated** Flutter files under `ios/Flutter/` unless you know why.
+
+**Note:** The **simulator** is enough to preview **UI** quickly. A **real device** still needs **signing** (§2–4) and, for this app, an **iOS build of the Go `libredpill` native library** before FFI works (§7).
+
+---
+
 ## 1. Apple ID in Xcode
 
 1. Open **Xcode** → **Settings…** (or **Preferences**) → **Accounts**.
@@ -17,7 +74,7 @@ Stepwise checklist. You already have a **paid Apple Developer Program** account.
 1. In the repo, open **`ios/Runner.xcworkspace`** (not `.xcodeproj` alone).
 2. Select **Runner** target → **Signing & Capabilities**.
 3. Set **Team** to your developer team.
-4. Change **Bundle Identifier** if needed (e.g. `com.yourorg.redpill`). It must be unique in the Apple Developer portal.
+4. Change **Bundle Identifier** if needed (repo default: `com.absgrafx.redpill`, reverse-DNS for **absgrafx.com**). It must be unique in the Apple Developer portal.
 
 Enable **Automatically manage signing** so Xcode creates a **development** provisioning profile for your device.
 
@@ -33,7 +90,7 @@ Enable **Automatically manage signing** so Xcode creates a **development** provi
 
 ## 4. Build & run from Xcode (first success)
 
-1. In Xcode’s toolbar, pick your **iPhone** as the run destination (not a simulator).
+1. In Xcode's toolbar, pick your **iPhone** as the run destination (not a simulator).
 2. **Product → Run** (▶).  
    - First run may ask to **enable development** on the device; accept on the phone.
 3. If signing errors appear, read the red message: missing capability, wrong team, or bundle ID conflict — fix in **Signing & Capabilities**.
@@ -65,15 +122,45 @@ Then open **`ios/Runner.xcworkspace`**, select **Any iOS Device (arm64)** or you
 
 ---
 
-## 7. Native Go library on iOS (important for RedPill)
+## 7. Native Go library on iOS — DONE
 
-Today’s **Makefile** target **`go-macos`** builds **`libredpill.dylib`** for **macOS** and the Xcode **Copy Go Library** phase copies it into the Mac app.
+### How it works
 
-**iOS** does not load a macOS dylib. You need an **iOS slice** of the same c-shared library (e.g. **`.framework`** / **`.xcarchive`** embedding) or a separate **gomobile** / **cgo** pipeline that targets `GOOS=ios` / `arm64`. This is a **follow-up engineering task**: wire the Go `cshared` build into the **Runner** Xcode project for **iphoneos**, similar to the macOS copy phase.
+| Platform | Build mode | Output | Loaded by |
+|----------|-----------|--------|-----------|
+| **macOS** | `c-shared` | `libredpill.dylib` (Frameworks/) | `DynamicLibrary.open()` |
+| **iOS** | `c-archive` | `libredpill.a` (static lib) | `DynamicLibrary.process()` — symbols linked into Runner binary |
 
-Until that is done, **Flutter UI** can run on a device, but **dart:ffi calls into `libredpill` will fail** unless the iOS binary is embedded.
+iOS does **not** load `.dylib`; instead Go is compiled as a **static archive** (`-buildmode=c-archive`, `GOOS=ios GOARCH=arm64`) and the Xcode linker pulls it into the **Runner** executable.
 
-**Track as:** “iOS Go c-shared / xcframework + Runner embed” before treating iPhone as a full RedPill target.
+### Build the iOS Go library
+
+```bash
+cd redpill
+make go-ios          # → build/go/ios/libredpill.a  (~65 MB, arm64)
+```
+
+Requires **Go 1.26+** (via `/opt/homebrew/bin/go`) and the **iphoneos** SDK (Xcode).
+
+### How it is linked
+
+The Runner target's **`project.pbxproj`** (Debug / Release / Profile) has:
+
+- `LIBRARY_SEARCH_PATHS` → `$(SRCROOT)/../build/go/ios`
+- `OTHER_LDFLAGS` → `-lredpill -lresolv -framework Security -framework CoreFoundation`
+
+No build phase script is needed; the linker finds `libredpill.a` in the search path by convention (`-lredpill` → `libredpill.a`).
+
+### Full device deploy (Cursor terminal)
+
+```bash
+make go-ios                    # build native lib (skip if already built)
+flutter run -d Phlame          # or: flutter run -d <device_id>
+```
+
+Or all-in-one: **`make run-ios`** (builds Go, then `flutter run`).
+
+**Important:** `flutter clean` removes the `build/` dir including `libredpill.a`. After a clean, run **`make go-ios`** before `flutter run`.
 
 ---
 
@@ -89,7 +176,8 @@ Until that is done, **Flutter UI** can run on a device, but **dart:ffi calls int
 
 | Symptom | What to check |
 |--------|----------------|
-| “Signing for Runner requires a development team” | Pick a **Team** in Signing & Capabilities. |
-| “Failed to register bundle identifier” | Bundle ID already taken — change it or use the portal app id. |
+| "Signing for Runner requires a development team" | Pick a **Team** in Signing & Capabilities. |
+| "Failed to register bundle identifier" | Bundle ID already taken — change it or use the portal app id. |
 | Device grayed out | Cable, **Trust**, **Developer Mode**, or iOS version too old for your Xcode. |
-| App installs but crashes on launch (FFI) | **Go native library not built/linked for iOS** (see §7). |
+| App installs but crashes on launch (FFI) | Run **`make go-ios`** first, then `flutter run` (see §7). |
+| `Library 'redpill' not found` (linker error) | `flutter clean` wiped `build/`. Run **`make go-ios`** and build again. |
