@@ -179,6 +179,16 @@ class AppLockService {
     unlocked.value = true;
   }
 
+  /// Removes stored lock credentials without changing [unlocked].
+  /// Used when the app is resetting to onboarding (avoid flashing the home screen).
+  Future<void> clearLockCredentialsOnly() async {
+    await _deleteKey(_kEnabled);
+    await _deleteKey(_kSalt);
+    await _deleteKey(_kHash);
+    await _deleteKey(_kBiometric);
+    await _clearVaultFile();
+  }
+
   void markUnlocked() {
     unlocked.value = true;
   }

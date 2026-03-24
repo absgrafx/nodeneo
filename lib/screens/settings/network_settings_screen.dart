@@ -3,9 +3,8 @@ import 'package:flutter/material.dart';
 import '../../config/chain_config.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
-import '../../services/session_duration_store.dart';
+import '../../constants/app_brand.dart';
 import '../../theme.dart';
-import '../sessions/on_chain_sessions_screen.dart';
 
 /// Advanced: user-supplied Base JSON-RPC URL(s). No central relay — same comma
 /// rules as built-in defaults (see Go `parseEthNodeURLs`).
@@ -22,7 +21,6 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   bool _saving = false;
   bool _testing = false;
   String? _overridePreview;
-  int _sessionDurationSeconds = SessionDurationStore.defaultSeconds;
 
   @override
   void initState() {
@@ -32,23 +30,12 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
 
   Future<void> _load() async {
     final o = await RpcSettingsStore.instance.readOverride();
-    final sec = await SessionDurationStore.instance.readSeconds();
     if (!mounted) return;
     setState(() {
       _ctrl.text = o ?? '';
       _overridePreview = o;
-      _sessionDurationSeconds = sec;
       _loading = false;
     });
-  }
-
-  Future<void> _saveSessionDuration(int seconds) async {
-    await SessionDurationStore.instance.writeSeconds(seconds);
-    if (!mounted) return;
-    setState(() => _sessionDurationSeconds = seconds);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Default chat session: ${SessionDurationStore.formatDurationLabel(seconds)}')),
-    );
   }
 
   @override
@@ -156,7 +143,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   'Most users should stay on the built-in public Base endpoints. '
                   'Add your own only if you hit rate limits and have a URL you trust '
                   '(e.g. from your own node or a provider you pay). '
-                  'RedPill does not use a central relay — traffic goes straight from this device to the RPC(s) you configure.\n\n'
+                  '${AppBrand.displayName} does not use a central relay — traffic goes straight from this device to the RPC(s) you configure.\n\n'
                   'Before saving, each URL is checked with a live JSON-RPC call (eth_chainId must be Base mainnet, $defaultBaseChainId). '
                   'Use Test URLs to verify without switching the app off the current RPC.',
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.4),
@@ -213,56 +200,6 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 OutlinedButton(
                   onPressed: (_saving || _testing) ? null : _useDefaults,
                   child: const Text('Clear — use built-in public RPCs'),
-                ),
-                const SizedBox(height: 28),
-                Text('Chat session length', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                Text(
-                  'Default time window for new on-chain inference sessions (affects estimated MOR stake). '
-                  'You can override this on the error screen when opening a chat fails, or change it here anytime.',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.35),
-                ),
-                const SizedBox(height: 12),
-                InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Default duration',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      isExpanded: true,
-                      value: _sessionDurationSeconds,
-                      items: [
-                        for (final (label, sec) in SessionDurationStore.presets)
-                          DropdownMenuItem<int>(value: sec, child: Text(label)),
-                      ],
-                      onChanged: (_saving || _testing)
-                          ? null
-                          : (v) {
-                              if (v != null) _saveSessionDuration(v);
-                            },
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 28),
-                Text('Sessions', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                Text(
-                  'See inference sessions still open on-chain and close them to reclaim stake.',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.35),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: (_saving || _testing)
-                      ? null
-                      : () {
-                          Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(builder: (_) => const OnChainSessionsScreen()),
-                          );
-                        },
-                  icon: const Icon(Icons.hub_outlined, size: 20),
-                  label: const Text('Open on-chain sessions'),
                 ),
               ],
             ),

@@ -105,7 +105,6 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
       await runCloseOnChainSessionFlow(context, sid);
       if (!mounted) return;
       await _refresh();
-      // After closing the last session, return to previous screen.
       if (mounted && _sessions.isEmpty) {
         Navigator.of(context).pop();
       }
@@ -118,17 +117,108 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
     }
   }
 
+  bool _closingAll = false;
+
+  Future<void> _confirmCloseAll() async {
+    final count = _sessions.length;
+    if (count == 0) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Close all sessions?'),
+        content: Text(
+          'This will close $count session${count != 1 ? 's' : ''} one at a time. '
+          'Each close is a separate on-chain transaction (30–90s each). '
+          'Staked MOR is returned per contract rules.\n\n'
+          'Total time: roughly ${count * 30}–${count * 90} seconds.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+            child: Text('Close All ($count)'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _closingAll = true);
+    final sessionsCopy = List<Map<String, dynamic>>.from(
+      _sessions.map((s) => Map<String, dynamic>.from(s as Map)),
+    );
+
+    int closed = 0;
+    final errors = <String>[];
+
+    for (final row in sessionsCopy) {
+      if (!mounted) break;
+      final sid = row['id'] as String? ?? '';
+      if (sid.isEmpty) continue;
+
+      setState(() => _closing.add(sid));
+      try {
+        GoBridge().closeSession(sid);
+        closed++;
+      } on GoBridgeException catch (e) {
+        errors.add('${sid.substring(0, 8)}…: ${e.message}');
+      } catch (e) {
+        errors.add('${sid.substring(0, 8)}…: $e');
+      } finally {
+        if (mounted) setState(() => _closing.remove(sid));
+      }
+    }
+
+    if (mounted) {
+      setState(() => _closingAll = false);
+      await _refresh();
+
+      if (mounted) {
+        final msg = errors.isEmpty
+            ? 'Closed $closed session${closed != 1 ? 's' : ''} successfully.'
+            : 'Closed $closed of ${sessionsCopy.length}. ${errors.length} failed.';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      if (mounted && _sessions.isEmpty) {
+        Navigator.of(context).pop();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Open sessions'),
+        title: const Text('Sessions'),
         actions: [
+          if (!_loading && _sessions.length >= 2)
+            _closingAll
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: RedPillTheme.green),
+                    ),
+                  )
+                : TextButton(
+                    onPressed: _closing.isNotEmpty ? null : _confirmCloseAll,
+                    child: Text(
+                      'Close All (${_sessions.length})',
+                      style: TextStyle(
+                        color: _closing.isNotEmpty ? const Color(0xFF6B7280) : RedPillTheme.green,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _refresh,
+            onPressed: _loading || _closingAll ? null : _refresh,
           ),
         ],
       ),

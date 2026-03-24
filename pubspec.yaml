@@ -1,5 +1,5 @@
 name: redpill
-description: "MorpheusAIs decentralized AI client"
+description: "Morpheus network client — Flutter + Go (absgrafx)"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -40,6 +40,12 @@ dependencies:
   url_launcher: ^6.2.5
   crypto: ^3.0.6
   local_auth: ^2.3.0
+  flutter_markdown: ^0.7.7+1
+  flutter_slidable: ^3.1.2
+  markdown: ^7.3.0
+  google_fonts: ^6.2.1
+  flutter_svg: ^2.0.17
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
@@ -51,6 +57,8 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+  flutter_native_splash: ^2.4.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -63,10 +71,8 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    - assets/branding/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -93,3 +99,33 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# PNGs from SVG: python3 tools/branding/render_launcher_icons.py
+# Then: dart run flutter_launcher_icons
+# Regenerate: dart run flutter_native_splash:create
+flutter_launcher_icons:
+  android: true
+  ios: true
+  # v0.14+ expects a map here, not `macos: true`
+  macos:
+    generate: true
+  # Full-bleed midnight + centered wings (Dock / About / iOS / macOS)
+  image_path: assets/branding/app_icon_full.png
+  adaptive_icon_background: "#0C0C0C"
+  # Transparent + centered wings for adaptive layers
+  adaptive_icon_foreground: assets/branding/app_icon_foreground.png
+  min_sdk_android: 21
+  # Full launcher PNG is already opaque; do not strip alpha onto white
+  remove_alpha_ios: false
+  background_color_ios: "#0C0C0C"
+
+flutter_native_splash:
+  color: "#0C0C0C"
+  image: assets/branding/splash_logo.png
+  android_12:
+    color: "#0C0C0C"
+    image: assets/branding/splash_logo.png
+  # macOS: flutter_native_splash (2.4.x) does NOT generate desktop — it only updates Android / iOS / Web.
+  # Keep the same color + image here as the single source of truth; native overlay + asset:
+  #   macos/Runner/MainFlutterWindow.swift
+  #   macos/Runner/Assets.xcassets/SplashLogo.imageset/  (copy via tools/branding/render_launcher_icons.py)

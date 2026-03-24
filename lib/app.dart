@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'constants/app_brand.dart';
 import 'config/chain_config.dart';
 import 'screens/onboarding/onboarding_screen.dart';
 import 'screens/home/home_screen.dart';
@@ -9,10 +11,25 @@ import 'screens/settings/network_settings_screen.dart';
 import 'services/app_lock_service.dart';
 import 'services/bridge.dart';
 import 'services/rpc_settings_store.dart';
+import 'services/app_local_reset.dart';
 import 'services/wallet_vault.dart';
 import 'app_route_observer.dart';
 import 'theme.dart';
 import 'widgets/app_lock_gate.dart';
+
+/// Top-level so [compute] can serialize it across isolate boundaries
+/// (instance-method closures capture `this` which includes unsendable widgets).
+Map<String, dynamic> _initBridgeSync(Map<String, dynamic> p) {
+  final bridge = GoBridge();
+  return bridge.init(
+    dataDir: p['dataDir'] as String,
+    ethNodeURL: p['ethNodeURL'] as String,
+    chainID: p['chainID'] as int,
+    diamondAddr: p['diamondAddr'] as String,
+    morTokenAddr: p['morTokenAddr'] as String,
+    blockscoutURL: p['blockscoutURL'] as String,
+  );
+}
 
 class RedPillApp extends StatefulWidget {
   const RedPillApp({super.key});
@@ -25,6 +42,8 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
   bool _hasWallet = false;
   bool _sdkReady = false;
   String? _sdkError;
+  /// False when failure is missing native lib (iOS): RPC buttons are misleading.
+  bool _showRpcRecoveryOnError = true;
 
   @override
   void initState() {
@@ -58,17 +77,34 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
 
       final ethUrl = await RpcSettingsStore.instance.effectiveRpcUrl();
 
-      final bridge = GoBridge();
-      final result = bridge.init(
-        dataDir: dataDir,
-        ethNodeURL: ethUrl,
-        chainID: defaultBaseChainId,
-        diamondAddr: defaultDiamondAddr,
-        morTokenAddr: defaultMorTokenAddr,
-        blockscoutURL: defaultBlockscoutApiV2,
+      debugPrint('[RedPill] _initSDK: dataDir=$dataDir  rpc=$ethUrl');
+
+      // Go's sdk.NewSDK() may block for seconds (network, DNS) — run the
+      // synchronous FFI call on a background isolate so the UI stays alive.
+      // Must use a top-level function; closures in instance methods capture
+      // `this` which includes unsendable Flutter widget-tree objects.
+      final initParams = <String, dynamic>{
+        'dataDir': dataDir,
+        'ethNodeURL': ethUrl,
+        'chainID': defaultBaseChainId,
+        'diamondAddr': defaultDiamondAddr,
+        'morTokenAddr': defaultMorTokenAddr,
+        'blockscoutURL': defaultBlockscoutApiV2,
+      };
+
+      final result = await compute(_initBridgeSync, initParams).timeout(
+        const Duration(seconds: 45),
+        onTimeout: () => <String, dynamic>{'error': 'SDK init timed out after 45 s — check network/RPC.'},
       );
 
-      if (result['status'] == 'ok') {
+      debugPrint('[RedPill] init result: $result');
+
+      // Sync the main-isolate bridge's initialized flag with the background result.
+      final bridge = GoBridge();
+      final st = result['status'] as String?;
+      bridge.initialized = st == 'ok' || st == 'already_initialized';
+
+      if (bridge.initialized) {
         var restored = false;
         try {
           final saved = await WalletVault.instance.readMnemonic();
@@ -86,9 +122,12 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
           if (restored) _hasWallet = true;
         });
       } else {
+        if (!mounted) return;
         setState(() => _sdkError = result['error'] ?? 'Unknown init error');
       }
     } catch (e) {
+      debugPrint('[RedPill] _initSDK exception: $e');
+      if (!mounted) return;
       setState(() => _sdkError = e.toString());
     }
   }
@@ -108,9 +147,29 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
     await _initSDK();
   }
 
-  /// Clears Go SDK + SQLite after [WalletVault] was cleared; returns to onboarding path.
+  /// Clears Go SDK + local DB + app lock after [WalletVault] was cleared; returns to onboarding path.
   Future<void> _handleWalletErased() async {
     GoBridge().shutdown();
+    final dir = await getApplicationSupportDirectory();
+    final dataDir = '${dir.path}${Platform.pathSeparator}redpill';
+    await AppLocalReset.wipeLocalDatabaseFiles(dataDir);
+    await AppLockService.instance.clearLockCredentialsOnly();
+    if (!mounted) return;
+    setState(() {
+      _sdkReady = false;
+      _hasWallet = false;
+    });
+    await _initSDK();
+  }
+
+  /// Factory reset: wallet, lock, SQLite, RPC override — re-init SDK → onboarding.
+  Future<void> _fullFactoryReset() async {
+    await WalletVault.instance.clearMnemonic();
+    await AppLockService.instance.clearLockCredentialsOnly();
+    GoBridge().shutdown();
+    final dir = await getApplicationSupportDirectory();
+    final dataDir = '${dir.path}${Platform.pathSeparator}redpill';
+    await AppLocalReset.wipeFactoryLocalFiles(dataDir);
     if (!mounted) return;
     setState(() {
       _sdkReady = false;
@@ -129,7 +188,7 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RedPill',
+      title: AppBrand.displayName,
       debugShowCheckedModeBanner: false,
       theme: RedPillTheme.dark,
       navigatorObservers: <NavigatorObserver>[redpillRouteObserver],
@@ -145,17 +204,20 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
     if (_sdkError != null) {
       return _ErrorScreen(
         error: _sdkError!,
-        onRetryDefaultRpc: _clearRpcOverrideAndRetry,
-        onOpenNetworkSettings: () async {
-          final changed = await Navigator.of(context).push<bool>(
-            MaterialPageRoute<bool>(builder: (_) => const NetworkSettingsScreen()),
-          );
-          if (!mounted) return;
-          if (changed == true) {
-            setState(() => _sdkError = null);
-            await _restartSdkAfterRpcChange();
-          }
-        },
+        showRpcRecoveryActions: _showRpcRecoveryOnError,
+        onRetryDefaultRpc: _showRpcRecoveryOnError ? _clearRpcOverrideAndRetry : null,
+        onOpenNetworkSettings: _showRpcRecoveryOnError
+            ? () async {
+                final changed = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute<bool>(builder: (_) => const NetworkSettingsScreen()),
+                );
+                if (!mounted) return;
+                if (changed == true) {
+                  setState(() => _sdkError = null);
+                  await _restartSdkAfterRpcChange();
+                }
+              }
+            : null,
       );
     }
     if (!_sdkReady) {
@@ -165,6 +227,7 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
       return OnboardingScreen(onComplete: _onWalletCreated);
     }
     return AppLockGate(
+      onFullFactoryReset: _fullFactoryReset,
       child: HomeScreen(
         onWalletErased: _handleWalletErased,
         onOpenNetworkSettings: () async {
@@ -201,11 +264,14 @@ class _LoadingScreen extends StatelessWidget {
 
 class _ErrorScreen extends StatelessWidget {
   final String error;
+  /// When false (e.g. missing native lib on iOS), hide RPC-related actions.
+  final bool showRpcRecoveryActions;
   final Future<void> Function()? onRetryDefaultRpc;
   final Future<void> Function()? onOpenNetworkSettings;
 
   const _ErrorScreen({
     required this.error,
+    this.showRpcRecoveryActions = true,
     this.onRetryDefaultRpc,
     this.onOpenNetworkSettings,
   });
@@ -222,7 +288,11 @@ class _ErrorScreen extends StatelessWidget {
               children: [
                 const Text('⚠️', style: TextStyle(fontSize: 48)),
                 const SizedBox(height: 16),
-                const Text('SDK Init Failed', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                Text(
+                  showRpcRecoveryActions ? 'SDK Init Failed' : 'Not available on this build',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 12),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 200),
@@ -234,19 +304,21 @@ class _ErrorScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                if (onOpenNetworkSettings != null)
-                  FilledButton(
-                    onPressed: () => onOpenNetworkSettings!(),
-                    style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
-                    child: const Text('Edit custom RPC'),
-                  ),
-                if (onOpenNetworkSettings != null) const SizedBox(height: 10),
-                if (onRetryDefaultRpc != null)
-                  OutlinedButton(
-                    onPressed: () => onRetryDefaultRpc!(),
-                    child: const Text('Reset to built-in public RPCs'),
-                  ),
+                if (showRpcRecoveryActions) ...[
+                  const SizedBox(height: 20),
+                  if (onOpenNetworkSettings != null)
+                    FilledButton(
+                      onPressed: () => onOpenNetworkSettings!(),
+                      style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                      child: const Text('Edit custom RPC'),
+                    ),
+                  if (onOpenNetworkSettings != null) const SizedBox(height: 10),
+                  if (onRetryDefaultRpc != null)
+                    OutlinedButton(
+                      onPressed: () => onRetryDefaultRpc!(),
+                      child: const Text('Reset to built-in public RPCs'),
+                    ),
+                ],
               ],
             ),
           ),

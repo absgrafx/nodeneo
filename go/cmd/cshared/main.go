@@ -80,6 +80,16 @@ func GetWalletSummary() *C.char {
 	return C.CString(mobile.GetWalletSummary())
 }
 
+//export VerifyRecoveryMnemonic
+func VerifyRecoveryMnemonic(mnemonic *C.char) *C.char {
+	return C.CString(mobile.VerifyRecoveryMnemonic(C.GoString(mnemonic)))
+}
+
+//export VerifyRecoveryPrivateKey
+func VerifyRecoveryPrivateKey(hexKey *C.char) *C.char {
+	return C.CString(mobile.VerifyRecoveryPrivateKey(C.GoString(hexKey)))
+}
+
 //export SendETH
 func SendETH(toAddr, amountWei *C.char) *C.char {
 	return C.CString(mobile.SendETH(C.GoString(toAddr), C.GoString(amountWei)))
