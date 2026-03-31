@@ -82,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String _address = '';
   String _ethBalance = '—';
   String _morBalance = '—';
+  String _rawEthWei = '0';
+  String _rawMorWei = '0';
   bool _rpcChecking = true;
   bool? _rpcReachable;
   ModelStatusResponse? _statusApi;
@@ -197,20 +199,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return '${t.month}/${t.day}';
   }
 
+  bool get _walletUnfunded {
+    final eth = BigInt.tryParse(_rawEthWei) ?? BigInt.zero;
+    final mor = BigInt.tryParse(_rawMorWei) ?? BigInt.zero;
+    return eth == BigInt.zero && mor == BigInt.zero;
+  }
+
   void _loadWallet() {
     try {
       final bridge = GoBridge();
       final summary = bridge.getWalletSummary();
+      final rawEth = summary['eth_balance'] as String? ?? '0';
+      final rawMor = summary['mor_balance'] as String? ?? '0';
       setState(() {
         _address = summary['address'] as String? ?? '';
-        _ethBalance = formatWeiFixedDecimals(
-          summary['eth_balance'] as String? ?? '0',
-          _walletBalanceDecimals,
-        );
-        _morBalance = formatWeiFixedDecimals(
-          summary['mor_balance'] as String? ?? '0',
-          _walletBalanceDecimals,
-        );
+        _rawEthWei = rawEth;
+        _rawMorWei = rawMor;
+        _ethBalance = formatWeiFixedDecimals(rawEth, _walletBalanceDecimals);
+        _morBalance = formatWeiFixedDecimals(rawMor, _walletBalanceDecimals);
       });
     } catch (_) {}
   }
@@ -702,211 +708,215 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ),
               const SizedBox(height: 16),
 
-              _PrivacyToggle(
-                enabled: _maxPrivacy,
-                onChanged: (val) {
-                  setState(() => _maxPrivacy = val);
-                  _loadModels();
-                },
-              ),
-              if (_activeResumeChats.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.forum_outlined,
-                      size: 16,
-                      color: RedPillTheme.green.withValues(alpha: 0.9),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'CONTINUE CHATTING',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: RedPillTheme.green.withValues(alpha: 0.85),
-                        letterSpacing: 0.6,
+              if (_walletUnfunded) ...[
+                Expanded(child: _FundWalletOverlay(address: _address)),
+              ] else ...[
+                _PrivacyToggle(
+                  enabled: _maxPrivacy,
+                  onChanged: (val) {
+                    setState(() => _maxPrivacy = val);
+                    _loadModels();
+                  },
+                ),
+                if (_activeResumeChats.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.forum_outlined,
+                        size: 16,
+                        color: RedPillTheme.green.withValues(alpha: 0.9),
                       ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'CONTINUE CHATTING',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: RedPillTheme.green.withValues(alpha: 0.85),
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _activeResumeChats.length,
+                    separatorBuilder: (context, i) => const SizedBox(height: 8),
+                    itemBuilder: (ctx, i) {
+                      final c = _activeResumeChats[i];
+                      final name = conversationHeadline(c);
+                      final tee = c['is_tee'] == true;
+                      return Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () => _openResumeChat(context, c),
+                          child: Ink(
+                            decoration: BoxDecoration(
+                              color: RedPillTheme.mainPanelFill,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: RedPillTheme.mainPanelOutline(),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 6,
+                              ),
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Close on-chain session',
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 36,
+                                      minHeight: 36,
+                                    ),
+                                    icon: Icon(
+                                      Icons.close_rounded,
+                                      size: 22,
+                                      color: Colors.red.shade400,
+                                    ),
+                                    onPressed: () =>
+                                        _closeOnChainSessionForConversation(
+                                          context,
+                                          c,
+                                        ),
+                                  ),
+                                  Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      color: tee
+                                          ? RedPillTheme.green.withValues(alpha: 0.18)
+                                          : RedPillTheme.mainPanelFill,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: tee
+                                            ? RedPillTheme.green.withValues(alpha: 0.35)
+                                            : const Color(0xFF374151),
+                                      ),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        tee ? '🛡️' : '💬',
+                                        style: const TextStyle(fontSize: 16),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.titleSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                        Text(
+                                          conversationMetaLine(
+                                            c,
+                                            _relativeUpdated,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                color: const Color(0xFF6B7280),
+                                                fontSize: 10,
+                                                height: 1.25,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    color: theme.hintColor,
+                                    size: 22,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+                const SizedBox(height: 20),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('MODELS', style: theme.textTheme.labelSmall),
+                    Text(
+                      _loadingModels
+                          ? 'loading...'
+                          : _statusApi != null
+                              ? '${_models.length} across ${_statusApi!.activeProviders} providers'
+                              : '${_models.length} available',
+                      style: theme.textTheme.bodySmall,
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.hintColor,
-                    fontSize: 11,
-                    height: 1.3,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _activeResumeChats.length,
-                  separatorBuilder: (context, i) => const SizedBox(height: 8),
-                  itemBuilder: (ctx, i) {
-                    final c = _activeResumeChats[i];
-                    final name = conversationHeadline(c);
-                    final tee = c['is_tee'] == true;
-                    return Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => _openResumeChat(context, c),
-                        child: Ink(
-                          decoration: BoxDecoration(
-                            color: RedPillTheme.mainPanelFill,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: RedPillTheme.mainPanelOutline(),
-                            ),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 6,
-                            ),
-                            child: Row(
-                              children: [
-                                IconButton(
-                                  tooltip: 'Close on-chain session',
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(
-                                    minWidth: 36,
-                                    minHeight: 36,
-                                  ),
-                                  icon: Icon(
-                                    Icons.close_rounded,
-                                    size: 22,
-                                    color: Colors.red.shade400,
-                                  ),
-                                  onPressed: () =>
-                                      _closeOnChainSessionForConversation(
-                                        context,
-                                        c,
-                                      ),
-                                ),
-                                Container(
-                                  width: 36,
-                                  height: 36,
-                                  decoration: BoxDecoration(
-                                    color: tee
-                                        ? RedPillTheme.green.withValues(alpha: 0.18)
-                                        : RedPillTheme.mainPanelFill,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: tee
-                                          ? RedPillTheme.green.withValues(alpha: 0.35)
-                                          : const Color(0xFF374151),
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      tee ? '🛡️' : '💬',
-                                      style: const TextStyle(fontSize: 16),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        name,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.titleSmall
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                      ),
-                                      Text(
-                                        conversationMetaLine(
-                                          c,
-                                          _relativeUpdated,
-                                        ),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: const Color(0xFF6B7280),
-                                              fontSize: 10,
-                                              height: 1.25,
-                                            ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Icon(
-                                  Icons.chevron_right,
-                                  color: theme.hintColor,
-                                  size: 22,
-                                ),
-                              ],
-                            ),
-                          ),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      size: 16,
+                      color: RedPillTheme.green.withValues(alpha: 0.9),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'START A NEW CHAT by selecting a model',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: RedPillTheme.green.withValues(alpha: 0.85),
+                          letterSpacing: 0.6,
                         ),
                       ),
-                    );
-                  },
+                    ),
+                    if (_statusApi != null)
+                      Tooltip(
+                        message: 'Border color shows 6-hour availability:\nGreen ≥ 99%  ·  Yellow ≥ 85%  ·  Red < 85%',
+                        preferBelow: false,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.monitor_heart_outlined, size: 12, color: theme.hintColor),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Availability',
+                              style: TextStyle(fontSize: 10, color: theme.hintColor, fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
+                const SizedBox(height: 12),
+
+                Expanded(child: _buildModelList()),
               ],
-              const SizedBox(height: 20),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('MODELS', style: theme.textTheme.labelSmall),
-                  Text(
-                    _loadingModels
-                        ? 'loading...'
-                        : _statusApi != null
-                            ? '${_models.length} across ${_statusApi!.activeProviders} providers'
-                            : '${_models.length} available',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(
-                    Icons.chat_bubble_outline,
-                    size: 16,
-                    color: RedPillTheme.green.withValues(alpha: 0.9),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'START A NEW CHAT by selecting a model',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: RedPillTheme.green.withValues(alpha: 0.85),
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  ),
-                  if (_statusApi != null)
-                    Tooltip(
-                      message: 'Border color shows 6-hour availability:\nGreen ≥ 99%  ·  Yellow ≥ 85%  ·  Red < 85%',
-                      preferBelow: false,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.monitor_heart_outlined, size: 12, color: theme.hintColor),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Availability',
-                            style: TextStyle(fontSize: 10, color: theme.hintColor, fontWeight: FontWeight.w500),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              Expanded(child: _buildModelList()),
             ],
           ),
         ),
@@ -1161,6 +1171,186 @@ class _EmptyState extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// --- Fund Wallet Overlay ---
+
+class _FundWalletOverlay extends StatelessWidget {
+  final String address;
+  const _FundWalletOverlay({required this.address});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+          decoration: BoxDecoration(
+            color: RedPillTheme.mainPanelFill,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: RedPillTheme.amber.withValues(alpha: 0.35),
+              width: 1.3,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: RedPillTheme.amber.withValues(alpha: 0.10),
+                  border: Border.all(
+                    color: RedPillTheme.amber.withValues(alpha: 0.30),
+                    width: 1.5,
+                  ),
+                ),
+                child: const Center(
+                  child: Icon(Icons.account_balance_wallet_outlined,
+                      size: 28, color: RedPillTheme.amber),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Fund Your Wallet to Start',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: RedPillTheme.amber,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Send at least 5 MOR and 0.001 ETH (Arbitrum) to your wallet address to begin using AI inference.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF9CA3AF),
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF374151)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SelectableText(
+                        address.isEmpty ? '—' : address,
+                        style: const TextStyle(
+                          fontFamily: 'JetBrains Mono',
+                          fontSize: 11,
+                          color: Color(0xFFF9FAFB),
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Copy address',
+                      icon: const Icon(Icons.copy_rounded, size: 18),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(36, 36),
+                        padding: const EdgeInsets.all(6),
+                      ),
+                      onPressed: address.isEmpty
+                          ? null
+                          : () {
+                              Clipboard.setData(ClipboardData(text: address));
+                              ScaffoldMessenger.of(context)
+                                ..clearSnackBars()
+                                ..showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Wallet address copied'),
+                                    behavior: SnackBarBehavior.floating,
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                            },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _FundRequirement(
+                    label: 'MOR',
+                    amount: '≥ 5',
+                    color: RedPillTheme.green,
+                  ),
+                  const SizedBox(width: 20),
+                  _FundRequirement(
+                    label: 'ETH',
+                    amount: '≥ 0.001',
+                    color: RedPillTheme.amber,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Models will appear here once your wallet is funded.\nPull to refresh or tap ⋯ → Refresh.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF6B7280),
+                  fontSize: 11,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FundRequirement extends StatelessWidget {
+  final String label;
+  final String amount;
+  final Color color;
+  const _FundRequirement({
+    required this.label,
+    required this.amount,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color.withValues(alpha: 0.8),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '$amount $label',
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            fontFamily: 'JetBrains Mono',
+          ),
+        ),
+      ],
     );
   }
 }
