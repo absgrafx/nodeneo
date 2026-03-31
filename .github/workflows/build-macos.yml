@@ -105,7 +105,7 @@ jobs:
           cache-dependency-path: go/go.sum
 
       - name: Install Python dependencies (branding pipeline)
-        run: pip3 install cairosvg
+        run: pip3 install --break-system-packages cairosvg
 
       # ── Build Go dylib ──
       - name: Build Go shared library
