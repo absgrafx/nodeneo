@@ -49,8 +49,8 @@ class MainFlutterWindow: NSWindow {
 
     super.awakeFromNib()
 
-    // After super: Flutter's NIB wiring can reset the title to `CFBundleName` (`redpill`).
-    // Keep in sync with `AppBrand.displayName` in Dart (`lib/constants/app_brand.dart`).
+    self.minSize = NSSize(width: 480, height: 700)
+
     title = "Morpheus"
     DispatchQueue.main.async { [weak self] in
       self?.title = "Morpheus"

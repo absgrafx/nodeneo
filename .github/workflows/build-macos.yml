@@ -1,0 +1,248 @@
+name: macOS Build & Release
+#
+# Branch Strategy (mirrors Morpheus-Lumerin-Node):
+#   • dev:  Build + test only — DMG uploaded as artifact, no signing/notarization
+#   • main: Build + sign + notarize + DMG published as GitHub Release
+#
+# SemVer Tagging:
+#   • main: auto-bumps MINOR (v1.1.0, v1.2.0, …) unless VMAJ_NEW is raised
+#   • dev:  vMAJ.MIN.COMMITS-dev (e.g. v1.0.7-dev) — not published
+#
+# Trigger: fires on push (i.e. PR merge) to dev or main only.
+
+on:
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.41.5"
+  GO_VERSION: "1.24"
+
+permissions:
+  contents: write
+
+jobs:
+  # ── SemVer Tag Generation ─────────────────────────────────────────
+  generate-tag:
+    runs-on: ubuntu-latest
+    name: Generate SemVer Tag
+    outputs:
+      tag_name: ${{ steps.semver.outputs.tag_name }}
+      vfull: ${{ steps.semver.outputs.vfull }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next version
+        id: semver
+        run: |
+          VMAJ_NEW=1
+          VMIN_NEW=0
+          VPAT_NEW=0
+
+          # Find the last production tag (clean semver: v#.#.# with no suffix).
+          VLAST=$(git tag -l "v[0-9]*" \
+            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" \
+            | sort -V | tail -n 1 | cut -c2-)
+
+          if [ -n "$VLAST" ]; then
+            eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
+          else
+            VMAJ=0; VMIN=0; VPAT=0
+          fi
+
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
+              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW; VPAT=$VPAT_NEW
+            else
+              VMIN=$((VMIN + 1)); VPAT=0
+            fi
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VTAG=v${VFULL}
+          else
+            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
+              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW
+            fi
+            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || echo HEAD)
+            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD)
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            RNAME=${GITHUB_REF_NAME##*/}
+            VTAG=v${VFULL}-${RNAME}
+          fi
+
+          echo "tag_name=${VTAG}" >> "$GITHUB_OUTPUT"
+          echo "vfull=${VFULL}"   >> "$GITHUB_OUTPUT"
+          echo "### Build Tag: \`${VTAG}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Build ──────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    needs: generate-tag
+    timeout-minutes: 30
+    env:
+      APP_VERSION: ${{ needs.generate-tag.outputs.vfull }}
+      TAG_NAME: ${{ needs.generate-tag.outputs.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Toolchains ──
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+
+      - name: Install Python dependencies (branding pipeline)
+        run: pip3 install --break-system-packages cairosvg
+
+      # ── Build Go dylib ──
+      - name: Build Go shared library
+        env:
+          GONOSUMCHECK: "github.com/absgrafx/*"
+          GONOSUMDB: "github.com/absgrafx/*"
+          GOPRIVATE: "github.com/absgrafx/*"
+        run: make go-macos
+
+      # ── Flutter dependencies ──
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # ── Branding pipeline ──
+      - name: Rasterize brand assets
+        run: |
+          python3 tools/branding/render_launcher_icons.py
+          dart run flutter_launcher_icons
+          dart run flutter_native_splash:create
+
+      # ── Build release app (inject version) ──
+      - name: Flutter build macOS (release)
+        run: |
+          flutter build macos --release \
+            --build-name="${APP_VERSION}" \
+            --build-number="${GITHUB_RUN_NUMBER}"
+
+      # ── Inject Go dylib into app bundle ──
+      - name: Copy dylib into app bundle
+        run: |
+          APP_DIR=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
+          mkdir -p "$APP_DIR/Contents/Frameworks"
+          cp build/go/libredpill.dylib "$APP_DIR/Contents/Frameworks/"
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+      # ── Sign (main only) ──
+      - name: Import signing certificate
+        if: github.ref == 'refs/heads/main'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+
+      - name: Codesign app bundle
+        if: github.ref == 'refs/heads/main'
+        env:
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+        run: |
+          codesign --deep --force --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            "$APP_DIR/Contents/Frameworks/libredpill.dylib"
+          codesign --deep --force --options runtime \
+            --entitlements macos/Runner/Release.entitlements \
+            --sign "$SIGNING_IDENTITY" \
+            "$APP_DIR"
+
+      # ── Package DMG (branded installer with background & icon layout) ──
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Package DMG
+        run: |
+          APP_NAME=$(basename "$APP_DIR" .app)
+          DMG_NAME="Morpheus-${APP_VERSION}-macOS.dmg"
+          DMG_PATH="build/${DMG_NAME}"
+
+          create-dmg \
+            --volname "$APP_NAME" \
+            --background "assets/branding/dmg-background.png" \
+            --window-pos 200 100 \
+            --window-size 720 420 \
+            --icon-size 120 \
+            --icon "$APP_NAME.app" 190 210 \
+            --app-drop-link 530 210 \
+            --text-size 14 \
+            --no-internet-enable \
+            "$DMG_PATH" \
+            "$APP_DIR"
+
+          echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
+          echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
+
+      # ── Notarize (main only) ──
+      - name: Notarize DMG
+        if: github.ref == 'refs/heads/main'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 15m
+          xcrun stapler staple "$DMG_PATH"
+
+      # ── Upload artifact (all branches) ──
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DMG_NAME }}
+          path: ${{ env.DMG_PATH }}
+          retention-days: 14
+
+      # ── GitHub Release (main only) ──
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+          cat <<'NOTES' > /tmp/release-notes.md
+          ## Morpheus Desktop (macOS)
+
+          Signed and notarized — download, mount, drag to Applications.
+
+          | Asset | Description |
+          |-------|-------------|
+          | `Morpheus-VERSION-macOS.dmg` | macOS desktop client (Apple Silicon / Intel universal) |
+
+          NOTES
+          sed -i '' "s/VERSION/${APP_VERSION}/g" /tmp/release-notes.md
+
+          gh release create "$TAG_NAME" "$DMG_PATH" \
+            --title "Morpheus $TAG_NAME" \
+            --notes-file /tmp/release-notes.md \
+            --latest

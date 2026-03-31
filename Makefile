@@ -64,8 +64,8 @@ run-macos: go-macos _copy-dylib-macos
 
 _copy-dylib-macos:
 	@echo "Ensuring dylib is in Frameworks..."
-	@mkdir -p build/macos/Build/Products/Debug/redpill.app/Contents/Frameworks 2>/dev/null || true
-	@cp build/go/libredpill.dylib build/macos/Build/Products/Debug/redpill.app/Contents/Frameworks/ 2>/dev/null || true
+	@mkdir -p build/macos/Build/Products/Debug/Morpheus.app/Contents/Frameworks 2>/dev/null || true
+	@cp build/go/libredpill.dylib build/macos/Build/Products/Debug/Morpheus.app/Contents/Frameworks/ 2>/dev/null || true
 
 run-ios: go-ios
 	flutter run -d Phlame
