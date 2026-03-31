@@ -172,15 +172,21 @@ jobs:
             --sign "$SIGNING_IDENTITY" \
             "$APP_DIR"
 
-      # ── Package DMG ──
+      # ── Package DMG (with Applications shortcut for drag-to-install) ──
       - name: Package DMG
         run: |
           APP_NAME=$(basename "$APP_DIR" .app)
           DMG_NAME="Morpheus-${APP_VERSION}-macOS.dmg"
+          STAGING="build/dmg-staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R "$APP_DIR" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
           hdiutil create -volname "$APP_NAME" \
-            -srcfolder "$APP_DIR" \
+            -srcfolder "$STAGING" \
             -ov -format UDZO \
             "build/${DMG_NAME}"
+          rm -rf "$STAGING"
           echo "DMG_PATH=build/${DMG_NAME}" >> "$GITHUB_ENV"
           echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
 
