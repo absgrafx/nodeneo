@@ -109,6 +109,10 @@ jobs:
 
       # ── Build Go dylib ──
       - name: Build Go shared library
+        env:
+          GONOSUMCHECK: "github.com/absgrafx/*"
+          GONOSUMDB: "github.com/absgrafx/*"
+          GOPRIVATE: "github.com/absgrafx/*"
         run: make go-macos
 
       # ── Flutter dependencies ──
