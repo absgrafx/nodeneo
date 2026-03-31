@@ -311,9 +311,16 @@ class _MnemonicBackupScreen extends StatelessWidget {
                   TextButton.icon(
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: mnemonic));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Mnemonic copied to clipboard')),
-                      );
+                      ScaffoldMessenger.of(context)
+                        ..clearSnackBars()
+                        ..showSnackBar(
+                          const SnackBar(
+                            content: Text('Mnemonic copied to clipboard'),
+                            behavior: SnackBarBehavior.floating,
+                            margin: EdgeInsets.only(bottom: 80, left: 24, right: 24),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
                     },
                     icon: const Icon(Icons.copy, size: 16),
                     label: const Text('Copy to clipboard'),
