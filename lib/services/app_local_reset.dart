@@ -19,7 +19,7 @@ class AppLocalReset {
 
   /// Local chat / preferences SQLite only (keeps custom RPC and other files).
   static Future<void> wipeLocalDatabaseFiles(String dataDir) async {
-    for (final name in ['redpill.db', 'redpill.db-wal', 'redpill.db-shm']) {
+    for (final name in ['nodeneo.db', 'nodeneo.db-wal', 'nodeneo.db-shm']) {
       await _tryDelete(dataDir, name);
     }
   }
@@ -29,9 +29,9 @@ class AppLocalReset {
     await RpcSettingsStore.instance.clearOverride();
 
     for (final name in [
-      'redpill.db',
-      'redpill.db-wal',
-      'redpill.db-shm',
+      'nodeneo.db',
+      'nodeneo.db-wal',
+      'nodeneo.db-shm',
       'eth_rpc_override.txt',
       '.mnemonic_vault',
       '.app_lock_vault.json',

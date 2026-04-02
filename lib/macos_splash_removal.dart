@@ -8,7 +8,7 @@ import 'package:flutter/widgets.dart';
 ///
 /// The [FlutterMethodChannel] must be retained on the Swift side; we also retry here because
 /// merged UI/platform thread builds can delay channel readiness.
-const MethodChannel _kMacosSplashChannel = MethodChannel('redpill/macos_splash');
+const MethodChannel _kMacosSplashChannel = MethodChannel('nodeneo/macos_splash');
 
 void scheduleMacOsNativeSplashRemoval() {
   if (kIsWeb || !Platform.isMacOS) return;

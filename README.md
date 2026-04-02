@@ -1,19 +1,19 @@
-# RedPill
+# Node Neo
 
 **By [absgrafx](https://github.com/absgrafx).** A mobile-first, privacy-maximizing client for the **Morpheus** decentralized AI network (protocol and upstream repos live under [MorpheusAIs on GitHub](https://github.com/MorpheusAIs)).
 
 **The Signal of decentralized AI inference.**
 
-**User-facing name** in the app UI defaults to **Morpheus** (see [`lib/constants/app_brand.dart`](lib/constants/app_brand.dart)). Package / repo id may stay `redpill`. **Bundle / application id:** `com.absgrafx.redpill`.
+**Bundle / application id:** `com.absgrafx.nodeneo`
 
 ## What is this?
 
-RedPill is a clean, consumer-grade app for the Morpheus network: wallet, MOR staking, model pick, and chat — with **Secure (TEE)** models running through the same **attestation** path as the Morpheus proxy-router daemon (embedded SDK, not a separate HTTP server).
+Node Neo is a clean, consumer-grade app for the Morpheus network: wallet, MOR staking, model pick, and chat — with **Secure (TEE)** models running through the same **attestation** path as the Morpheus proxy-router daemon (embedded SDK, not a separate HTTP server).
 
 ## Architecture
 
 - **Flutter** for cross-platform UI (iOS, Android, macOS)
-- **Go** `c-shared` library (`libredpill`) — **embeds `proxy-router/mobile` SDK** (wallet, chain, sessions, MOR-RPC chat)
+- **Go** `c-shared` library (`libnodeneo`) — **embeds `proxy-router/mobile` SDK** (wallet, chain, sessions, MOR-RPC chat)
 - **SQLite** for conversations, messages, preferences
 - **Platform** secure storage + optional app lock / biometrics
 
@@ -23,7 +23,7 @@ See [.ai-docs/redpill_architecture.md](.ai-docs/redpill_architecture.md) and [.a
 
 ## Status
 
-Active development on **Base mainnet**. Roadmap and **MVP alpha backlog**: [.ai-docs/redpill_plan.md](.ai-docs/redpill_plan.md) (items **1–13** in the “Next up” table — includes token symbols, history/swipe UX, Markdown, copy/paste, deferred images).
+Active development on **Base mainnet**. Roadmap and **MVP alpha backlog**: [.ai-docs/redpill_plan.md](.ai-docs/redpill_plan.md).
 
 ## Quick Start (macOS)
 

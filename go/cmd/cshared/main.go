@@ -3,9 +3,9 @@ package main
 /*
 #include <stdlib.h>
 
-typedef void (*redpill_stream_cb)(const char* text, int is_last);
+typedef void (*neo_stream_cb)(const char* text, int is_last);
 
-static inline void redpill_invoke_stream_cb(redpill_stream_cb cb, const char* t, int is_last) {
+static inline void neo_invoke_stream_cb(neo_stream_cb cb, const char* t, int is_last) {
 	if (cb != NULL) {
 		cb(t, is_last);
 	}
@@ -51,6 +51,30 @@ func IsReady() C.int {
 		return 1
 	}
 	return 0
+}
+
+// --- Logging ---
+
+//export GetLogDir
+func GetLogDir() *C.char {
+	return C.CString(mobile.GetLogDir())
+}
+
+//export SetLogLevel
+func SetLogLevel(level *C.char) *C.char {
+	return C.CString(mobile.SetLogLevel(C.GoString(level)))
+}
+
+//export GetLogLevel
+func GetLogLevel() *C.char {
+	return C.CString(mobile.GetLogLevel())
+}
+
+// --- Encryption ---
+
+//export SetEncryptionKey
+func SetEncryptionKey(keyHex *C.char) *C.char {
+	return C.CString(mobile.SetEncryptionKey(C.GoString(keyHex)))
 }
 
 // --- Wallet ---
@@ -161,7 +185,7 @@ func SendPrompt(sessionID, conversationID, prompt *C.char, stream C.int) *C.char
 // [cb] may be NULL (no per-chunk delivery).
 //
 //export SendPromptStream
-func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, cb C.redpill_stream_cb) *C.char {
+func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, cb C.neo_stream_cb) *C.char {
 	chunk := func(text string, last bool) error {
 		if cb == nil {
 			return nil
@@ -171,7 +195,7 @@ func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, c
 		if last {
 			lastInt = 1
 		}
-		C.redpill_invoke_stream_cb(cb, ct, lastInt)
+		C.neo_invoke_stream_cb(cb, ct, lastInt)
 		C.free(unsafe.Pointer(ct))
 		return nil
 	}
@@ -254,6 +278,23 @@ func SetPreference(key, value *C.char) *C.char {
 //export GetPreference
 func GetPreference(key *C.char) *C.char {
 	return C.CString(mobile.GetPreference(C.GoString(key)))
+}
+
+// --- Expert Mode (native proxy-router swagger API) ---
+
+//export StartExpertAPI
+func StartExpertAPI(address, publicURL *C.char) *C.char {
+	return C.CString(mobile.StartExpertAPI(C.GoString(address), C.GoString(publicURL)))
+}
+
+//export StopExpertAPI
+func StopExpertAPI() *C.char {
+	return C.CString(mobile.StopExpertAPI())
+}
+
+//export ExpertAPIStatus
+func ExpertAPIStatus() *C.char {
+	return C.CString(mobile.ExpertAPIStatus())
 }
 
 func main() {}

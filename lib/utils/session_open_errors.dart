@@ -170,7 +170,7 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
       (lower.contains('403') && lower.contains('forbidden'))) {
     return SessionOpenErrorParts(
       headline: 'The RPC node blocked the request (often a Cloudflare challenge).',
-      whatNext: 'Wait a moment and tap Retry — RedPill rotates public Base endpoints.',
+      whatNext: 'Wait a moment and tap Retry — Node Neo rotates public Base endpoints.',
       rawTechnical: technical,
     );
   }
@@ -233,7 +233,7 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
       headline: headline,
       supporting: supporting,
       whatNext: reasons.length > 1
-          ? 'RedPill tried more than one provider; you can Retry or choose another model.'
+          ? 'Node Neo tried more than one provider; you can Retry or choose another model.'
           : 'Try Retry in a minute, or pick another model.',
       rawTechnical: technical,
     );

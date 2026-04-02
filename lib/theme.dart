@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Morpheus / Marketplace-aligned palette (`Morpheus-Marketplace-APP` globals.css).
+/// Node Neo palette — Matrix-inspired greens on neutral dark.
 ///
 /// Brand: `--matrix-green`, `--eclipse`, `--neon-mint`, `--emerald`, `--midnight`, `--platinum`.
-class RedPillTheme {
+class NeoTheme {
   /// #0C0C0C — main scaffold / near-black
   static const midnight = Color(0xFF0C0C0C);
 
@@ -14,17 +14,17 @@ class RedPillTheme {
   /// Default emerald outline for [mainPanelFill] panels.
   static Color mainPanelOutline([double opacity = 0.42]) => emerald.withValues(alpha: opacity);
 
-  /// #03160E — deep green-black (fills, selected chips)
-  static const matrixGreen = Color(0xFF03160E);
+  /// #111311 — deep green-black (fills, selected chips)
+  static const matrixGreen = Color(0xFF111311);
 
-  /// #1C302F — cards / elevated surfaces (“eclipse”)
-  static const eclipse = Color(0xFF1C302F);
+  /// #1A1A1A — cards / elevated surfaces, neutral dark grey
+  static const eclipse = Color(0xFF1A1A1A);
 
   /// #00FF85 — high-contrast accent (use sparingly)
   static const neonMint = Color(0xFF00FF85);
 
-  /// #20DC8E — primary brand green (buttons, links, focus)
-  static const emerald = Color(0xFF20DC8E);
+  /// #30D020 — primary brand green matched to glasses glow
+  static const emerald = Color(0xFF30D020);
 
   /// #EBEBEB — primary text on dark
   static const platinum = Color(0xFFEBEBEB);
@@ -34,10 +34,13 @@ class RedPillTheme {
   static const greenDark = matrixGreen;
   static const surface = eclipse;
   /// Slightly lifted surface for nested chips / borders
-  static const surfaceLight = Color(0xFF243836);
+  static const surfaceLight = Color(0xFF2A2A2A);
 
   static const amber = Color(0xFFF59E0B);
   static const red = Color(0xFFEF4444);
+
+  /// #627EEA — Ethereum brand blue for ETH balance / token displays
+  static const ethBlue = Color(0xFF627EEA);
 
   static const _textSecondary = Color(0xFF9CA3AF);
   static const _textMuted = Color(0xFF6B7280);
@@ -95,6 +98,12 @@ class RedPillTheme {
           color: platinum,
         ),
         iconTheme: const IconThemeData(color: platinum),
+      ),
+      drawerTheme: const DrawerThemeData(
+        backgroundColor: Color(0xFF141414),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Color(0xFF141414),
       ),
       cardTheme: CardThemeData(
         color: eclipse,
