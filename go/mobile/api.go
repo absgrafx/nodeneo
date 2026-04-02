@@ -63,6 +63,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		BlockscoutURL:   blockscoutURL,
 		ActiveModelsURL: activeModelsURL,
 		LogLevel:        "info",
+		LogWriter:       logger.DirectWriter(),
 	}
 
 	var err error
@@ -84,6 +85,22 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 	logger.Info("DB opened at %s/nodeneo.db", dataDir)
 
 	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// AppLog writes a message to nodeneo.log from the Dart/Flutter layer,
+// creating a unified application log alongside the Go SDK entries.
+// level: "debug", "info", "warn", "error".
+func AppLog(level, message string) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		logger.Debug("[FLUTTER] %s", message)
+	case "warn", "warning":
+		logger.Warn("[FLUTTER] %s", message)
+	case "error":
+		logger.Error("[FLUTTER] %s", message)
+	default:
+		logger.Info("[FLUTTER] %s", message)
+	}
 }
 
 // Shutdown tears everything down.
@@ -136,10 +153,17 @@ func GetLogDir() string {
 	return logger.LogDir()
 }
 
-// SetLogLevel changes the log level at runtime. Valid: debug, info, warn, error.
+// SetLogLevel changes the log level at runtime for all emitters:
+// the wrapper's rotating file logger (Flutter + wrapper messages) AND the
+// SDK's internal zap logger (blockchain/proxy-router messages).
 func SetLogLevel(level string) string {
 	logger.SetLevel(level)
-	logger.Info("Log level changed to %s", logger.GetLevel())
+	if client != nil {
+		if err := client.SetLogLevel(level); err != nil {
+			logger.Warn("SDK SetLogLevel(%s) failed: %v", level, err)
+		}
+	}
+	logger.Info("Log level changed to %s (wrapper + SDK)", logger.GetLevel())
 	return resultJSON(map[string]string{"status": "ok", "level": logger.GetLevel()})
 }
 
