@@ -345,10 +345,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (widget.isTEE) {
         _completeStep(message: 'TEE attestation verified');
-        _addLog('On-chain session opened (MOR staked)', level: _LogLevel.ok);
-      } else {
-        _completeStep(message: 'On-chain session opened (MOR staked)');
+        _startStep('Opening on-chain session (staking MOR)…');
       }
+
+      _completeStep(message: 'On-chain session opened (MOR staked)');
       _lastOpenedSessionId = sid;
     } on GoBridgeException catch (e) {
       _completeStep(message: e.message, level: _LogLevel.error);

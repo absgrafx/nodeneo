@@ -12,7 +12,7 @@ import (
 )
 
 // ProxyClient talks to a running proxy-router instance via its REST API.
-// This keeps RedPill decoupled from proxy-router internals while still
+// This keeps Node Neo decoupled from proxy-router internals while still
 // getting full blockchain, session, and chat functionality.
 type ProxyClient struct {
 	baseURL string

@@ -163,6 +163,44 @@ func (w *levelWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// DirectWriter returns an io.Writer that writes lines directly to the rotating
+// log file without applying the wrapper's own level filter. Use this for SDK logs
+// that have already been filtered by the SDK's internal AtomicLevel.
+func DirectWriter() io.Writer {
+	return &directWriter{}
+}
+
+type directWriter struct{}
+
+func (w *directWriter) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\n")
+	if line == "" {
+		return len(p), nil
+	}
+
+	globalMu.Lock()
+	l := globalLogger
+	globalMu.Unlock()
+	if l == nil {
+		return len(p), nil
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	ts := time.Now().Format("2006-01-02 15:04:05.000")
+	formatted := fmt.Sprintf("%s [SDK] %s\n", ts, line)
+
+	if l.file != nil {
+		n, _ := l.file.WriteString(formatted)
+		l.written += int64(n)
+		if l.written >= maxFileSize {
+			l.rotate()
+		}
+	}
+	return len(p), nil
+}
+
 func log(level Level, msg string, args ...interface{}) {
 	globalMu.Lock()
 	l := globalLogger

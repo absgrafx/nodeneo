@@ -11,8 +11,8 @@ import (
 	"time"
 
 	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
-	"github.com/absgrafx/redpill/internal/logger"
-	"github.com/absgrafx/redpill/internal/store"
+	"github.com/absgrafx/nodeneo/internal/logger"
+	"github.com/absgrafx/nodeneo/internal/store"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -63,6 +63,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		BlockscoutURL:   blockscoutURL,
 		ActiveModelsURL: activeModelsURL,
 		LogLevel:        "info",
+		LogWriter:       logger.DirectWriter(),
 	}
 
 	var err error
@@ -84,6 +85,22 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 	logger.Info("DB opened at %s/nodeneo.db", dataDir)
 
 	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// AppLog writes a message to nodeneo.log from the Dart/Flutter layer,
+// creating a unified application log alongside the Go SDK entries.
+// level: "debug", "info", "warn", "error".
+func AppLog(level, message string) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		logger.Debug("[FLUTTER] %s", message)
+	case "warn", "warning":
+		logger.Warn("[FLUTTER] %s", message)
+	case "error":
+		logger.Error("[FLUTTER] %s", message)
+	default:
+		logger.Info("[FLUTTER] %s", message)
+	}
 }
 
 // Shutdown tears everything down.
@@ -129,6 +146,41 @@ func SetEncryptionKey(keyHex string) string {
 	return resultJSON(map[string]string{"status": "ok"})
 }
 
+// --- Version ---
+
+// GetProxyRouterVersion returns structured version info for the embedded
+// proxy-router SDK as JSON. The "version" field is a git-describe string
+// like "v6.0.1-test-12-g00562be9" — when it contains a hyphen-separated
+// suffix, the SDK is a fork N commits ahead of the upstream tag.
+func GetProxyRouterVersion() string {
+	ver := sdk.ProxyRouterVersion()
+	commit := sdk.ProxyRouterCommit()
+
+	isFork := false
+	upstreamTag := ver
+	forkCommits := 0
+
+	// git describe format: <tag>-<N>-g<hash> when ahead of a tag
+	parts := strings.Split(ver, "-")
+	if len(parts) >= 3 {
+		last := parts[len(parts)-1]
+		countStr := parts[len(parts)-2]
+		if strings.HasPrefix(last, "g") {
+			isFork = true
+			fmt.Sscanf(countStr, "%d", &forkCommits)
+			upstreamTag = strings.Join(parts[:len(parts)-2], "-")
+		}
+	}
+
+	return resultJSON(map[string]interface{}{
+		"version":      ver,
+		"commit":       commit,
+		"is_fork":      isFork,
+		"upstream_tag":  upstreamTag,
+		"fork_commits": forkCommits,
+	})
+}
+
 // --- Logging ---
 
 // GetLogDir returns the absolute path to the log directory.
@@ -136,10 +188,17 @@ func GetLogDir() string {
 	return logger.LogDir()
 }
 
-// SetLogLevel changes the log level at runtime. Valid: debug, info, warn, error.
+// SetLogLevel changes the log level at runtime for all emitters:
+// the wrapper's rotating file logger (Flutter + wrapper messages) AND the
+// SDK's internal zap logger (blockchain/proxy-router messages).
 func SetLogLevel(level string) string {
 	logger.SetLevel(level)
-	logger.Info("Log level changed to %s", logger.GetLevel())
+	if client != nil {
+		if err := client.SetLogLevel(level); err != nil {
+			logger.Warn("SDK SetLogLevel(%s) failed: %v", level, err)
+		}
+	}
+	logger.Info("Log level changed to %s (wrapper + SDK)", logger.GetLevel())
 	return resultJSON(map[string]string{"status": "ok", "level": logger.GetLevel()})
 }
 
