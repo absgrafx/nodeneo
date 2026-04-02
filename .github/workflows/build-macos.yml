@@ -126,9 +126,11 @@ jobs:
           dart run flutter_launcher_icons
           dart run flutter_native_splash:create
 
-      # ── Disable code signing for dev builds (no cert on runner) ──
-      - name: Strip Xcode signing for CI (dev)
-        if: github.ref != 'refs/heads/main'
+      # ── Disable Xcode signing for flutter build (all branches) ──
+      # Xcode auto-signing requires a local cert at build time. We strip it
+      # here so `flutter build` always succeeds unsigned. On main the post-build
+      # codesign step re-signs the .app with the imported Developer ID cert.
+      - name: Strip Xcode auto-signing for CI
         run: |
           sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development"/CODE_SIGN_IDENTITY = "-"/g' macos/Runner.xcodeproj/project.pbxproj
           sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' macos/Runner.xcodeproj/project.pbxproj
