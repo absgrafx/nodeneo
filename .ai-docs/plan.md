@@ -1,4 +1,4 @@
-# RedPill — Plan & Progress
+# Node Neo — Plan & Progress
 
 > Living document. Updated as we build.
 > Part of the [absgrafx](https://github.com/absgrafx) project.
@@ -22,7 +22,7 @@ Goal: Prove the architecture works. Go library compiles, Flutter talks to it, wa
 | #    | Task                                      | Status      | Notes                                      |
 | ---- | ----------------------------------------- | ----------- | ------------------------------------------ |
 | 0.1  | Create repo + architecture docs           | DONE        |                                            |
-| 0.2  | Go module (go 1.26, go-ethereum, bip39)   | DONE        | `github.com/absgrafx/redpill`              |
+| 0.2  | Go module (go 1.26, go-ethereum, bip39)   | DONE        | `github.com/absgrafx/nodeneo`              |
 | 0.3  | Native wallet — create, import, key derive| DONE        | BIP-39 + go-ethereum, all tests pass       |
 | 0.4  | HTTP proxy client for proxy-router API    | DONE        | Models, sessions, chat, balance (now legacy)|
 | 0.5  | Orchestrator — ActiveModels, QuickSession | DONE        | Cached model listing (now legacy)          |
@@ -32,7 +32,7 @@ Goal: Prove the architecture works. Go library compiles, Flutter talks to it, wa
 | 0.9  | Flutter scaffold (macOS + iOS targets)    | DONE        | Dark theme, onboarding + home screens      |
 | 0.10 | License + absgrafx org setup              | DONE        | MIT license                                |
 | 0.13 | Fork proxy-router → absgrafx             | DONE        | `proxy-router/mobile/` SDK created         |
-| 0.14 | Rewire RedPill to use SDK (no HTTP)       | DONE        | `api.go` imports SDK directly              |
+| 0.14 | Rewire Node Neo to use SDK (no HTTP)       | DONE        | `api.go` imports SDK directly              |
 | 0.11 | dart:ffi bridge — call Go from Dart       | DONE        | c-shared .dylib + bridge.dart + Xcode phase|
 | 0.12 | Onboarding screen — wire to real wallet   | DONE        | Real BIP-39 create + mnemonic backup flow  |
 | 0.15 | Home screen — live balance + models       | DONE        | Real chain balance + active models HTTP    |
@@ -73,7 +73,7 @@ Goal: User can browse models, open a session, and chat with a TEE-attested provi
 
 | # | Theme | Notes |
 |---|--------|--------|
-| 1 | **Dev setup + iPhone** | Step-by-step Mac + device signing, rebuild `libredpill`, distribute to alpha testers |
+| 1 | **Dev setup + iPhone** | Step-by-step Mac + device signing, rebuild `libnodeneo`, distribute to alpha testers |
 | 2 | **Branding** | Morpheus-aligned colors/icons or one consistent design system |
 | 3 | **Settings cleanup** | Remove stray notes; tidy sections |
 | 4 | **Formal app name** | Replace working name in chrome/onboarding when chosen |
@@ -198,9 +198,9 @@ Goal: Running on a real iPhone. Same app, native feel.
 | 2026-03-17 | Pure-Go SQLite (modernc)                     | Avoids CGo for clean cross-compilation with gomobile                                                           |
 | 2026-03-17 | Consumer-only, strip provider code           | Smaller binary, simpler UX, focused scope                                                                      |
 | 2026-03-17 | Native wallet, HTTP for blockchain ops       | go-ethereum/bip39 for wallet (no deps), proxy-router REST API for blockchain (pragmatic)                       |
-| 2026-03-17 | Planned fork into absgrafx org               | Will add `mobile/` SDK package so RedPill can import proxy-router directly — eliminates HTTP intermediary      |
+| 2026-03-17 | Planned fork into absgrafx org               | Will add `mobile/` SDK package so Node Neo can import proxy-router directly — eliminates HTTP intermediary      |
 | 2026-03-17 | absgrafx org, MIT license                    | Personal project (absgrafx) on the open Morpheus stack; upstream repos under MorpheusAIs; compatible MIT license |
-| 2026-03-19 | Embedded SDK replaces HTTP proxy client      | `proxy-router/mobile/` created, RedPill imports it directly. No external process, no REST API, no network hop  |
+| 2026-03-19 | Embedded SDK replaces HTTP proxy client      | `proxy-router/mobile/` created, Node Neo imports it directly. No external process, no REST API, no network hop  |
 | 2026-03-19 | BadgerDB skipped for mobile                  | BadgerDB is provider-only (sessions, auth, capacity). SDK uses in-memory storage. SQLite at app layer for chat |
 | 2026-03-19 | c-shared over gomobile for FFI               | `//export` C functions via dart:ffi gives more control than gomobile bind. Works across .dylib/.xcframework/.so |
 | 2026-03-19 | Active models via HTTP, not blockchain       | Marketplace API's `active_models.json` is pre-built, cached, fast. Blockchain Multicall as fallback only. Pattern from `DirectModelService` |

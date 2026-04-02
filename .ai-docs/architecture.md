@@ -1,4 +1,4 @@
-# RedPill — Architecture
+# Node Neo — Architecture
 
 > A mobile-first, privacy-maximizing client for the **Morpheus** decentralized AI network (published by **absgrafx**).
 > "The Signal of decentralized AI inference."
@@ -11,13 +11,13 @@
 
 Replace the bloated Electron desktop app and the Swagger-driven developer experience with a **clean, consumer-grade app** that provides a beautiful UI for the Morpheus network — running on phones, tablets, and desktops from a single codebase.
 
-A user installs RedPill, creates (or imports) a wallet, stakes MOR, picks a model, and chats. That's it. No IPFS. No Docker. No Swagger.
+A user installs Node Neo, creates (or imports) a wallet, stakes MOR, picks a model, and chats. That's it. No IPFS. No Docker. No Swagger.
 
 ---
 
 ## Integration Strategy (current)
 
-RedPill embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-router/mobile/`) as a Go module (`replace` to a local fork). There is **no separate proxy-router process** and **no HTTP hop** for consumer operations.
+Node Neo embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-router/mobile/`) as a Go module (`replace` to a local fork). There is **no separate proxy-router process** and **no HTTP hop** for consumer operations.
 
 ### What the embedded SDK covers
 - **Wallet** — create / import mnemonic or private key, address, balances (same crypto stack as upstream: `go-ethereum`, `go-bip39`, etc.)
@@ -27,11 +27,11 @@ RedPill embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-rou
 - **Chat** — `SendPrompt` → internal `SendPromptV2` / MOR-RPC to the provider (streaming aggregated in Go before returning over FFI)
 
 ### Flutter ↔ Go
-- **dart:ffi** to a **c-shared** library (`libredpill.dylib` / future `.xcframework` / `.so`)
-- JSON in/out on the boundary; SQLite for **local** conversations/messages lives in RedPill’s `internal/store` and is driven from `go/mobile/api.go`
+- **dart:ffi** to a **c-shared** library (`libnodeneo.dylib` / future `.xcframework` / `.so`)
+- JSON in/out on the boundary; SQLite for **local** conversations/messages lives in Node Neo’s `internal/store` and is driven from `go/mobile/api.go`
 
 ### Reference: standalone proxy-router HTTP API
-A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/chat/completions`, `/blockchain/sessions/...`). That surface is useful for **documentation and parity** with [Morpheus-Marketplace-API](https://github.com/MorpheusAIs/Morpheus-Marketplace-API); RedPill does **not** require it at runtime.
+A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/chat/completions`, `/blockchain/sessions/...`). That surface is useful for **documentation and parity** with [Morpheus-Marketplace-API](https://github.com/MorpheusAIs/Morpheus-Marketplace-API); Node Neo does **not** require it at runtime.
 
 ---
 
@@ -65,7 +65,7 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │              dart:ffi → c-shared lib (JSON strings)       │
 │                         │                                 │
 ├─────────────────────────────────────────────────────────┤
-│           RedPill Go mobile API (`go/mobile/api.go`)      │
+│           Node Neo Go mobile API (`go/mobile/api.go`)      │
 │                                                           │
 │  • Init / Shutdown, wallet FFI wrappers                  │
 │  • SQLite: CreateConversation, SaveMessage (on SendPrompt)│
@@ -96,7 +96,7 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 
 ## Parity: proxy-router HTTP API (reference)
 
-When running the **full** proxy-router binary, these routes mirror what the embedded SDK does internally (useful for Marketplace-API / ops tooling; **not** RedPill’s runtime path):
+When running the **full** proxy-router binary, these routes mirror what the embedded SDK does internally (useful for Marketplace-API / ops tooling; **not** Node Neo’s runtime path):
 
 | Endpoint | Method | Role |
 |----------|--------|------|
@@ -172,7 +172,7 @@ CREATE TABLE preferences (
 
 ### Network Privacy
 - No analytics, no telemetry, no crash reporting
-- Traffic is direct: **device → Base RPC + active models HTTP + provider (MOR-RPC)** via the embedded SDK (no separate C-node process in RedPill)
+- Traffic is direct: **device → Base RPC + active models HTTP + provider (MOR-RPC)** via the embedded SDK (no separate C-node process in Node Neo)
 - TEE flows use the same attestation paths as upstream proxy-router where applicable
 - No Marketplace-API or central relay in the hot path for chat
 
@@ -218,7 +218,7 @@ CREATE TABLE preferences (
 
 ## What We Align With (Marketplace / Gateway patterns)
 
-| Gateway / app pattern | RedPill equivalent |
+| Gateway / app pattern | Node Neo equivalent |
 |----------------------|---------------------|
 | Curated active models | SDK `active_models.json` cache + home filters |
 | Session open / close / list | SDK + `OnChainSessionsScreen` |

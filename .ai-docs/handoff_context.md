@@ -1,15 +1,15 @@
-# RedPill — Chat Handoff Context
+# Node Neo — Handoff Context
 
 > Snapshot of project state as of **2026-03-20** (evening).
 > Use this to bootstrap a new AI chat session in a fresh workspace.
 
-**Repos:** Push targets are **`absgrafx/redpill`** and **`absgrafx/Morpheus-Lumerin-Node`** (fork). There is **no plan to merge the fork into MorpheusAIs upstream**; treat the fork as the long-lived SDK + mobile embedding branch (`feat-external_embedding`).
+**Repos:** Push targets are **`absgrafx/nodeneo`** and **`absgrafx/Morpheus-Lumerin-Node`** (fork). There is **no plan to merge the fork into MorpheusAIs upstream**; treat the fork as the long-lived SDK + mobile embedding branch (`feat-external_embedding`).
 
 ---
 
-## What Is RedPill
+## What Is Node Neo
 
-A mobile-first client for the **Morpheus** decentralized AI network. Think "Signal for decentralized AI inference." **Published by [absgrafx](https://github.com/absgrafx)** (`com.absgrafx.redpill`); upstream protocol/repos: [MorpheusAIs](https://github.com/MorpheusAIs) on GitHub.
+A mobile-first client for the **Morpheus** decentralized AI network. Think "Signal for decentralized AI inference." **Published by [absgrafx](https://github.com/absgrafx)** (`com.absgrafx.nodeneo`); upstream protocol/repos: [MorpheusAIs](https://github.com/MorpheusAIs) on GitHub.
 
 - **Flutter** UI (iOS, Android, macOS) in `lib/`
 - **Go** backend — embeds the proxy-router SDK directly, no external process needed
@@ -23,10 +23,10 @@ A mobile-first client for the **Morpheus** decentralized AI network. Think "Sign
 
 | Repo | Purpose | Branch |
 |------|---------|--------|
-| `absgrafx/RedPill` | This app — Flutter UI + Go backend | `main` |
+| `absgrafx/Node Neo` | This app — Flutter UI + Go backend | `main` |
 | `absgrafx/Morpheus-Lumerin-Node` | Fork of proxy-router — contains `proxy-router/mobile/` SDK | `feat-external_embedding` |
 
-These two repos should be in the same workspace. The RedPill go module uses a `replace` directive pointing to the local fork.
+These two repos should be in the same workspace. The Node Neo go module uses a `replace` directive pointing to the local fork.
 
 **Git SSH host:** `github.com-vader` (vader@rogueone.life / @morpheusrogue)
 **gh CLI:** `gh auth switch -u morpheusrogue` for this project
@@ -46,7 +46,7 @@ Flutter UI → dart:ffi → Go c-shared (.dylib) → proxy-router mobile SDK →
                                                                         → active models HTTP endpoint (cached)
 ```
 
-The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mobile` directly, which wraps the proxy-router's internal packages (wallet, blockchain service, proxy sender, registries) behind a clean public API. Model listings are fetched from the production active models endpoint (`https://active.mor.org/active_models.json`) — mainnet-only, does not mix testnet models — with 5-minute cache + hash-based invalidation, falling back to blockchain Multicall if the endpoint is unavailable.
+The HTTP intermediary has been eliminated. Node Neo now imports `proxy-router/mobile` directly, which wraps the proxy-router's internal packages (wallet, blockchain service, proxy sender, registries) behind a clean public API. Model listings are fetched from the production active models endpoint (`https://active.mor.org/active_models.json`) — mainnet-only, does not mix testnet models — with 5-minute cache + hash-based invalidation, falling back to blockchain Multicall if the endpoint is unavailable.
 
 ---
 
@@ -54,7 +54,7 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
 
 ### Proxy-Router Mobile SDK (`Morpheus-Lumerin-Node/proxy-router/mobile/`)
 
-**Three files, compiles clean, importable from RedPill:**
+**Three files, compiles clean, importable from Node Neo:**
 
 - `sdk.go` — Main SDK struct with full API:
   - **Lifecycle:** `NewSDK(Config)`, `Shutdown()`
@@ -85,7 +85,7 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
 5. BlockchainService → wire proxy sender's session service
 6. Chat storage (file-based) + HTTP client for active models
 
-### RedPill Go Mobile API (`redpill/go/mobile/api.go`)
+### Node Neo Go Mobile API (`nodeneo/go/mobile/api.go`)
 
 **Rewired to use the SDK directly.** All JSON-returning functions for Flutter FFI:
 
@@ -106,7 +106,7 @@ The HTTP intermediary has been eliminated. RedPill now imports `proxy-router/mob
 - `ReusableSessionForModel(modelID)` — returns active non-expired on-chain `session_id` for that model (chat reuse)
 - `ClaimEmptyDraftForModel`, `SetConversationSession`, `DeleteConversation` — see `store.go` (shared-session delete only closes chain when last local thread)
 
-### RedPill Go Internal Packages (legacy, still present)
+### Node Neo Go Internal Packages (legacy, still present)
 
 These were the original implementations before the SDK integration. They still exist but `api.go` no longer imports them:
 - `internal/core/core.go` — Engine with native wallet (replaced by SDK wallet)
@@ -117,7 +117,7 @@ These were the original implementations before the SDK integration. They still e
 ### dart:ffi Bridge (WORKING)
 
 - `go/cmd/cshared/main.go` — C-exported wrappers (`//export` directives) for the mobile API surface (incl. `SendPrompt`, `stream`, `EstimateOpenSessionStake`, `ReusableSessionForModel`)
-- Built as `build/go/libredpill.dylib` (50MB, c-shared, `-ldflags="-s -w"`)
+- Built as `build/go/libnodeneo.dylib` (50MB, c-shared, `-ldflags="-s -w"`)
 - `lib/services/bridge.dart` — Dart FFI bindings, singleton `GoBridge` class, handles `Pointer<Utf8>` marshalling + `FreeString` cleanup
 - Xcode build phase (`Copy Go Library`) auto-copies dylib into app bundle `Frameworks/`
 - `@rpath` resolution for macOS, `DynamicLibrary.process()` for iOS, `.so` for Android
@@ -125,7 +125,7 @@ These were the original implementations before the SDK integration. They still e
 ### Flutter Frontend (`lib/`) — WIRED TO REAL SDK
 
 - `main.dart` → `app.dart` → initializes SDK on startup (Base mainnet config), routes to loading/error/onboarding/home
-- `theme.dart` — dark theme with green accent (RedPillTheme)
+- `theme.dart` — dark theme with green accent (Node NeoTheme)
 - `screens/onboarding/onboarding_screen.dart` — **wired to real Go SDK**: `createWallet()` generates real BIP-39 mnemonic, shows backup screen with numbered words, `importWalletMnemonic()` for recovery
 - `screens/home/home_screen.dart` — **wired to real SDK**: live wallet + balances, active models, MAX Privacy (TEE-only); **Continue chatting** shows **~N min left** when `session_ends_at` from chain; **45s timer** refreshes conversations (reconcile closed/expired sessions). `GetConversations` runs chain snapshot: unclosed **and not past `ends_at`** clears stale `session_id`.
 - `screens/chat/chat_screen.dart` — Session length presets (min **10 min**), **stake panel** (estimated MOR moved vs wallet via `EstimateOpenSessionStake`), **structured session errors** (`session_open_errors.dart`: red “why”, expandable technical JSON). **Reuses** `ReusableSessionForModel` before `OpenSession` for new/empty threads (multiple conversations, one on-chain session per model).
@@ -168,14 +168,14 @@ These were the original implementations before the SDK integration. They still e
 
 Prioritized list to capture before wider alpha:
 
-1. **Dev setup & alpha distribution** — Step-by-step for **Mac + iPhone** (signing, TestFlight or ad-hoc, rebuilding `libredpill`, env). See also `.ai-docs/ios_device_signing.md` if present.
-2. **Visual branding pass** — Standardize **colors/icons** to Morpheus artwork or a single consistent kit (today: `RedPillTheme` green, ad hoc).
+1. **Dev setup & alpha distribution** — Step-by-step for **Mac + iPhone** (signing, TestFlight or ad-hoc, rebuilding `libnodeneo`, env). See also `.ai-docs/ios_device_signing.md` if present.
+2. **Visual branding pass** — Standardize **colors/icons** to Morpheus artwork or a single consistent kit (today: `Node NeoTheme` green, ad hoc).
 3. **Settings / layout cleanup** — Remove dev notes, tighten boxes, consistent section spacing.
-4. **Product naming** — Replace working name **RedPill** in headers/onboarding with a **formal app name** when decided.
+4. **Product naming** — Replace working name **Node Neo** in headers/onboarding with a **formal app name** when decided.
 5. **Password manager autofill** — Audit `TextField` / `AutofillHints` / `AutofillGroup` (import seed, app lock, wallet flows) so **1Password / Bitwarden / iCloud Keychain** reliably offer fill (platform quirks documented).
 6. **Lock + splash / onboarding polish** — Marketing-friendly first run; **quick links** (e.g. Coinbase, Base bridge, “get MOR”) for normie path.
 7. **Technical / power-user** — **Token usage** dashboard (input/output/total per model or session; stake vs direct pay); **response metadata drawer** (provider headers JSON); **tunable params** (temperature, etc.) where API allows.
-8. **Parity pass** — RedPill + embedded SDK vs **API Gateway** single-user/single-device flows; gap list doc.
+8. **Parity pass** — Node Neo + embedded SDK vs **API Gateway** single-user/single-device flows; gap list doc.
 9. **Token symbols & labels** — **Shipped:** `lib/constants/network_tokens.dart` + home wallet chips + wallet send screen.
 10. **History / drawer list layout** — **Shipped:** wider drawer + `flutter_slidable` actions + pencil rename (overflow menu removed).
 11. **Markdown in chat** — **Shipped:** `flutter_markdown` via `lib/widgets/chat_message_body.dart` (chat + read-only transcript).
@@ -187,9 +187,9 @@ Prioritized list to capture before wider alpha:
 - **Legacy Go cleanup** — `internal/core/`, `internal/orchestrator/` unused HTTP path.
 - TEE **per-message** attestation UI (optional).
 - **Backlog B.1** — Chunk-level **Flutter** streaming via `SendPromptStream` (optional polish: throttle, cancel).
-- **Backlog B.2** — **Chat footer activity strip** — labels for session setup, **Session secured** / **Attestation passed** (TEE), **Sending prompt**, **Waiting for response**, plus an **active** indicator so background work feels alive (see `redpill_plan.md`).
+- **Backlog B.2** — **Chat footer activity strip** — labels for session setup, **Session secured** / **Attestation passed** (TEE), **Sending prompt**, **Waiting for response**, plus an **active** indicator so background work feels alive (see `plan.md`).
 
-See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.
+See `.ai-docs/plan.md` for phase table + overlap with this backlog.
 
 ---
 
@@ -206,7 +206,7 @@ See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.
 ## Key Design Decisions
 
 1. **MAX Privacy mode** — Toggle in UI that filters to TEE-only providers.
-2. **Embedded SDK, no HTTP** — RedPill imports `proxy-router/mobile` directly. No separate process, no REST API, no network hop. True embedded Go integration.
+2. **Embedded SDK, no HTTP** — Node Neo imports `proxy-router/mobile` directly. No separate process, no REST API, no network hop. True embedded Go integration.
 3. **BadgerDB is provider-only** — SDK uses in-memory storage for session tracking. Local persistence is SQLite (conversations, preferences) at the app layer.
 4. **absgrafx org** — Personal project under MIT license, built on the open Morpheus stack (upstream: MorpheusAIs GitHub org).
 5. **Consumer-only** — No provider code, no IPFS, no Docker, no local LLM hosting.
@@ -219,17 +219,17 @@ See `.ai-docs/redpill_plan.md` for phase table + overlap with this backlog.
 ## File Tree (key files)
 
 ```
-RedPill/
+Node Neo/
 ├── .ai-docs/
-│   ├── redpill_architecture.md
-│   ├── redpill_plan.md
+│   ├── architecture.md
+│   ├── plan.md
 │   ├── testing_notes.md           # Persistence, export/send, Keychain nuke
 │   └── handoff_context.md         # THIS FILE
 ├── build/
 │   └── go/
-│       └── libredpill.dylib       # c-shared library (built, not committed)
+│       └── libnodeneo.dylib       # c-shared library (built, not committed)
 ├── go/
-│   ├── go.mod                     # github.com/absgrafx/redpill, go 1.26
+│   ├── go.mod                     # github.com/absgrafx/nodeneo, go 1.26
 │   ├── go.sum                     #   replace → ../../Morpheus-Lumerin-Node/proxy-router
 │   ├── cmd/
 │   │   └── cshared/

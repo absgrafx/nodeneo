@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absgrafx/redpill/internal/core"
-	"github.com/absgrafx/redpill/internal/store"
+	"github.com/absgrafx/nodeneo/internal/core"
+	"github.com/absgrafx/nodeneo/internal/store"
 )
 
 const modelCacheTTL = 60 * time.Second

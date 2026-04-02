@@ -1,10 +1,10 @@
-# RedPill — App security (hot wallet)
+# Node Neo — App security (hot wallet)
 
 ## Goals
 
 1. **App lock** — Password separate from the BIP-39 seed; required after cold start and when returning from background (paused).
 2. **Biometrics** — Optional Face ID / Touch ID / fingerprint to unlock (platform-dependent).
-3. **Password managers** — Same **[AutofillGroup](https://api.flutter.dev/flutter/widgets/AutofillGroup-class.html)** with a **fixed synthetic username** (**`AutofillHints.username`**, value `RedPill` — not the wallet) **plus** **`AutofillHints.password`** / **`AutofillHints.newPassword`**. Many systems (especially **macOS / iOS**) only offer save/fill when they see a **username + password** pair; native apps often use a **hidden or read-only** synthetic username for app-only passwords. RedPill shows it as a small read-only **“Password manager ID”** row so vault entries stay stable when the wallet changes.
+3. **Password managers** — Same **[AutofillGroup](https://api.flutter.dev/flutter/widgets/AutofillGroup-class.html)** with a **fixed synthetic username** (**`AutofillHints.username`**, value `Node Neo` — not the wallet) **plus** **`AutofillHints.password`** / **`AutofillHints.newPassword`**. Many systems (especially **macOS / iOS**) only offer save/fill when they see a **username + password** pair; native apps often use a **hidden or read-only** synthetic username for app-only passwords. Node Neo shows it as a small read-only **“Password manager ID”** row so vault entries stay stable when the wallet changes.
 
 ## What is implemented (MVP)
 
