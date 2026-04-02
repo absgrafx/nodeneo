@@ -1,8 +1,6 @@
 #!/bin/bash
-# SQLite database + local files (conversations, RPC overrides, vault fallback files)
-rm -rf ~/Library/Application\ Support/com.absgrafx.redpill/redpill/
+# SQLite database + local files (conversations, RPC overrides, chat storage, logs)
+rm -rf ~/Library/Application\ Support/com.absgrafx.nodeneo/nodeneo/
 
-# Keychain items (wallet mnemonic, app lock PIN)
-# Either delete manually in Keychain Access (search "com.absgrafx.redpill")
-# or run:
-security delete-generic-password -s "com.absgrafx.redpill" 2>/dev/null; true
+# Keychain items (search "com.absgrafx.nodeneo" in Keychain Access)
+security delete-generic-password -s "com.absgrafx.nodeneo" 2>/dev/null; true

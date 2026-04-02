@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -50,10 +54,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _confirmBackupAndFinish() async {
     final m = _createdMnemonic;
     if (m != null) {
-      await WalletVault.instance.saveMnemonic(m);
+      try {
+        await WalletVault.instance.saveMnemonic(m);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Wallet save error: $e'), duration: const Duration(seconds: 6)),
+          );
+        }
+        return;
+      }
+      _activateDbEncryption(m);
     }
     if (!mounted) return;
     widget.onComplete();
+  }
+
+  void _activateDbEncryption(String mnemonic) {
+    try {
+      final keyBytes = sha256.convert(utf8.encode(mnemonic.trim())).bytes;
+      final keyHex = keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      GoBridge().setEncryptionKey(keyHex);
+    } catch (e) {
+      debugPrint('[Onboarding] setEncryptionKey failed (non-fatal): $e');
+    }
   }
 
   Future<void> _importWallet() async {
@@ -68,6 +92,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       final bridge = GoBridge();
       bridge.importWalletMnemonic(mnemonic);
       await WalletVault.instance.saveMnemonic(mnemonic);
+      _activateDbEncryption(mnemonic);
       if (!mounted) return;
       widget.onComplete();
     } on GoBridgeException catch (e) {
@@ -105,17 +130,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 children: [
                   const SizedBox(height: 48),
 
-                  const MorpheusLogo(size: 96, variant: MorpheusLogoVariant.green),
-                  const SizedBox(height: 16),
+                  const NeoLogo(size: 192),
+                  const SizedBox(height: 20),
 
-                  Text(
-                    AppBrand.displayName,
-                    style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-                    textAlign: TextAlign.center,
+                  Image.asset(
+                    'assets/branding/nodeneo_text.png',
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Private AI inference on the\nMorpheus network',
+                    AppBrand.tagline,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.hintColor,
                       height: 1.35,
@@ -172,9 +197,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: RedPillTheme.greenDark.withValues(alpha: 0.5),
+                      color: NeoTheme.greenDark.withValues(alpha: 0.5),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: RedPillTheme.green.withValues(alpha: 0.15)),
+                      border: Border.all(color: NeoTheme.green.withValues(alpha: 0.15)),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -182,7 +207,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         Icon(
                           Icons.lock_outline_rounded,
                           size: 20,
-                          color: RedPillTheme.amber.withValues(alpha: 0.95),
+                          color: NeoTheme.amber.withValues(alpha: 0.95),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -190,7 +215,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             'Your private key never leaves this device. '
                             'Secured by platform biometrics.',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: RedPillTheme.green.withValues(alpha: 0.7),
+                              color: NeoTheme.green.withValues(alpha: 0.7),
                             ),
                           ),
                         ),
@@ -236,12 +261,12 @@ class _MnemonicBackupScreen extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const SizedBox(height: 48),
-                  const MorpheusLogo(size: 64, variant: MorpheusLogoVariant.green),
+                  const NeoLogo(size: 144),
                   const SizedBox(height: 12),
                   Icon(
                     Icons.check_circle_outline_rounded,
                     size: 40,
-                    color: RedPillTheme.green.withValues(alpha: 0.9),
+                    color: NeoTheme.green.withValues(alpha: 0.9),
                   ),
                   const SizedBox(height: 12),
                   Text('Wallet Created', style: theme.textTheme.headlineMedium),
@@ -255,9 +280,9 @@ class _MnemonicBackupScreen extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: RedPillTheme.amber.withValues(alpha: 0.08),
+                      color: NeoTheme.amber.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: RedPillTheme.amber.withValues(alpha: 0.3)),
+                      border: Border.all(color: NeoTheme.amber.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -268,7 +293,7 @@ class _MnemonicBackupScreen extends StatelessWidget {
                           child: Text(
                             'Write down these 12 words and store them safely. '
                             'This is the ONLY way to recover your wallet.',
-                            style: TextStyle(color: RedPillTheme.amber.withValues(alpha: 0.9), fontSize: 13),
+                            style: TextStyle(color: NeoTheme.amber.withValues(alpha: 0.9), fontSize: 13),
                           ),
                         ),
                       ],
@@ -280,7 +305,7 @@ class _MnemonicBackupScreen extends StatelessWidget {
                     width: double.infinity,
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: RedPillTheme.surface,
+                      color: NeoTheme.surface,
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: const Color(0xFF374151)),
                     ),

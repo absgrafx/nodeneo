@@ -139,7 +139,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Security')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: RedPillTheme.green))
+          ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [
@@ -154,7 +154,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                 if (!_lockOn)
                   FilledButton.icon(
                     onPressed: _openEnableLock,
-                    style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                    style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                     icon: const Icon(Icons.lock_outline, size: 22),
                     label: const Text('Turn on app lock'),
                   )
@@ -175,7 +175,7 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                     ),
                     value: _bioOn,
                     onChanged: (!_bioAvailable && !_bioOn) ? null : (v) => _setBiometric(v),
-                    activeThumbColor: RedPillTheme.green,
+                    activeThumbColor: NeoTheme.green,
                   ),
                   const SizedBox(height: 16),
                   TextButton(
