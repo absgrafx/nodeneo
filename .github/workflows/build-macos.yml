@@ -238,7 +238,7 @@ jobs:
           DMG_PATH="build/${DMG_NAME}"
 
           create-dmg \
-            --volname "$APP_NAME" \
+            --volname "$APP_NAME v${APP_VERSION}" \
             --background "assets/branding/dmg-background.png" \
             --window-pos 200 100 \
             --window-size 720 420 \
