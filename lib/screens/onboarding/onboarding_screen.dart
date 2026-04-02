@@ -133,10 +133,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   const NeoLogo(size: 192),
                   const SizedBox(height: 20),
 
-                  Text(
-                    AppBrand.displayName,
-                    style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
-                    textAlign: TextAlign.center,
+                  Image.asset(
+                    'assets/branding/nodeneo_text.png',
+                    width: double.infinity,
+                    fit: BoxFit.fitWidth,
                   ),
                   const SizedBox(height: 8),
                   Text(

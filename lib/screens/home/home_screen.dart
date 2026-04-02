@@ -514,10 +514,25 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       appBar: AppBar(
         automaticallyImplyLeading: true,
         toolbarHeight: 72,
-        title: Image.asset(
-          'assets/branding/wordmark_v2.png',
-          height: 40,
-          fit: BoxFit.contain,
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(
+              'assets/branding/wordmark_v2.png',
+              height: 36,
+              fit: BoxFit.contain,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              AppBrand.tagline,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 1.0,
+                color: NeoTheme.emerald.withValues(alpha: 0.55),
+              ),
+            ),
+          ],
         ),
         actions: [
           PopupMenuButton<String>(
@@ -1325,7 +1340,7 @@ class _FundWalletOverlay extends StatelessWidget {
                   _FundRequirement(
                     label: 'ETH',
                     amount: '≥ 0.001',
-                    color: NeoTheme.amber,
+                    color: NeoTheme.ethBlue,
                   ),
                 ],
               ),
@@ -1548,7 +1563,7 @@ class _WalletCard extends StatelessWidget {
                     expand: true,
                     symbol: NetworkTokens.ethSymbol,
                     value: ethBalance,
-                    color: NeoTheme.amber,
+                    color: NeoTheme.ethBlue,
                     helperText: AppBrand.ethBalanceHelper,
                     onTap: onSendEth,
                     token: TokenWithBaseInlay(
