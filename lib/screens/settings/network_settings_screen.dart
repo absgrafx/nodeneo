@@ -83,12 +83,13 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   }
 
   /// Validate reachability + Base chain ID without saving.
-  /// When the field is empty, tests the built-in defaults.
-  /// Tests ALL URLs and shows per-URL results.
+  /// When the field is empty, tests the built-in defaults (only public RPCs
+  /// are shown in results — any bundled dedicated endpoint is tested but its
+  /// URL is masked).
   Future<void> _testOnly() async {
     final raw = _ctrl.text.trim();
-    final urlsToTest = raw.isEmpty ? defaultBaseMainnetRpcUrls : raw;
     final isDefaults = raw.isEmpty;
+    final urlsToTest = isDefaults ? publicFallbackRpcUrls : raw;
 
     if (!isDefaults) {
       final err = RpcSettingsStore.validateUserInput(raw);
@@ -107,6 +108,21 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
         expectedChainId: defaultBaseChainId,
       );
       if (!mounted) return;
+
+      // If a bundled dedicated RPC exists and we're testing defaults, probe it
+      // separately and add a masked result entry.
+      if (isDefaults && hasBuildTimeRpc) {
+        final dedicatedOk = await RpcEndpointValidator.anyReachable(
+          defaultBaseMainnetRpcUrls,
+          expectedChainId: defaultBaseChainId,
+        );
+        results.insert(0, {
+          'url': '(bundled dedicated RPC)',
+          'ok': dedicatedOk,
+          'error': dedicatedOk ? null : 'unreachable or wrong chain',
+        });
+      }
+
       final okCount = results.where((r) => r['ok'] == true).length;
       setState(() => _testResults = results);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -178,7 +194,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Built-in default (first URL): ${defaultBaseMainnetRpcUrls.split(',').first}',
+                  hasBuildTimeRpc
+                      ? 'Using a bundled dedicated RPC (not shown for security).'
+                      : 'Built-in default (first URL): ${defaultBaseMainnetRpcUrls.split(',').first}',
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
                 ),
                 const SizedBox(height: 24),

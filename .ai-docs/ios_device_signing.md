@@ -1,4 +1,4 @@
-# RedPill — Run on a physical iPhone (Apple Developer)
+# Node Neo — Run on a physical iPhone (Apple Developer)
 
 Stepwise checklist. You already have a **paid Apple Developer Program** account.
 
@@ -9,7 +9,7 @@ Stepwise checklist. You already have a **paid Apple Developer Program** account.
 **Open the Flutter iOS workspace (required for CocoaPods):**
 
 ```bash
-cd redpill
+cd nodeneo
 open ios/Runner.xcworkspace
 ```
 
@@ -35,7 +35,7 @@ You do **not** need two IDEs for daily runs.
 2. **Every build:** In Cursor's terminal from repo root:
 
    ```bash
-   cd redpill
+   cd nodeneo
    flutter run -d Phlame    # or: flutter run -d 00008140-000E10601E29801C
    ```
 
@@ -57,7 +57,7 @@ You do **not** need two IDEs for daily runs.
 - **Do commit** `ios/Podfile`, **`ios/Podfile.lock`**, and Xcode project changes you intend to keep.
 - Opening Xcode does not create mystery noise if you only touch signing; avoid editing **generated** Flutter files under `ios/Flutter/` unless you know why.
 
-**Note:** The **simulator** is enough to preview **UI** quickly. A **real device** still needs **signing** (§2–4) and, for this app, an **iOS build of the Go `libredpill` native library** before FFI works (§7).
+**Note:** The **simulator** is enough to preview **UI** quickly. A **real device** still needs **signing** (§2–4) and, for this app, an **iOS build of the Go `libnodeneo` native library** before FFI works (§7).
 
 ---
 
@@ -74,7 +74,7 @@ You do **not** need two IDEs for daily runs.
 1. In the repo, open **`ios/Runner.xcworkspace`** (not `.xcodeproj` alone).
 2. Select **Runner** target → **Signing & Capabilities**.
 3. Set **Team** to your developer team.
-4. Change **Bundle Identifier** if needed (repo default: `com.absgrafx.redpill`, reverse-DNS for **absgrafx.com**). It must be unique in the Apple Developer portal.
+4. Change **Bundle Identifier** if needed (repo default: `com.absgrafx.nodeneo`, reverse-DNS for **absgrafx.com**). It must be unique in the Apple Developer portal.
 
 Enable **Automatically manage signing** so Xcode creates a **development** provisioning profile for your device.
 
@@ -100,7 +100,7 @@ Enable **Automatically manage signing** so Xcode creates a **development** provi
 ## 5. Build from Flutter CLI
 
 ```bash
-cd redpill
+cd nodeneo
 flutter devices                    # confirm the phone appears
 flutter run -d <device_id>         # or pick from list
 ```
@@ -128,16 +128,16 @@ Then open **`ios/Runner.xcworkspace`**, select **Any iOS Device (arm64)** or you
 
 | Platform | Build mode | Output | Loaded by |
 |----------|-----------|--------|-----------|
-| **macOS** | `c-shared` | `libredpill.dylib` (Frameworks/) | `DynamicLibrary.open()` |
-| **iOS** | `c-archive` | `libredpill.a` (static lib) | `DynamicLibrary.process()` — symbols linked into Runner binary |
+| **macOS** | `c-shared` | `libnodeneo.dylib` (Frameworks/) | `DynamicLibrary.open()` |
+| **iOS** | `c-archive` | `libnodeneo.a` (static lib) | `DynamicLibrary.process()` — symbols linked into Runner binary |
 
 iOS does **not** load `.dylib`; instead Go is compiled as a **static archive** (`-buildmode=c-archive`, `GOOS=ios GOARCH=arm64`) and the Xcode linker pulls it into the **Runner** executable.
 
 ### Build the iOS Go library
 
 ```bash
-cd redpill
-make go-ios          # → build/go/ios/libredpill.a  (~65 MB, arm64)
+cd nodeneo
+make go-ios          # → build/go/ios/libnodeneo.a  (~65 MB, arm64)
 ```
 
 Requires **Go 1.26+** (via `/opt/homebrew/bin/go`) and the **iphoneos** SDK (Xcode).
@@ -147,9 +147,9 @@ Requires **Go 1.26+** (via `/opt/homebrew/bin/go`) and the **iphoneos** SDK (Xco
 The Runner target's **`project.pbxproj`** (Debug / Release / Profile) has:
 
 - `LIBRARY_SEARCH_PATHS` → `$(SRCROOT)/../build/go/ios`
-- `OTHER_LDFLAGS` → `-lredpill -lresolv -framework Security -framework CoreFoundation`
+- `OTHER_LDFLAGS` → `-lnodeneo -lresolv -framework Security -framework CoreFoundation`
 
-No build phase script is needed; the linker finds `libredpill.a` in the search path by convention (`-lredpill` → `libredpill.a`).
+No build phase script is needed; the linker finds `libnodeneo.a` in the search path by convention (`-lnodeneo` → `libnodeneo.a`).
 
 ### Full device deploy (Cursor terminal)
 
@@ -160,7 +160,7 @@ flutter run -d Phlame          # or: flutter run -d <device_id>
 
 Or all-in-one: **`make run-ios`** (builds Go, then `flutter run`).
 
-**Important:** `flutter clean` removes the `build/` dir including `libredpill.a`. After a clean, run **`make go-ios`** before `flutter run`.
+**Important:** `flutter clean` removes the `build/` dir including `libnodeneo.a`. After a clean, run **`make go-ios`** before `flutter run`.
 
 ---
 
@@ -180,4 +180,4 @@ Or all-in-one: **`make run-ios`** (builds Go, then `flutter run`).
 | "Failed to register bundle identifier" | Bundle ID already taken — change it or use the portal app id. |
 | Device grayed out | Cable, **Trust**, **Developer Mode**, or iOS version too old for your Xcode. |
 | App installs but crashes on launch (FFI) | Run **`make go-ios`** first, then `flutter run` (see §7). |
-| `Library 'redpill' not found` (linker error) | `flutter clean` wiped `build/`. Run **`make go-ios`** and build again. |
+| `Library 'nodeneo' not found` (linker error) | `flutter clean` wiped `build/`. Run **`make go-ios`** and build again. |
