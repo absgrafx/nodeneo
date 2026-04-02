@@ -10,9 +10,5 @@
 	<true/>
 	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>$(AppIdentifierPrefix)com.absgrafx.nodeneo</string>
-	</array>
 </dict>
 </plist>

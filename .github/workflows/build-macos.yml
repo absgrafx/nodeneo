@@ -194,16 +194,6 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm certificate.p12
 
-      - name: Expand entitlements variables for CI signing
-        if: github.ref == 'refs/heads/main'
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          sed -i '' "s/\$(AppIdentifierPrefix)/${APPLE_TEAM_ID}./g" \
-            macos/Runner/Release.entitlements
-          echo "Expanded Release.entitlements:"
-          cat macos/Runner/Release.entitlements
-
       - name: Codesign app bundle
         if: github.ref == 'refs/heads/main'
         env:
