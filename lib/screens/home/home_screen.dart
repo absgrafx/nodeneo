@@ -4,6 +4,7 @@ import 'dart:math' show min;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../app_route_observer.dart';
 import '../../constants/app_brand.dart';
@@ -495,6 +496,89 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  Future<void> _showAboutSheet(BuildContext context) async {
+    final theme = Theme.of(context);
+    final info = await PackageInfo.fromPlatform();
+
+    Map<String, dynamic>? prInfo;
+    try {
+      prInfo = GoBridge().getProxyRouterVersion();
+    } catch (_) {}
+
+    final appVer = info.version;
+    final buildNum = info.buildNumber;
+
+    final prVersion = prInfo?['version'] as String? ?? 'unknown';
+    final isFork = prInfo?['is_fork'] as bool? ?? false;
+    final upstreamTag = prInfo?['upstream_tag'] as String? ?? prVersion;
+    final forkCommits = prInfo?['fork_commits'] as int? ?? 0;
+
+    if (!mounted) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: theme.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset(
+                  'assets/branding/splash_logo.png',
+                  width: 56,
+                  height: 56,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  AppBrand.displayName,
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  AppBrand.tagline,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.hintColor,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                _AboutRow(
+                  label: 'App version',
+                  value: 'v$appVer ($buildNum)',
+                  theme: theme,
+                ),
+                const SizedBox(height: 8),
+                _AboutRow(
+                  label: 'Proxy-router',
+                  value: isFork
+                      ? '$upstreamTag + $forkCommits commits (fork)'
+                      : prVersion,
+                  theme: theme,
+                ),
+                if (prInfo?['commit'] case final String c when c.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _AboutRow(
+                    label: 'SDK commit',
+                    value: c.length > 12 ? c.substring(0, 12) : c,
+                    theme: theme,
+                    mono: true,
+                  ),
+                ],
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -583,6 +667,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   context,
                   onWalletErased: widget.onWalletErased,
                 );
+              } else if (value == 'about') {
+                _showAboutSheet(context);
               }
             },
             itemBuilder: (context) => [
@@ -711,6 +797,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     'Clears saved phrase; on-chain funds unchanged',
                     style: TextStyle(fontSize: 11),
                   ),
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem<String>(
+                value: 'about',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.info_outline, size: 22),
+                  title: Text('About'),
                 ),
               ),
             ],
@@ -2150,6 +2246,47 @@ class _ModelTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _AboutRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final ThemeData theme;
+  final bool mono;
+
+  const _AboutRow({
+    required this.label,
+    required this.value,
+    required this.theme,
+    this.mono = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.hintColor,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: (mono
+                    ? theme.textTheme.bodySmall
+                        ?.copyWith(fontFamily: 'monospace')
+                    : theme.textTheme.bodySmall)
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
     );
   }
 }

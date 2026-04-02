@@ -75,6 +75,11 @@ func AppLog(level, message *C.char) {
 	mobile.AppLog(C.GoString(level), C.GoString(message))
 }
 
+//export GetProxyRouterVersion
+func GetProxyRouterVersion() *C.char {
+	return C.CString(mobile.GetProxyRouterVersion())
+}
+
 // --- Encryption ---
 
 //export SetEncryptionKey

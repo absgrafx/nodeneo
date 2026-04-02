@@ -6,9 +6,19 @@
 go-test:
 	cd go && go test ./...
 
+# Proxy-router version: if PROXY_ROUTER_DIR points at a local clone of the fork
+# (with upstream tags fetched), git describe gives e.g. "v6.0.1-test-12-g00562be9"
+# — base upstream tag + fork commit count + hash. Falls back to the go.mod commit hash.
+PROXY_ROUTER_DIR ?= $(realpath ../Morpheus-Lumerin-Node)
+PR_VERSION ?= $(shell git -C "$(PROXY_ROUTER_DIR)" describe --tags --always --match 'v*' 2>/dev/null || echo "unknown")
+PR_COMMIT  ?= $(shell cd go && grep 'absgrafx/Morpheus-Lumerin-Node/proxy-router' go.mod | grep -oE '[0-9a-f]{12}$$' || echo "unknown")
+GO_LDFLAGS  = -s -w \
+  -X github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/internal/config.BuildVersion=$(PR_VERSION) \
+  -X github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/internal/config.Commit=$(PR_COMMIT)
+
 go-macos:
 	mkdir -p build/go
-	cd go && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags="-s -w" -o ../build/go/libnodeneo.dylib ./cmd/cshared/
+	cd go && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags="$(GO_LDFLAGS)" -o ../build/go/libnodeneo.dylib ./cmd/cshared/
 
 go-ios:
 	@echo "==> Building libnodeneo.a for iOS arm64 (c-archive)..."
@@ -20,7 +30,7 @@ go-ios:
 	  CGO_LDFLAGS="-isysroot $$(xcrun --sdk iphoneos --show-sdk-path) -arch arm64 -miphoneos-version-min=13.0" \
 	  GOROOT="$$(/opt/homebrew/bin/go env GOROOT)" \
 	  PATH="$$(/opt/homebrew/bin/go env GOROOT)/bin:/opt/homebrew/bin:$$PATH" \
-	  go build -buildmode=c-archive -ldflags="-s -w" -o ../build/go/ios/libnodeneo.a ./cmd/cshared/
+	  go build -buildmode=c-archive -ldflags="$(GO_LDFLAGS)" -o ../build/go/ios/libnodeneo.a ./cmd/cshared/
 	@echo "==> iOS static library: build/go/ios/libnodeneo.a"
 
 go-android:
