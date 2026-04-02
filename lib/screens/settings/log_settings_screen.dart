@@ -125,7 +125,8 @@ class _LogSettingsScreenState extends State<LogSettingsScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Controls verbosity of the Go SDK logs written to disk. '
+            'Controls verbosity of the unified application log written to disk. '
+            'All app events (Flutter UI + Go SDK + blockchain operations) go here. '
             'Debug is the most verbose; Error only records critical failures.',
             style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.35),
           ),
@@ -281,7 +282,7 @@ class _LogSettingsScreenState extends State<LogSettingsScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Last 50 lines of nodeneo.log (live toggle — no restart needed).',
+            'Last 50 lines of nodeneo.log — unified app + SDK log (live toggle — no restart needed).',
             style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, fontSize: 11),
           ),
           const SizedBox(height: 10),

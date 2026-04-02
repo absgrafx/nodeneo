@@ -15,7 +15,7 @@ import "C"
 import (
 	"unsafe"
 
-	"github.com/absgrafx/redpill/mobile"
+	"github.com/absgrafx/nodeneo/mobile"
 )
 
 // freeWith is a helper the Dart side must call to free returned strings.
@@ -68,6 +68,11 @@ func SetLogLevel(level *C.char) *C.char {
 //export GetLogLevel
 func GetLogLevel() *C.char {
 	return C.CString(mobile.GetLogLevel())
+}
+
+//export AppLog
+func AppLog(level, message *C.char) {
+	mobile.AppLog(C.GoString(level), C.GoString(message))
 }
 
 // --- Encryption ---

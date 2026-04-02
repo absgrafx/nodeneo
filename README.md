@@ -19,11 +19,11 @@ Node Neo is a clean, consumer-grade app for the Morpheus network: wallet, MOR st
 
 No standalone proxy-router process is required for normal use.
 
-See [.ai-docs/redpill_architecture.md](.ai-docs/redpill_architecture.md) and [.ai-docs/handoff_context.md](.ai-docs/handoff_context.md) for design and current surface area.
+See [.ai-docs/architecture.md](.ai-docs/architecture.md) and [.ai-docs/handoff_context.md](.ai-docs/handoff_context.md) for design and current surface area.
 
 ## Status
 
-Active development on **Base mainnet**. Roadmap and **MVP alpha backlog**: [.ai-docs/redpill_plan.md](.ai-docs/redpill_plan.md).
+Active development on **Base mainnet**. Roadmap and **MVP alpha backlog**: [.ai-docs/plan.md](.ai-docs/plan.md).
 
 ## Quick Start (macOS)
 
