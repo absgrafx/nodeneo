@@ -20,7 +20,7 @@ Future<bool> confirmCloseOnChainSession(BuildContext context) async {
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
-          style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+          style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
           child: const Text('Close'),
         ),
       ],
@@ -36,7 +36,7 @@ Future<void> showCloseSessionTxBottomSheet(BuildContext context, String txHash) 
 
   await showModalBottomSheet<void>(
     context: context,
-    backgroundColor: RedPillTheme.surface,
+    backgroundColor: NeoTheme.surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
@@ -101,7 +101,7 @@ Future<void> showCloseSessionTxBottomSheet(BuildContext context, String txHash) 
                             );
                           }
                         },
-                  style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                  style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                   icon: const Icon(Icons.open_in_new_rounded, size: 20),
                   label: const Text('View on Blockscout'),
                 ),

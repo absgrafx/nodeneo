@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:redpill/utils/token_amount.dart';
+import 'package:nodeneo/utils/token_amount.dart';
 
 void main() {
   group('normalizeHumanAmountInput', () {

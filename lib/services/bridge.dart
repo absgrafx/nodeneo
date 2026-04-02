@@ -5,9 +5,9 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 /// Native signature for [GoBridge.sendPromptWithStream] / `SendPromptStream` chunk callback.
-typedef RedpillStreamDeltaNative = Void Function(Pointer<Utf8> text, Int32 isLast);
+typedef NeoStreamDeltaNative = Void Function(Pointer<Utf8> text, Int32 isLast);
 
-/// FFI bridge to the Go c-shared library (libredpill).
+/// FFI bridge to the Go c-shared library (libnodeneo).
 /// All Go functions return JSON strings; this bridge handles
 /// marshalling and memory management.
 class GoBridge {
@@ -32,19 +32,19 @@ class GoBridge {
       final macosIdx = exe.lastIndexOf('/MacOS/');
       if (macosIdx != -1) {
         final contentsDir = exe.substring(0, macosIdx);
-        final bundlePath = '$contentsDir/Frameworks/libredpill.dylib';
+        final bundlePath = '$contentsDir/Frameworks/libnodeneo.dylib';
         if (File(bundlePath).existsSync()) {
           return DynamicLibrary.open(bundlePath);
         }
       }
       try {
-        return DynamicLibrary.open('@rpath/libredpill.dylib');
+        return DynamicLibrary.open('@rpath/libnodeneo.dylib');
       } catch (_) {}
-      return DynamicLibrary.open('libredpill.dylib');
+      return DynamicLibrary.open('libnodeneo.dylib');
     } else if (Platform.isIOS) {
       return DynamicLibrary.process();
     } else if (Platform.isAndroid) {
-      return DynamicLibrary.open('libredpill.so');
+      return DynamicLibrary.open('libnodeneo.so');
     }
     throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
   }
@@ -66,6 +66,34 @@ class GoBridge {
   late final _isReady = _lib.lookupFunction<
       Int32 Function(),
       int Function()>('IsReady');
+
+  late final _setEncryptionKey = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('SetEncryptionKey');
+
+  late final _getLogDir = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('GetLogDir');
+
+  late final _setLogLevel = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('SetLogLevel');
+
+  late final _getLogLevel = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('GetLogLevel');
+
+  late final _startExpertAPI = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('StartExpertAPI');
+
+  late final _stopExpertAPI = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('StopExpertAPI');
+
+  late final _expertAPIStatus = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ExpertAPIStatus');
 
   late final _createWallet = _lib.lookupFunction<
       Pointer<Utf8> Function(),
@@ -165,14 +193,14 @@ class GoBridge {
         Pointer<Utf8>,
         Pointer<Utf8>,
         Int32,
-        Pointer<NativeFunction<RedpillStreamDeltaNative>>,
+        Pointer<NativeFunction<NeoStreamDeltaNative>>,
       ),
       Pointer<Utf8> Function(
         Pointer<Utf8>,
         Pointer<Utf8>,
         Pointer<Utf8>,
         int,
-        Pointer<NativeFunction<RedpillStreamDeltaNative>>,
+        Pointer<NativeFunction<NeoStreamDeltaNative>>,
       )>('SendPromptStream');
 
   late final _deleteConversation = _lib.lookupFunction<
@@ -270,6 +298,78 @@ class GoBridge {
     final result = _callJSON(_createWallet);
     _throwIfError(result);
     return result;
+  }
+
+  /// Install AES-256-GCM encryption for chat message content.
+  /// [keyHex] must be a 64-char hex string (32 bytes, e.g. SHA-256 of mnemonic).
+  void setEncryptionKey(String keyHex) {
+    final k = keyHex.toNativeUtf8();
+    final ptr = _setEncryptionKey(k);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(k);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns the absolute path to the log directory (dataDir/logs/).
+  String getLogDir() {
+    final ptr = _getLogDir();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return result;
+  }
+
+  /// Changes the Go-side log level. Valid: debug, info, warn, error.
+  void setLogLevel(String level) {
+    final l = level.toNativeUtf8();
+    final ptr = _setLogLevel(l);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(l);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns the current Go-side log level (e.g. "info").
+  String getLogLevel() {
+    final ptr = _getLogLevel();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return result;
+  }
+
+  /// Start the Expert Mode API server (native proxy-router swagger + REST).
+  /// [address] is "host:port", e.g. "127.0.0.1:8082" or "0.0.0.0:8082".
+  /// [publicURL] sets the Swagger host for CORS, e.g. "http://192.168.1.42:8082".
+  Map<String, dynamic> startExpertAPI(String address, String publicURL) {
+    final a = address.toNativeUtf8();
+    final p = publicURL.toNativeUtf8();
+    final ptr = _startExpertAPI(a, p);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(a);
+    calloc.free(p);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Stop the Expert Mode local API server.
+  void stopExpertAPI() {
+    final ptr = _stopExpertAPI();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns {"running": bool, "port": int}.
+  Map<String, dynamic> expertAPIStatus() {
+    final ptr = _expertAPIStatus();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return jsonDecode(result) as Map<String, dynamic>;
   }
 
   Map<String, dynamic> importWalletMnemonic(String mnemonic) {
@@ -598,7 +698,7 @@ class GoBridge {
     final cid = conversationID.toNativeUtf8();
     final p = prompt.toNativeUtf8();
 
-    final callable = NativeCallable<RedpillStreamDeltaNative>.listener(
+    final callable = NativeCallable<NeoStreamDeltaNative>.listener(
       (Pointer<Utf8> text, int isLast) {
         final piece = text.toDartString();
         onDelta(piece, isLast != 0);

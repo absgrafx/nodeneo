@@ -56,6 +56,25 @@ class RpcEndpointValidator {
     return null;
   }
 
+  /// Tests every URL individually and returns per-URL results.
+  /// Each entry: {"url": "...", "ok": true/false, "error": "..." or null}.
+  static Future<List<Map<String, dynamic>>> validateAllUrls(
+    String rawUrls, {
+    int expectedChainId = defaultBaseChainId,
+  }) async {
+    final urls = parseUrlList(rawUrls);
+    final results = <Map<String, dynamic>>[];
+    for (final url in urls) {
+      final err = await _probeOne(url, expectedChainId);
+      results.add({
+        'url': url,
+        'ok': err == null,
+        'error': err,
+      });
+    }
+    return results;
+  }
+
   static String _shortUrl(String url) {
     if (url.length <= 56) return url;
     return '${url.substring(0, 40)}…';

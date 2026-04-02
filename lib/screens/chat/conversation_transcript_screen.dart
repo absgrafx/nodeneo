@@ -106,7 +106,7 @@ class _ConversationTranscriptScreenState extends State<ConversationTranscriptScr
         children: [
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator(color: RedPillTheme.green))
+                ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
                 : _error != null
                     ? Center(
                         child: Padding(
@@ -132,8 +132,8 @@ class _ConversationTranscriptScreenState extends State<ConversationTranscriptScr
                                   constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.88),
                                   decoration: BoxDecoration(
                                     color: isUser
-                                        ? RedPillTheme.green.withValues(alpha: 0.12)
-                                        : RedPillTheme.surface,
+                                        ? NeoTheme.green.withValues(alpha: 0.12)
+                                        : NeoTheme.surface,
                                     borderRadius: BorderRadius.circular(14),
                                     border: Border.all(color: const Color(0xFF374151)),
                                   ),
@@ -200,7 +200,7 @@ class _ConversationTranscriptScreenState extends State<ConversationTranscriptScr
                   const SizedBox(height: 10),
                   FilledButton.icon(
                     onPressed: _loading || widget.modelId.isEmpty ? null : _continueThread,
-                    style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                    style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                     icon: const Icon(Icons.chat_rounded, color: Colors.white, size: 20),
                     label: const Text('Continue chatting'),
                   ),

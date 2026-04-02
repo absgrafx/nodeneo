@@ -12,10 +12,11 @@ require (
 	modernc.org/sqlite v1.29.6
 )
 
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260331205503-db9f1f757e82
+replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260401165602-d39fea0a8307
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
+	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
 	github.com/alecthomas/units v0.0.0-20240927000941-0f3dac36c52b // indirect
@@ -66,6 +67,7 @@ require (
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/gammazero/deque v1.0.0 // indirect
+	github.com/gin-contrib/cors v1.7.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/gin-gonic/gin v1.10.0 // indirect
 	github.com/go-chi/chi v4.1.2+incompatible // indirect
@@ -251,6 +253,9 @@ require (
 	github.com/spf13/viper v1.20.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/supranational/blst v0.3.16 // indirect
+	github.com/swaggo/files v1.0.1 // indirect
+	github.com/swaggo/gin-swagger v1.6.0 // indirect
+	github.com/swaggo/swag v1.16.4 // indirect
 	github.com/theupdateframework/go-tuf v0.7.0 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.1.1 // indirect
 	github.com/tiktoken-go/tokenizer v0.7.0 // indirect
