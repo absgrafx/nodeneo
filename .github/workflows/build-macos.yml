@@ -107,12 +107,33 @@ jobs:
       - name: Install Python dependencies (branding pipeline)
         run: pip3 install --break-system-packages cairosvg
 
+      # ── Resolve embedded proxy-router version ──
+      - name: Determine proxy-router version from fork
+        id: pr_version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_COMMIT=$(grep 'absgrafx/Morpheus-Lumerin-Node/proxy-router' go/go.mod | grep -oE '[0-9a-f]{12}$' || echo "unknown")
+          # Shallow-clone the fork just enough to get tags + describe
+          git clone --filter=blob:none --no-checkout --single-branch \
+            https://github.com/absgrafx/Morpheus-Lumerin-Node.git /tmp/pr-fork 2>/dev/null || true
+          cd /tmp/pr-fork
+          git fetch origin --tags 2>/dev/null || true
+          # Add upstream tags so describe finds the base release
+          git fetch https://github.com/MorpheusAIs/Morpheus-Lumerin-Node.git --tags 2>/dev/null || true
+          PR_VERSION=$(git describe --tags --always --match 'v*' "$PR_COMMIT" 2>/dev/null || echo "$PR_COMMIT")
+          echo "PR_VERSION=$PR_VERSION" >> "$GITHUB_OUTPUT"
+          echo "PR_COMMIT=$PR_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "Embedded proxy-router: $PR_VERSION ($PR_COMMIT)"
+
       # ── Build Go dylib ──
       - name: Build Go shared library
         env:
           GONOSUMCHECK: "github.com/absgrafx/*"
           GONOSUMDB: "github.com/absgrafx/*"
           GOPRIVATE: "github.com/absgrafx/*"
+          PR_VERSION: ${{ steps.pr_version.outputs.PR_VERSION }}
+          PR_COMMIT: ${{ steps.pr_version.outputs.PR_COMMIT }}
         run: make go-macos
 
       # ── Flutter dependencies ──
