@@ -126,19 +126,23 @@ jobs:
           dart run flutter_launcher_icons
           dart run flutter_native_splash:create
 
-      # ── Build release app (inject version) ──
+      # ── Build release app (inject version + optional premium RPC) ──
       - name: Flutter build macOS (release)
+        env:
+          ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
-          flutter build macos --release \
-            --build-name="${APP_VERSION}" \
-            --build-number="${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          if [ -n "$ETH_RPC_URL" ]; then
+            DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
+          fi
+          flutter build macos --release $DART_DEFINES
 
       # ── Inject Go dylib into app bundle ──
       - name: Copy dylib into app bundle
         run: |
           APP_DIR=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
           mkdir -p "$APP_DIR/Contents/Frameworks"
-          cp build/go/libredpill.dylib "$APP_DIR/Contents/Frameworks/"
+          cp build/go/libnodeneo.dylib "$APP_DIR/Contents/Frameworks/"
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
 
       # ── Sign (main only) ──
@@ -166,7 +170,7 @@ jobs:
         run: |
           codesign --deep --force --options runtime \
             --sign "$SIGNING_IDENTITY" \
-            "$APP_DIR/Contents/Frameworks/libredpill.dylib"
+            "$APP_DIR/Contents/Frameworks/libnodeneo.dylib"
           codesign --deep --force --options runtime \
             --entitlements macos/Runner/Release.entitlements \
             --sign "$SIGNING_IDENTITY" \
@@ -179,7 +183,7 @@ jobs:
       - name: Package DMG
         run: |
           APP_NAME=$(basename "$APP_DIR" .app)
-          DMG_NAME="Morpheus-${APP_VERSION}-macOS.dmg"
+          DMG_NAME="Node Neo-${APP_VERSION}-macOS.dmg"
           DMG_PATH="build/${DMG_NAME}"
 
           create-dmg \
@@ -231,18 +235,18 @@ jobs:
           git push origin "$TAG_NAME"
 
           cat <<'NOTES' > /tmp/release-notes.md
-          ## Morpheus Desktop (macOS)
+          ## Node Neo Desktop (macOS)
 
           Signed and notarized — download, mount, drag to Applications.
 
           | Asset | Description |
           |-------|-------------|
-          | `Morpheus-VERSION-macOS.dmg` | macOS desktop client (Apple Silicon / Intel universal) |
+          | `Node Neo-VERSION-macOS.dmg` | macOS desktop client (Apple Silicon / Intel universal) |
 
           NOTES
           sed -i '' "s/VERSION/${APP_VERSION}/g" /tmp/release-notes.md
 
           gh release create "$TAG_NAME" "$DMG_PATH" \
-            --title "Morpheus $TAG_NAME" \
+            --title "Node Neo $TAG_NAME" \
             --notes-file /tmp/release-notes.md \
             --latest

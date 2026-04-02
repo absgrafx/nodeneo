@@ -137,7 +137,7 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+            style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
             child: Text('Close All ($count)'),
           ),
         ],
@@ -202,7 +202,7 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
                     child: SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: RedPillTheme.green),
+                      child: CircularProgressIndicator(strokeWidth: 2, color: NeoTheme.green),
                     ),
                   )
                 : TextButton(
@@ -210,7 +210,7 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
                     child: Text(
                       'Close All (${_sessions.length})',
                       style: TextStyle(
-                        color: _closing.isNotEmpty ? const Color(0xFF6B7280) : RedPillTheme.green,
+                        color: _closing.isNotEmpty ? const Color(0xFF6B7280) : NeoTheme.green,
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                       ),
@@ -223,7 +223,7 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: RedPillTheme.green))
+          ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
           : _error != null
               ? Center(
                   child: Padding(
@@ -285,7 +285,7 @@ class _OnChainSessionsScreenState extends State<OnChainSessionsScreen> {
                                           const SizedBox(height: 6),
                                           Text(
                                             _endsSummary(ends),
-                                            style: theme.textTheme.labelSmall?.copyWith(color: RedPillTheme.green.withValues(alpha: 0.9)),
+                                            style: theme.textTheme.labelSmall?.copyWith(color: NeoTheme.green.withValues(alpha: 0.9)),
                                           ),
                                         ],
                                       ),

@@ -1,4 +1,4 @@
-package com.absgrafx.redpill
+package com.nodeneo.app
 
 import io.flutter.embedding.android.FlutterActivity
 

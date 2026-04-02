@@ -157,7 +157,7 @@ class _AppLockRecoveryBodyState extends State<_AppLockRecoveryBody> {
                       }
                       _verify();
                     },
-              style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+              style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
               child: _busy
                   ? const SizedBox(
                       height: 22,

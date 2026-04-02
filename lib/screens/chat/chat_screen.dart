@@ -589,9 +589,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: RedPillTheme.green.withValues(alpha: 0.18),
+                  color: NeoTheme.green.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(7),
-                  border: Border.all(color: RedPillTheme.green.withValues(alpha: 0.35)),
+                  border: Border.all(color: NeoTheme.green.withValues(alpha: 0.35)),
                 ),
                 child: const Center(child: Text('🛡️', style: TextStyle(fontSize: 14))),
               ),
@@ -605,7 +605,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (widget.isTEE)
                   Text(
                     'Secure Session',
-                    style: TextStyle(fontSize: 11, color: RedPillTheme.green.withValues(alpha: 0.85)),
+                    style: TextStyle(fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.85)),
                   ),
               ],
             ),
@@ -623,7 +623,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: RedPillTheme.green),
+                      child: CircularProgressIndicator(strokeWidth: 2, color: NeoTheme.green),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -661,7 +661,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           color = const Color(0xFFF87171);
                           leading = Icon(Icons.error_outline_rounded, size: 14, color: color);
                         case _LogLevel.ok:
-                          color = RedPillTheme.green;
+                          color = NeoTheme.green;
                           leading = Icon(Icons.check_circle_outline_rounded, size: 14, color: color);
                       }
                       return Padding(
@@ -754,7 +754,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       const SizedBox(height: 8),
                       FilledButton(
                         onPressed: () => _retryBootstrap(),
-                        style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                        style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                         child: const Text('Retry'),
                       ),
                     ],
@@ -775,7 +775,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       child: Row(
                         children: [
-                          Icon(Icons.info_outline, size: 18, color: RedPillTheme.green.withValues(alpha: 0.85)),
+                          Icon(Icons.info_outline, size: 18, color: NeoTheme.green.withValues(alpha: 0.85)),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
@@ -802,7 +802,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: RedPillTheme.green),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: NeoTheme.green),
                             ),
                             SizedBox(width: 12),
                             Text('Thinking…', style: TextStyle(color: Color(0xFF6B7280), fontSize: 13)),
@@ -820,12 +820,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.88),
                         decoration: BoxDecoration(
                           color: isUser
-                              ? RedPillTheme.green.withValues(alpha: 0.18)
-                              : (b.isError ? const Color(0xFF450A0A) : RedPillTheme.surface),
+                              ? NeoTheme.green.withValues(alpha: 0.18)
+                              : (b.isError ? const Color(0xFF450A0A) : NeoTheme.surface),
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(
                             color: isUser
-                                ? RedPillTheme.green.withValues(alpha: 0.35)
+                                ? NeoTheme.green.withValues(alpha: 0.35)
                                 : const Color(0xFF374151),
                           ),
                         ),
@@ -913,7 +913,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           IconButton.filled(
                             onPressed: _sending ? null : _send,
                             style: IconButton.styleFrom(
-                              backgroundColor: RedPillTheme.green,
+                              backgroundColor: NeoTheme.green,
                               foregroundColor: Colors.white,
                               disabledBackgroundColor: const Color(0xFF374151),
                             ),
@@ -1143,7 +1143,7 @@ class _StakePanelBody extends StatelessWidget {
       fontWeight: FontWeight.w600,
       fontSize: headlineGreen ? 13 : 12,
       height: 1.35,
-      color: headlineGreen ? RedPillTheme.green.withValues(alpha: 0.9) : const Color(0xFF9CA3AF),
+      color: headlineGreen ? NeoTheme.green.withValues(alpha: 0.9) : const Color(0xFF9CA3AF),
     );
     final bodyStyle = TextStyle(
       fontSize: headlineGreen ? 12 : 11,
@@ -1206,10 +1206,10 @@ class _BootLogBanner extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
       decoration: BoxDecoration(
-        color: RedPillTheme.mainPanelFill,
+        color: NeoTheme.mainPanelFill,
         border: Border(
           bottom: BorderSide(
-            color: RedPillTheme.green.withValues(alpha: 0.2),
+            color: NeoTheme.green.withValues(alpha: 0.2),
           ),
         ),
       ),
@@ -1249,7 +1249,7 @@ class _BootLogBanner extends StatelessWidget {
         _LogLevel.info => const Color(0xFF6B7280),
         _LogLevel.warn => const Color(0xFFF59E0B),
         _LogLevel.error => const Color(0xFFF87171),
-        _LogLevel.ok => RedPillTheme.green,
+        _LogLevel.ok => NeoTheme.green,
       };
 
   static Widget _iconForLevel(_LogLevel l) => switch (l) {

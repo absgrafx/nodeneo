@@ -46,7 +46,7 @@ class _SessionLengthSettingsScreenState extends State<SessionLengthSettingsScree
     return Scaffold(
       appBar: AppBar(title: const Text('Session length')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: RedPillTheme.green))
+          ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [

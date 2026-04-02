@@ -2,13 +2,16 @@ package mobile
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
 	"time"
 
 	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
+	"github.com/absgrafx/redpill/internal/logger"
 	"github.com/absgrafx/redpill/internal/store"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -43,6 +46,12 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		return resultJSON(map[string]string{"status": "already_initialized"})
 	}
 
+	// File-based rotating logger (10 MB × 5 files under dataDir/logs/).
+	if err := logger.Init(dataDir, "info"); err != nil {
+		return errJSON(fmt.Errorf("logger init: %w", err))
+	}
+	logger.Info("SDK init: dataDir=%s chainID=%d", dataDir, chainID)
+
 	activeModelsURL := "https://active.mor.org/active_models.json"
 
 	cfg := sdk.Config{
@@ -59,16 +68,20 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 	var err error
 	client, err = sdk.NewSDK(cfg)
 	if err != nil {
+		logger.Error("SDK NewSDK failed: %v", err)
 		client = nil
 		return errJSON(err)
 	}
+	logger.Info("SDK initialized (chainID=%d)", chainID)
 
-	db, err = store.New(dataDir + "/redpill.db")
+	db, err = store.New(dataDir + "/nodeneo.db")
 	if err != nil {
+		logger.Error("DB open failed: %v", err)
 		client.Shutdown()
 		client = nil
 		return errJSON(err)
 	}
+	logger.Info("DB opened at %s/nodeneo.db", dataDir)
 
 	return resultJSON(map[string]string{"status": "ok"})
 }
@@ -77,6 +90,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 func Shutdown() {
 	mu.Lock()
 	defer mu.Unlock()
+	logger.Info("SDK shutdown")
 	if db != nil {
 		_ = db.Close()
 		db = nil
@@ -85,6 +99,7 @@ func Shutdown() {
 		client.Shutdown()
 		client = nil
 	}
+	logger.Close()
 }
 
 // IsReady returns true if the SDK is initialized.
@@ -92,6 +107,45 @@ func IsReady() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	return client != nil
+}
+
+// SetEncryptionKey installs AES-256-GCM encryption for message content.
+// Call after Init once the wallet mnemonic is available. The key must be
+// exactly 32 bytes (SHA-256 of the mnemonic). Idempotent; safe to call
+// before any messages are saved — legacy plaintext is transparently handled.
+func SetEncryptionKey(keyHex string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(fmt.Errorf("sdk not initialized"))
+	}
+	raw, err := hex.DecodeString(keyHex)
+	if err != nil {
+		return errJSON(fmt.Errorf("invalid hex key: %w", err))
+	}
+	if err := db.SetEncryptionKey(raw); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// --- Logging ---
+
+// GetLogDir returns the absolute path to the log directory.
+func GetLogDir() string {
+	return logger.LogDir()
+}
+
+// SetLogLevel changes the log level at runtime. Valid: debug, info, warn, error.
+func SetLogLevel(level string) string {
+	logger.SetLevel(level)
+	logger.Info("Log level changed to %s", logger.GetLevel())
+	return resultJSON(map[string]string{"status": "ok", "level": logger.GetLevel()})
+}
+
+// GetLogLevel returns the current log level.
+func GetLogLevel() string {
+	return logger.GetLevel()
 }
 
 // --- Wallet (native via SDK — embedded proxy-router wallet) ---
@@ -707,6 +761,48 @@ func GetPreference(key string) string {
 		return errJSON(err)
 	}
 	return resultJSON(map[string]string{"value": val})
+}
+
+// --- Expert Mode (native proxy-router swagger API) ---
+
+// StartExpertAPI starts the native proxy-router HTTP server (swagger UI + full REST API).
+// address is "host:port", e.g. "127.0.0.1:8082" for local-only or "0.0.0.0:8082" for network.
+// publicURL sets the Swagger host for CORS (e.g. "http://192.168.1.42:8082").
+func StartExpertAPI(address, publicURL string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	if err := client.StartHTTPServer(address, publicURL); err != nil {
+		return errJSON(err)
+	}
+	logger.Info("Expert API (swagger) started on %s (public: %s)", address, publicURL)
+	return resultJSON(map[string]string{"status": "ok", "address": address, "public_url": publicURL})
+}
+
+// StopExpertAPI stops the native proxy-router HTTP server.
+func StopExpertAPI() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	client.StopHTTPServer()
+	logger.Info("Expert API stopped")
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// ExpertAPIStatus returns whether the API server is running and on which address.
+func ExpertAPIStatus() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	addr := client.HTTPServerAddr()
+	running := addr != ""
+	return resultJSON(map[string]interface{}{"running": running, "address": addr})
 }
 
 // --- Helpers ---

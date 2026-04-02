@@ -8,10 +8,10 @@ go-test:
 
 go-macos:
 	mkdir -p build/go
-	cd go && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags="-s -w" -o ../build/go/libredpill.dylib ./cmd/cshared/
+	cd go && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags="-s -w" -o ../build/go/libnodeneo.dylib ./cmd/cshared/
 
 go-ios:
-	@echo "==> Building libredpill.a for iOS arm64 (c-archive)..."
+	@echo "==> Building libnodeneo.a for iOS arm64 (c-archive)..."
 	@mkdir -p build/go/ios
 	cd go && \
 	  GOOS=ios GOARCH=arm64 CGO_ENABLED=1 \
@@ -20,11 +20,11 @@ go-ios:
 	  CGO_LDFLAGS="-isysroot $$(xcrun --sdk iphoneos --show-sdk-path) -arch arm64 -miphoneos-version-min=13.0" \
 	  GOROOT="$$(/opt/homebrew/bin/go env GOROOT)" \
 	  PATH="$$(/opt/homebrew/bin/go env GOROOT)/bin:/opt/homebrew/bin:$$PATH" \
-	  go build -buildmode=c-archive -ldflags="-s -w" -o ../build/go/ios/libredpill.a ./cmd/cshared/
-	@echo "==> iOS static library: build/go/ios/libredpill.a"
+	  go build -buildmode=c-archive -ldflags="-s -w" -o ../build/go/ios/libnodeneo.a ./cmd/cshared/
+	@echo "==> iOS static library: build/go/ios/libnodeneo.a"
 
 go-android:
-	cd go && gomobile bind -target=android -o ../build/redpill.aar ./mobile/
+	cd go && gomobile bind -target=android -o ../build/nodeneo.aar ./mobile/
 
 # ── Flutter builds ──
 
@@ -64,8 +64,8 @@ run-macos: go-macos _copy-dylib-macos
 
 _copy-dylib-macos:
 	@echo "Ensuring dylib is in Frameworks..."
-	@mkdir -p build/macos/Build/Products/Debug/Morpheus.app/Contents/Frameworks 2>/dev/null || true
-	@cp build/go/libredpill.dylib build/macos/Build/Products/Debug/Morpheus.app/Contents/Frameworks/ 2>/dev/null || true
+	@mkdir -p build/macos/Build/Products/Debug/Node Neo.app/Contents/Frameworks 2>/dev/null || true
+	@cp build/go/libnodeneo.dylib build/macos/Build/Products/Debug/Node Neo.app/Contents/Frameworks/ 2>/dev/null || true
 
 run-ios: go-ios
 	flutter run -d Phlame
