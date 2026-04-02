@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Morpheus / Marketplace-aligned palette (`Morpheus-Marketplace-APP` globals.css).
+/// Node Neo palette — Matrix-inspired greens on near-black.
 ///
 /// Brand: `--matrix-green`, `--eclipse`, `--neon-mint`, `--emerald`, `--midnight`, `--platinum`.
-class RedPillTheme {
+class NeoTheme {
   /// #0C0C0C — main scaffold / near-black
   static const midnight = Color(0xFF0C0C0C);
 
@@ -23,8 +23,8 @@ class RedPillTheme {
   /// #00FF85 — high-contrast accent (use sparingly)
   static const neonMint = Color(0xFF00FF85);
 
-  /// #20DC8E — primary brand green (buttons, links, focus)
-  static const emerald = Color(0xFF20DC8E);
+  /// #30D020 — primary brand green matched to glasses glow
+  static const emerald = Color(0xFF30D020);
 
   /// #EBEBEB — primary text on dark
   static const platinum = Color(0xFFEBEBEB);

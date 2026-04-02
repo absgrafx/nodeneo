@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 ///
 /// Password managers expect a **username + password** pair. We keep this string in a
 /// near-invisible field so vault entries can match without showing a “fake username” UI.
-const String kAppLockAutofillUsername = 'RedPill';
+const String kAppLockAutofillUsername = 'NodeNeo';
 
 /// Minimal footprint, still registered for autofill / platform credential heuristics.
 class AppLockHiddenUsernameForAutofill extends StatelessWidget {

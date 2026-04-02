@@ -29,7 +29,7 @@ class SessionDurationStore {
 
   Future<File> _file() async {
     final d = await getApplicationSupportDirectory();
-    final dir = Directory('${d.path}${Platform.pathSeparator}redpill');
+    final dir = Directory('${d.path}${Platform.pathSeparator}nodeneo');
     await dir.create(recursive: true);
     return File('${dir.path}${Platform.pathSeparator}$_fileName');
   }

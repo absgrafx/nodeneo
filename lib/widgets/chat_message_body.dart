@@ -42,7 +42,7 @@ Widget buildChatMessageBody(
       ),
       blockquoteDecoration: BoxDecoration(
         border: Border(
-          left: BorderSide(color: RedPillTheme.green.withValues(alpha: 0.45), width: 3),
+          left: BorderSide(color: NeoTheme.green.withValues(alpha: 0.45), width: 3),
         ),
       ),
       blockquotePadding: const EdgeInsets.only(left: 12),

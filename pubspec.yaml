@@ -1,5 +1,5 @@
-name: redpill
-description: "Morpheus network client — Flutter + Go (absgrafx)"
+name: nodeneo
+description: "Node Neo — decentralised AI inference client, powered by Morpheus DeAI Network"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -116,7 +116,7 @@ flutter_launcher_icons:
   adaptive_icon_foreground: assets/branding/app_icon_foreground.png
   min_sdk_android: 21
   # Full launcher PNG is already opaque; do not strip alpha onto white
-  remove_alpha_ios: false
+  remove_alpha_ios: true
   background_color_ios: "#0C0C0C"
 
 flutter_native_splash:

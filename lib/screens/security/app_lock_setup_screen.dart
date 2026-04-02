@@ -194,7 +194,7 @@ class _AppLockSetupScreenState extends State<AppLockSetupScreen> {
               const SizedBox(height: 28),
               FilledButton(
                 onPressed: _busy ? null : _submit,
-                style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                 child: _busy
                     ? const SizedBox(
                         width: 22,

@@ -19,11 +19,13 @@ import '../chat/chat_screen.dart';
 import '../chat/conversation_transcript_screen.dart';
 import '../security/security_settings_screen.dart';
 import '../sessions/on_chain_sessions_screen.dart';
+import '../settings/expert_mode_screen.dart';
+import '../settings/log_settings_screen.dart';
 import '../settings/session_length_settings_screen.dart';
 import '../../widgets/session_close_flow.dart';
 import '../wallet/wallet_security_actions.dart';
 import '../../widgets/send_token_sheet.dart';
-import '../../widgets/morpheus_logo.dart';
+
 
 /// Primary line for history / continue cards: saved topic, else model name.
 String conversationHeadline(Map<String, dynamic> c) {
@@ -111,15 +113,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     super.didChangeDependencies();
     final route = ModalRoute.of(context);
     if (route is PageRoute<dynamic>) {
-      redpillRouteObserver.unsubscribe(this);
-      redpillRouteObserver.subscribe(this, route);
+      neoRouteObserver.unsubscribe(this);
+      neoRouteObserver.subscribe(this, route);
     }
   }
 
   @override
   void dispose() {
     _sessionRefreshTimer?.cancel();
-    redpillRouteObserver.unsubscribe(this);
+    neoRouteObserver.unsubscribe(this);
     super.dispose();
   }
 
@@ -511,21 +513,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       ),
       appBar: AppBar(
         automaticallyImplyLeading: true,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const MorpheusLogo(size: 34),
-            const SizedBox(width: 10),
-            Text(
-              AppBrand.displayName,
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-                fontSize: 18,
-                height: 1.1,
-              ),
-            ),
-          ],
+        toolbarHeight: 72,
+        title: Image.asset(
+          'assets/branding/wordmark_v2.png',
+          height: 40,
+          fit: BoxFit.contain,
         ),
         actions: [
           PopupMenuButton<String>(
@@ -549,6 +541,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 await Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
                     builder: (_) => const OnChainSessionsScreen(),
+                  ),
+                );
+              } else if (value == 'logs') {
+                await Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const LogSettingsScreen(),
+                  ),
+                );
+              } else if (value == 'expert') {
+                await Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ExpertModeScreen(),
                   ),
                 );
               } else if (value == 'security') {
@@ -628,6 +632,32 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   ),
                 ),
               ),
+              const PopupMenuItem<String>(
+                value: 'logs',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.article_outlined, size: 22),
+                  title: Text('Logs'),
+                  subtitle: Text(
+                    'Log level · log files',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'expert',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.terminal, size: 22),
+                  title: Text('Expert Mode'),
+                  subtitle: Text(
+                    'Local REST API · scripting',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ),
               const PopupMenuDivider(),
               const PopupMenuItem<String>(
                 value: 'export_key',
@@ -637,7 +667,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   leading: Icon(
                     Icons.key_outlined,
                     size: 22,
-                    color: RedPillTheme.amber,
+                    color: NeoTheme.amber,
                   ),
                   title: Text('Export private key'),
                   subtitle: Text(
@@ -654,12 +684,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   leading: Icon(
                     Icons.delete_forever_outlined,
                     size: 22,
-                    color: RedPillTheme.red.withValues(alpha: 0.9),
+                    color: NeoTheme.red.withValues(alpha: 0.9),
                   ),
                   title: Text(
                     'Erase wallet on this device',
                     style: TextStyle(
-                      color: RedPillTheme.red.withValues(alpha: 0.95),
+                      color: NeoTheme.red.withValues(alpha: 0.95),
                     ),
                   ),
                   subtitle: const Text(
@@ -725,13 +755,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                       Icon(
                         Icons.forum_outlined,
                         size: 16,
-                        color: RedPillTheme.green.withValues(alpha: 0.9),
+                        color: NeoTheme.green.withValues(alpha: 0.9),
                       ),
                       const SizedBox(width: 8),
                       Text(
                         'CONTINUE CHATTING',
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: RedPillTheme.green.withValues(alpha: 0.85),
+                          color: NeoTheme.green.withValues(alpha: 0.85),
                           letterSpacing: 0.6,
                         ),
                       ),
@@ -763,10 +793,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           onTap: () => _openResumeChat(context, c),
                           child: Ink(
                             decoration: BoxDecoration(
-                              color: RedPillTheme.mainPanelFill,
+                              color: NeoTheme.mainPanelFill,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: RedPillTheme.mainPanelOutline(),
+                                color: NeoTheme.mainPanelOutline(),
                               ),
                             ),
                             child: Padding(
@@ -799,12 +829,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     height: 36,
                                     decoration: BoxDecoration(
                                       color: tee
-                                          ? RedPillTheme.green.withValues(alpha: 0.18)
-                                          : RedPillTheme.mainPanelFill,
+                                          ? NeoTheme.green.withValues(alpha: 0.18)
+                                          : NeoTheme.mainPanelFill,
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
                                         color: tee
-                                            ? RedPillTheme.green.withValues(alpha: 0.35)
+                                            ? NeoTheme.green.withValues(alpha: 0.35)
                                             : const Color(0xFF374151),
                                       ),
                                     ),
@@ -883,14 +913,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     Icon(
                       Icons.chat_bubble_outline,
                       size: 16,
-                      color: RedPillTheme.green.withValues(alpha: 0.9),
+                      color: NeoTheme.green.withValues(alpha: 0.9),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'START A NEW CHAT by selecting a model',
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: RedPillTheme.green.withValues(alpha: 0.85),
+                          color: NeoTheme.green.withValues(alpha: 0.85),
                           letterSpacing: 0.6,
                         ),
                       ),
@@ -927,7 +957,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Widget _buildModelList() {
     if (_loadingModels) {
       return const Center(
-        child: CircularProgressIndicator(color: RedPillTheme.green),
+        child: CircularProgressIndicator(color: NeoTheme.green),
       );
     }
     if (_modelsError != null) {
@@ -988,11 +1018,11 @@ class _PrivacyToggle extends StatelessWidget {
         curve: Curves.easeInOut,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: RedPillTheme.mainPanelFill,
+          color: NeoTheme.mainPanelFill,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: enabled
-                ? RedPillTheme.mainPanelOutline(0.45)
+                ? NeoTheme.mainPanelOutline(0.45)
                 : const Color(0xFF374151),
             width: enabled ? 1.5 : 1.0,
           ),
@@ -1005,12 +1035,12 @@ class _PrivacyToggle extends StatelessWidget {
               height: 36,
               decoration: BoxDecoration(
                 color: enabled
-                    ? RedPillTheme.green.withValues(alpha: 0.18)
-                    : RedPillTheme.mainPanelFill,
+                    ? NeoTheme.green.withValues(alpha: 0.18)
+                    : NeoTheme.mainPanelFill,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
                   color: enabled
-                      ? RedPillTheme.green.withValues(alpha: 0.35)
+                      ? NeoTheme.green.withValues(alpha: 0.35)
                       : const Color(0xFF374151),
                 ),
               ),
@@ -1032,7 +1062,7 @@ class _PrivacyToggle extends StatelessWidget {
                         enabled ? 'MAX PRIVACY' : 'ALL PROVIDERS',
                         style: TextStyle(
                           color: enabled
-                              ? RedPillTheme.green
+                              ? NeoTheme.green
                               : const Color(0xFF9CA3AF),
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
@@ -1077,7 +1107,7 @@ class _PrivacyToggle extends StatelessWidget {
                         : 'Enable for MAX Security (hardware-attested) inference',
                     style: TextStyle(
                       color: enabled
-                          ? RedPillTheme.green.withValues(alpha: 0.7)
+                          ? NeoTheme.green.withValues(alpha: 0.7)
                           : const Color(0xFF6B7280),
                       fontSize: 12,
                     ),
@@ -1110,7 +1140,7 @@ class _AnimatedToggleSwitch extends StatelessWidget {
         height: 28,
         padding: const EdgeInsets.all(3),
         decoration: BoxDecoration(
-          color: enabled ? RedPillTheme.green : const Color(0xFF374151),
+          color: enabled ? NeoTheme.green : const Color(0xFF374151),
           borderRadius: BorderRadius.circular(14),
         ),
         child: AnimatedAlign(
@@ -1190,10 +1220,10 @@ class _FundWalletOverlay extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
           decoration: BoxDecoration(
-            color: RedPillTheme.mainPanelFill,
+            color: NeoTheme.mainPanelFill,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: RedPillTheme.amber.withValues(alpha: 0.35),
+              color: NeoTheme.amber.withValues(alpha: 0.35),
               width: 1.3,
             ),
           ),
@@ -1205,15 +1235,15 @@ class _FundWalletOverlay extends StatelessWidget {
                 height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: RedPillTheme.amber.withValues(alpha: 0.10),
+                  color: NeoTheme.amber.withValues(alpha: 0.10),
                   border: Border.all(
-                    color: RedPillTheme.amber.withValues(alpha: 0.30),
+                    color: NeoTheme.amber.withValues(alpha: 0.30),
                     width: 1.5,
                   ),
                 ),
                 child: const Center(
                   child: Icon(Icons.account_balance_wallet_outlined,
-                      size: 28, color: RedPillTheme.amber),
+                      size: 28, color: NeoTheme.amber),
                 ),
               ),
               const SizedBox(height: 16),
@@ -1221,7 +1251,7 @@ class _FundWalletOverlay extends StatelessWidget {
                 'Fund Your Wallet to Start',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
-                  color: RedPillTheme.amber,
+                  color: NeoTheme.amber,
                 ),
               ),
               const SizedBox(height: 10),
@@ -1289,13 +1319,13 @@ class _FundWalletOverlay extends StatelessWidget {
                   _FundRequirement(
                     label: 'MOR',
                     amount: '≥ 5',
-                    color: RedPillTheme.green,
+                    color: NeoTheme.green,
                   ),
                   const SizedBox(width: 20),
                   _FundRequirement(
                     label: 'ETH',
                     amount: '≥ 0.001',
-                    color: RedPillTheme.amber,
+                    color: NeoTheme.amber,
                   ),
                 ],
               ),
@@ -1408,11 +1438,11 @@ class _WalletCard extends StatelessWidget {
       color: theme.colorScheme.onSurface.withValues(alpha: 0.92),
     ) ?? const TextStyle(fontSize: 13);
     return Card(
-      color: RedPillTheme.mainPanelFill,
+      color: NeoTheme.mainPanelFill,
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: RedPillTheme.mainPanelOutline(), width: 1.2),
+        side: BorderSide(color: NeoTheme.mainPanelOutline(), width: 1.2),
       ),
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -1502,7 +1532,7 @@ class _WalletCard extends StatelessWidget {
                     expand: true,
                     symbol: NetworkTokens.morSymbol,
                     value: morBalance,
-                    color: RedPillTheme.green,
+                    color: NeoTheme.green,
                     helperText: AppBrand.morBalanceHelper,
                     onTap: onSendMor,
                     token: TokenWithBaseInlay(
@@ -1518,7 +1548,7 @@ class _WalletCard extends StatelessWidget {
                     expand: true,
                     symbol: NetworkTokens.ethSymbol,
                     value: ethBalance,
-                    color: RedPillTheme.amber,
+                    color: NeoTheme.amber,
                     helperText: AppBrand.ethBalanceHelper,
                     onTap: onSendEth,
                     token: TokenWithBaseInlay(
@@ -1758,7 +1788,7 @@ class _HistoryConversationTile extends StatelessWidget {
         leading: Icon(
           hasSession ? Icons.play_circle_outline : Icons.history,
           color: hasSession
-              ? RedPillTheme.green.withValues(alpha: 0.9)
+              ? NeoTheme.green.withValues(alpha: 0.9)
               : theme.colorScheme.onSurface.withValues(alpha: 0.45),
         ),
         title: Row(
@@ -1850,12 +1880,12 @@ class _WalletRpcStatusPill extends StatelessWidget {
     }
     final ok = rpcReachable == true;
     final borderColor = ok
-        ? RedPillTheme.green.withValues(alpha: 0.35)
-        : RedPillTheme.red.withValues(alpha: 0.45);
-    final bg = ok ? RedPillTheme.mainPanelFill : const Color(0xFF1F1518);
+        ? NeoTheme.green.withValues(alpha: 0.35)
+        : NeoTheme.red.withValues(alpha: 0.45);
+    final bg = ok ? NeoTheme.mainPanelFill : const Color(0xFF1F1518);
     final fg = ok
-        ? RedPillTheme.green
-        : RedPillTheme.red.withValues(alpha: 0.95);
+        ? NeoTheme.green
+        : NeoTheme.red.withValues(alpha: 0.95);
     final label = ok ? 'CONNECTED' : 'NO RPC';
     return Material(
       color: Colors.transparent,
@@ -1908,7 +1938,7 @@ class _BalanceChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final decoration = BoxDecoration(
-      color: RedPillTheme.mainPanelFill,
+      color: NeoTheme.mainPanelFill,
       borderRadius: BorderRadius.circular(8),
       border: Border.all(color: color.withValues(alpha: 0.55), width: 1.2),
     );
@@ -1989,8 +2019,8 @@ class _ModelTile extends StatelessWidget {
   const _ModelTile({required this.entry, required this.onTap});
 
   static Color _healthColor(double? pct) {
-    if (pct == null) return RedPillTheme.mainPanelOutline();
-    if (pct >= 99.0) return RedPillTheme.green;
+    if (pct == null) return NeoTheme.mainPanelOutline();
+    if (pct >= 99.0) return NeoTheme.green;
     if (pct >= 85.0) return const Color(0xFFF59E0B);
     return const Color(0xFFEF4444);
   }
@@ -2003,7 +2033,7 @@ class _ModelTile extends StatelessWidget {
     final borderColor = _healthColor(entry.uptime6h);
 
     return Card(
-      color: RedPillTheme.mainPanelFill,
+      color: NeoTheme.mainPanelFill,
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 4),
       shape: RoundedRectangleBorder(
@@ -2023,12 +2053,12 @@ class _ModelTile extends StatelessWidget {
                 height: 30,
                 decoration: BoxDecoration(
                   color: isTEE
-                      ? RedPillTheme.green.withValues(alpha: 0.18)
-                      : RedPillTheme.mainPanelFill,
+                      ? NeoTheme.green.withValues(alpha: 0.18)
+                      : NeoTheme.mainPanelFill,
                   borderRadius: BorderRadius.circular(7),
                   border: Border.all(
                     color: isTEE
-                        ? RedPillTheme.green.withValues(alpha: 0.35)
+                        ? NeoTheme.green.withValues(alpha: 0.35)
                         : const Color(0xFF374151),
                   ),
                 ),
@@ -2069,7 +2099,7 @@ class _ModelTile extends StatelessWidget {
                                 tag,
                                 style: TextStyle(
                                   color: tag.toLowerCase() == 'tee'
-                                      ? RedPillTheme.green.withValues(alpha: 0.7)
+                                      ? NeoTheme.green.withValues(alpha: 0.7)
                                       : const Color(0xFF6B7280),
                                   fontSize: 10,
                                   fontWeight: FontWeight.w500,
