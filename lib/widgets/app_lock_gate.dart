@@ -8,7 +8,7 @@ import '../theme.dart';
 class AppLockGate extends StatefulWidget {
   final Widget child;
 
-  /// Factory reset: clears wallet, lock, SQLite, RPC override — app returns to onboarding (see [RedPillApp]).
+  /// Factory reset: clears wallet, lock, SQLite, RPC override — app returns to onboarding (see [NodeNeoApp]).
   final Future<void> Function()? onFullFactoryReset;
 
   const AppLockGate({super.key, required this.child, this.onFullFactoryReset});
@@ -46,7 +46,7 @@ class _AppLockGateState extends State<AppLockGate> {
   Widget build(BuildContext context) {
     if (!_ready) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: RedPillTheme.green)),
+        body: Center(child: CircularProgressIndicator(color: NeoTheme.green)),
       );
     }
     return ValueListenableBuilder<bool>(

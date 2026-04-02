@@ -29,7 +29,7 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     let channel = FlutterMethodChannel(
-      name: "redpill/macos_splash",
+      name: "nodeneo/macos_splash",
       binaryMessenger: flutterViewController.engine.binaryMessenger
     )
     channel.setMethodCallHandler { [weak self] call, result in
@@ -51,9 +51,9 @@ class MainFlutterWindow: NSWindow {
 
     self.minSize = NSSize(width: 480, height: 700)
 
-    title = "Morpheus"
+    title = "Node Neo"
     DispatchQueue.main.async { [weak self] in
-      self?.title = "Morpheus"
+      self?.title = "Node Neo"
     }
   }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/cipher"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -10,7 +11,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	gcm cipher.AEAD // nil until SetEncryptionKey is called
 }
 
 func New(dbPath string) (*Store, error) {
@@ -124,6 +126,7 @@ func (s *Store) ensureConversationPinnedColumn() error {
 func (s *Store) SaveMessage(conversationID, role, content string) error {
 	id := fmt.Sprintf("%s-%d", role, time.Now().UnixNano())
 	now := time.Now().Unix()
+	stored := s.encrypt(content)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -131,7 +134,7 @@ func (s *Store) SaveMessage(conversationID, role, content string) error {
 	defer tx.Rollback()
 	if _, err := tx.Exec(
 		`INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)`,
-		id, conversationID, role, content, now,
+		id, conversationID, role, stored, now,
 	); err != nil {
 		return err
 	}
@@ -351,6 +354,7 @@ func (s *Store) GetMessages(conversationID string) ([]Message, error) {
 		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Content = s.decrypt(m.Content)
 		out = append(out, m)
 	}
 	return out, rows.Err()

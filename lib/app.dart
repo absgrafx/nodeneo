@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -31,14 +33,14 @@ Map<String, dynamic> _initBridgeSync(Map<String, dynamic> p) {
   );
 }
 
-class RedPillApp extends StatefulWidget {
-  const RedPillApp({super.key});
+class NodeNeoApp extends StatefulWidget {
+  const NodeNeoApp({super.key});
 
   @override
-  State<RedPillApp> createState() => _RedPillAppState();
+  State<NodeNeoApp> createState() => _NodeNeoAppState();
 }
 
-class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
+class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
   bool _hasWallet = false;
   bool _sdkReady = false;
   String? _sdkError;
@@ -72,12 +74,12 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
   Future<void> _initSDK() async {
     try {
       final dir = await getApplicationSupportDirectory();
-      final dataDir = '${dir.path}${Platform.pathSeparator}redpill';
+      final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
       await Directory(dataDir).create(recursive: true);
 
       final ethUrl = await RpcSettingsStore.instance.effectiveRpcUrl();
 
-      debugPrint('[RedPill] _initSDK: dataDir=$dataDir  rpc=$ethUrl');
+      debugPrint('[NodeNeo] _initSDK: dataDir=$dataDir  rpc=$ethUrl');
 
       // Go's sdk.NewSDK() may block for seconds (network, DNS) — run the
       // synchronous FFI call on a background isolate so the UI stays alive.
@@ -97,7 +99,7 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
         onTimeout: () => <String, dynamic>{'error': 'SDK init timed out after 45 s — check network/RPC.'},
       );
 
-      debugPrint('[RedPill] init result: $result');
+      debugPrint('[NodeNeo] init result: $result');
 
       // Sync the main-isolate bridge's initialized flag with the background result.
       final bridge = GoBridge();
@@ -110,6 +112,14 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
           final saved = await WalletVault.instance.readMnemonic();
           if (saved != null && saved.trim().isNotEmpty) {
             bridge.importWalletMnemonic(saved.trim());
+            // Derive encryption key from mnemonic for chat DB content encryption.
+            final keyBytes = sha256.convert(utf8.encode(saved.trim())).bytes;
+            final keyHex = keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+            try {
+              bridge.setEncryptionKey(keyHex);
+            } catch (e) {
+              debugPrint('[NodeNeo] setEncryptionKey failed (non-fatal): $e');
+            }
             restored = true;
           }
         } on GoBridgeException catch (_) {
@@ -126,7 +136,7 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
         setState(() => _sdkError = result['error'] ?? 'Unknown init error');
       }
     } catch (e) {
-      debugPrint('[RedPill] _initSDK exception: $e');
+      debugPrint('[NodeNeo] _initSDK exception: $e');
       if (!mounted) return;
       setState(() => _sdkError = e.toString());
     }
@@ -151,7 +161,7 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
   Future<void> _handleWalletErased() async {
     GoBridge().shutdown();
     final dir = await getApplicationSupportDirectory();
-    final dataDir = '${dir.path}${Platform.pathSeparator}redpill';
+    final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
     await AppLocalReset.wipeLocalDatabaseFiles(dataDir);
     await AppLockService.instance.clearLockCredentialsOnly();
     if (!mounted) return;
@@ -168,7 +178,7 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
     await AppLockService.instance.clearLockCredentialsOnly();
     GoBridge().shutdown();
     final dir = await getApplicationSupportDirectory();
-    final dataDir = '${dir.path}${Platform.pathSeparator}redpill';
+    final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
     await AppLocalReset.wipeFactoryLocalFiles(dataDir);
     if (!mounted) return;
     setState(() {
@@ -190,8 +200,8 @@ class _RedPillAppState extends State<RedPillApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: AppBrand.displayName,
       debugShowCheckedModeBanner: false,
-      theme: RedPillTheme.dark,
-      navigatorObservers: <NavigatorObserver>[redpillRouteObserver],
+      theme: NeoTheme.dark,
+      navigatorObservers: <NavigatorObserver>[neoRouteObserver],
       // Builder gives a context that is *below* MaterialApp's Navigator.
       // Using State.context here would break Navigator.of in callbacks (e.g. Network / RPC).
       home: Builder(
@@ -252,7 +262,7 @@ class _LoadingScreen extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: RedPillTheme.green),
+            CircularProgressIndicator(color: NeoTheme.green),
             SizedBox(height: 24),
             Text('Connecting to network...', style: TextStyle(color: Color(0xFF9CA3AF))),
           ],
@@ -309,7 +319,7 @@ class _ErrorScreen extends StatelessWidget {
                   if (onOpenNetworkSettings != null)
                     FilledButton(
                       onPressed: () => onOpenNetworkSettings!(),
-                      style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                      style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                       child: const Text('Edit custom RPC'),
                     ),
                   if (onOpenNetworkSettings != null) const SizedBox(height: 10),

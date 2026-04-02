@@ -20,7 +20,7 @@ Future<void> showExportPrivateKeyFlow(BuildContext context) async {
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         TextButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: Text('Show key', style: TextStyle(color: RedPillTheme.amber)),
+          child: Text('Show key', style: TextStyle(color: NeoTheme.amber)),
         ),
       ],
     ),
@@ -74,7 +74,7 @@ Future<void> showEraseWalletFlow(
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
         TextButton(
           onPressed: () => Navigator.pop(ctx, true),
-          child: Text('Erase', style: TextStyle(color: RedPillTheme.red)),
+          child: Text('Erase', style: TextStyle(color: NeoTheme.red)),
         ),
       ],
     ),

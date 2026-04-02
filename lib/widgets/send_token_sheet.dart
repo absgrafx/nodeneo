@@ -102,7 +102,7 @@ class _SendTokenSheetBodyState extends State<_SendTokenSheetBody> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+            style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
             child: const Text('Send'),
           ),
         ],
@@ -284,7 +284,7 @@ class _SendTokenSheetBodyState extends State<_SendTokenSheetBody> {
                   : const Icon(Icons.send_rounded),
               label: Text(_busy ? 'Sending…' : 'Review & send'),
               style: FilledButton.styleFrom(
-                backgroundColor: RedPillTheme.green,
+                backgroundColor: NeoTheme.green,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
@@ -321,7 +321,7 @@ class SendAmountPreview extends StatelessWidget {
     if (wei == null) {
       return Text(
         'Could not parse amount. Use digits and one decimal separator.',
-        style: theme.textTheme.bodySmall?.copyWith(color: RedPillTheme.red.withValues(alpha: 0.9)),
+        style: theme.textTheme.bodySmall?.copyWith(color: NeoTheme.red.withValues(alpha: 0.9)),
       );
     }
     final sym = isMor ? NetworkTokens.morSymbol : NetworkTokens.ethSymbol;

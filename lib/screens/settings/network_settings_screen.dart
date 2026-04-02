@@ -21,6 +21,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   bool _saving = false;
   bool _testing = false;
   String? _overridePreview;
+  List<Map<String, dynamic>>? _testResults;
 
   @override
   void initState() {
@@ -82,30 +83,38 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
   }
 
   /// Validate reachability + Base chain ID without saving.
+  /// When the field is empty, tests the built-in defaults.
+  /// Tests ALL URLs and shows per-URL results.
   Future<void> _testOnly() async {
-    final err = RpcSettingsStore.validateUserInput(_ctrl.text);
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-      return;
+    final raw = _ctrl.text.trim();
+    final urlsToTest = raw.isEmpty ? defaultBaseMainnetRpcUrls : raw;
+    final isDefaults = raw.isEmpty;
+
+    if (!isDefaults) {
+      final err = RpcSettingsStore.validateUserInput(raw);
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+        return;
+      }
     }
-    setState(() => _testing = true);
+    setState(() {
+      _testing = true;
+      _testResults = null;
+    });
     try {
-      final probe = await RpcEndpointValidator.validateUrls(
-        _ctrl.text.trim(),
+      final results = await RpcEndpointValidator.validateAllUrls(
+        urlsToTest,
         expectedChainId: defaultBaseChainId,
       );
       if (!mounted) return;
-      if (probe != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(probe), duration: const Duration(seconds: 8)),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('All URLs responded with eth_chainId for Base (8453).'),
-          ),
-        );
-      }
+      final okCount = results.where((r) => r['ok'] == true).length;
+      setState(() => _testResults = results);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$okCount of ${results.length} RPC${results.length == 1 ? '' : 's'} passed (Base chainId $defaultBaseChainId)'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _testing = false);
     }
@@ -133,7 +142,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Network')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: RedPillTheme.green))
+          ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [
@@ -153,7 +162,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   _overridePreview != null && _overridePreview!.isNotEmpty
                       ? 'You are overriding defaults.'
                       : 'Using built-in public RPC list.',
-                  style: theme.textTheme.labelSmall?.copyWith(color: RedPillTheme.green.withValues(alpha: 0.9)),
+                  style: theme.textTheme.labelSmall?.copyWith(color: NeoTheme.green.withValues(alpha: 0.9)),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -174,7 +183,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                 ),
                 const SizedBox(height: 24),
                 OutlinedButton.icon(
-                  onPressed: (_saving || _testing || _ctrl.text.trim().isEmpty) ? null : _testOnly,
+                  onPressed: (_saving || _testing) ? null : _testOnly,
                   icon: _testing
                       ? const SizedBox(
                           width: 18,
@@ -182,12 +191,74 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.wifi_tethering, size: 20),
-                  label: Text(_testing ? 'Testing…' : 'Test URLs (no save)'),
+                  label: Text(_testing
+                      ? 'Testing…'
+                      : _ctrl.text.trim().isEmpty
+                          ? 'Test built-in RPCs'
+                          : 'Test URLs (no save)'),
                 ),
+                if (_testResults != null) ...[
+                  const SizedBox(height: 16),
+                  ..._testResults!.map((r) {
+                    final ok = r['ok'] == true;
+                    final url = r['url'] as String;
+                    final err = r['error'] as String?;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: ok
+                              ? NeoTheme.green.withValues(alpha: 0.08)
+                              : Colors.red.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: ok
+                                ? NeoTheme.green.withValues(alpha: 0.25)
+                                : Colors.red.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                              size: 18,
+                              color: ok ? NeoTheme.green : Colors.red,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    url,
+                                    style: const TextStyle(
+                                      fontFamily: 'JetBrains Mono',
+                                      fontSize: 11,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (err != null)
+                                    Text(
+                                      err,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.red,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ],
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: (_saving || _testing) ? null : _save,
-                  style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                  style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                   child: _saving
                       ? const SizedBox(
                           width: 22,

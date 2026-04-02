@@ -11,7 +11,7 @@ import 'app_lock_autofill.dart';
 
 /// Full-screen unlock.
 class AppLockScreen extends StatefulWidget {
-  /// Clears wallet, lock, SQLite, RPC — returns app to onboarding (see [RedPillApp]).
+  /// Clears wallet, lock, SQLite, RPC — returns app to onboarding (see [NodeNeoApp]).
   final Future<void> Function()? onFullFactoryReset;
 
   const AppLockScreen({super.key, this.onFullFactoryReset});
@@ -74,7 +74,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: RedPillTheme.red),
+            style: FilledButton.styleFrom(backgroundColor: NeoTheme.red),
             child: const Text('Erase everything'),
           ),
         ],
@@ -140,7 +140,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const MorpheusLogo(size: 96, variant: MorpheusLogoVariant.green),
+                      const NeoLogo(size: 192),
                       const SizedBox(height: 16),
                       Text(
                         AppBrand.displayName,
@@ -168,19 +168,19 @@ class _AppLockScreenState extends State<AppLockScreen> {
                   onSubmitted: (_) => _unlockWithPassword(),
                   decoration: InputDecoration(
                     filled: true,
-                    fillColor: RedPillTheme.mainPanelFill,
+                    fillColor: NeoTheme.mainPanelFill,
                     hintText: 'Password',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: RedPillTheme.mainPanelOutline(0.4)),
+                      borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.4)),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: RedPillTheme.mainPanelOutline(0.4)),
+                      borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.4)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: RedPillTheme.mainPanelOutline(0.85)),
+                      borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.85)),
                     ),
                     suffixIcon: IconButton(
                       icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
@@ -195,7 +195,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
                 const SizedBox(height: 20),
                 FilledButton(
                   onPressed: _busy ? null : _unlockWithPassword,
-                  style: FilledButton.styleFrom(backgroundColor: RedPillTheme.green),
+                  style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
                   child: _busy
                       ? const SizedBox(
                           height: 22,
@@ -236,7 +236,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
                     onPressed: _busy ? null : _confirmFullFactoryReset,
                     child: Text(
                       'Erase app data (factory reset)',
-                      style: TextStyle(color: RedPillTheme.red.withValues(alpha: 0.9), fontSize: 13),
+                      style: TextStyle(color: NeoTheme.red.withValues(alpha: 0.9), fontSize: 13),
                     ),
                   ),
               ],
