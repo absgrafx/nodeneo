@@ -66,6 +66,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
   /// Detect if the app binary lives on a mounted disk image instead of /Applications.
   static bool _detectDmgLaunch() {
     if (!Platform.isMacOS) return false;
+    if (kDebugMode) return false; // dev builds run from repo on /Volumes — not a DMG
     final exe = Platform.resolvedExecutable;
     // Mounted DMG volumes appear under /Volumes/ and never under /Applications.
     if (exe.startsWith('/Volumes/') && !exe.contains('/Applications/')) {

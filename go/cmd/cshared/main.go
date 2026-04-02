@@ -15,7 +15,7 @@ import "C"
 import (
 	"unsafe"
 
-	"github.com/absgrafx/redpill/mobile"
+	"github.com/absgrafx/nodeneo/mobile"
 )
 
 // freeWith is a helper the Dart side must call to free returned strings.

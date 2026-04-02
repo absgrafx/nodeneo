@@ -11,8 +11,8 @@ import (
 	"time"
 
 	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
-	"github.com/absgrafx/redpill/internal/logger"
-	"github.com/absgrafx/redpill/internal/store"
+	"github.com/absgrafx/nodeneo/internal/logger"
+	"github.com/absgrafx/nodeneo/internal/store"
 	openai "github.com/sashabaranov/go-openai"
 )
 
