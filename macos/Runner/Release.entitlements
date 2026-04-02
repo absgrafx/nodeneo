@@ -12,7 +12,7 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>2S4578V7ZD.com.absgrafx.nodeneo</string>
+		<string>$(AppIdentifierPrefix)com.absgrafx.nodeneo</string>
 	</array>
 </dict>
 </plist>
