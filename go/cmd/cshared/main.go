@@ -70,6 +70,11 @@ func GetLogLevel() *C.char {
 	return C.CString(mobile.GetLogLevel())
 }
 
+//export AppLog
+func AppLog(level, message *C.char) {
+	mobile.AppLog(C.GoString(level), C.GoString(message))
+}
+
 // --- Encryption ---
 
 //export SetEncryptionKey

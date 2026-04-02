@@ -14,6 +14,7 @@ import 'services/app_lock_service.dart';
 import 'services/bridge.dart';
 import 'services/rpc_settings_store.dart';
 import 'services/app_local_reset.dart';
+import 'services/app_logger.dart';
 import 'services/wallet_vault.dart';
 import 'app_route_observer.dart';
 import 'theme.dart';
@@ -47,11 +48,33 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
   /// False when failure is missing native lib (iOS): RPC buttons are misleading.
   bool _showRpcRecoveryOnError = true;
 
+  /// True when the app was launched from a mounted DMG volume — the user needs
+  /// to drag it to /Applications first.
+  bool _runningFromDmg = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initSDK();
+    if (_detectDmgLaunch()) {
+      _runningFromDmg = true;
+    } else {
+      _initSDK();
+    }
+  }
+
+  /// Detect if the app binary lives on a mounted disk image instead of /Applications.
+  static bool _detectDmgLaunch() {
+    if (!Platform.isMacOS) return false;
+    final exe = Platform.resolvedExecutable;
+    // Mounted DMG volumes appear under /Volumes/ and never under /Applications.
+    if (exe.startsWith('/Volumes/') && !exe.contains('/Applications/')) {
+      return true;
+    }
+    // macOS App Translocation (GateKeeper) moves unsigned apps to a random path
+    // under /private/var/folders when run from a quarantined location.
+    if (exe.contains('/AppTranslocation/')) return true;
+    return false;
   }
 
   @override
@@ -79,7 +102,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
 
       final ethUrl = await RpcSettingsStore.instance.effectiveRpcUrl();
 
-      debugPrint('[NodeNeo] _initSDK: dataDir=$dataDir  rpc=$ethUrl');
+      AppLogger.info('_initSDK: dataDir=$dataDir  rpc=${hasBuildTimeRpc ? "(dedicated)" : ethUrl}');
 
       // Go's sdk.NewSDK() may block for seconds (network, DNS) — run the
       // synchronous FFI call on a background isolate so the UI stays alive.
@@ -99,7 +122,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
         onTimeout: () => <String, dynamic>{'error': 'SDK init timed out after 45 s — check network/RPC.'},
       );
 
-      debugPrint('[NodeNeo] init result: $result');
+      AppLogger.info('init result: $result');
 
       // Sync the main-isolate bridge's initialized flag with the background result.
       final bridge = GoBridge();
@@ -118,7 +141,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
             try {
               bridge.setEncryptionKey(keyHex);
             } catch (e) {
-              debugPrint('[NodeNeo] setEncryptionKey failed (non-fatal): $e');
+              AppLogger.warn('setEncryptionKey failed (non-fatal): $e');
             }
             restored = true;
           }
@@ -136,7 +159,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
         setState(() => _sdkError = result['error'] ?? 'Unknown init error');
       }
     } catch (e) {
-      debugPrint('[NodeNeo] _initSDK exception: $e');
+      AppLogger.error('_initSDK exception: $e');
       if (!mounted) return;
       setState(() => _sdkError = e.toString());
     }
@@ -211,6 +234,9 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
   }
 
   Widget _buildHome(BuildContext context) {
+    if (_runningFromDmg) {
+      return const _DmgWarningScreen();
+    }
     if (_sdkError != null) {
       return _ErrorScreen(
         error: _sdkError!,
@@ -329,6 +355,92 @@ class _ErrorScreen extends StatelessWidget {
                       child: const Text('Reset to built-in public RPCs'),
                     ),
                 ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown when the app is launched directly from a mounted DMG volume.
+class _DmgWarningScreen extends StatelessWidget {
+  const _DmgWarningScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: NeoTheme.green.withValues(alpha: 0.12),
+                    border: Border.all(color: NeoTheme.green.withValues(alpha: 0.35), width: 2),
+                  ),
+                  child: const Center(
+                    child: Icon(Icons.drive_file_move_rounded, size: 36, color: NeoTheme.green),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                const Text(
+                  'Install ${AppBrand.displayName}',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'You\'re running ${AppBrand.displayName} directly from the disk image.\n\n'
+                  'Drag ${AppBrand.displayName} into your Applications folder first, '
+                  'then open it from there. This ensures Keychain access, '
+                  'automatic updates, and proper macOS security.',
+                  style: const TextStyle(
+                    color: Color(0xFF9CA3AF),
+                    fontSize: 14,
+                    height: 1.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 28),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: NeoTheme.green.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: NeoTheme.green.withValues(alpha: 0.2)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.apps_rounded, size: 28, color: NeoTheme.green.withValues(alpha: 0.85)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Icon(Icons.arrow_forward_rounded, size: 22, color: NeoTheme.green.withValues(alpha: 0.6)),
+                      ),
+                      const Icon(Icons.folder_rounded, size: 28, color: Color(0xFF60A5FA)),
+                      const SizedBox(width: 8),
+                      const Text('/Applications', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'After moving, eject the disk image and re-open the app.',
+                  style: TextStyle(
+                    color: const Color(0xFF6B7280),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
               ],
             ),
           ),
