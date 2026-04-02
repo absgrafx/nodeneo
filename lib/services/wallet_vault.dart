@@ -21,7 +21,7 @@ class WalletVault {
       accessibility: KeychainAccessibility.first_unlock_this_device,
       accountName: 'Node Neo Wallet',
     ),
-    mOptions: MacOsOptions(),
+    mOptions: MacOsOptions(useDataProtectionKeyChain: false),
   );
 
   bool _migrated = false;
