@@ -2,7 +2,7 @@
 ///
 /// **Node Neo** — decentralised AI inference client.
 /// Powered by the Morpheus DeAI Network.
-/// Published by absgrafx (com.nodeneo.app).
+/// Published by absgrafx (com.absgrafx.nodeneo).
 class AppBrand {
   AppBrand._();
 
@@ -13,8 +13,8 @@ class AppBrand {
   static const String tagline = 'Powered by Morpheus DeAI Network';
 
   /// Wallet balance cards (home screen).
-  static const String morBalanceHelper = 'MOR required to stake for inference';
-  static const String ethBalanceHelper = 'ETH pays on-chain gas';
+  static const String morBalanceHelper = 'Stake for inference';
+  static const String ethBalanceHelper = 'Pays on-chain gas';
 
   /// HTTP User-Agent for RPC reachability checks.
   static const String rpcCheckUserAgent = 'NodeNeo-RPC-Check/1.0';

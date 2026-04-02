@@ -1,6 +1,6 @@
 # Node Neo branding assets
 
-Decentralised AI inference client, published as **Node Neo** / `com.nodeneo.app`.
+Decentralised AI inference client, published as **Node Neo** / `com.absgrafx.nodeneo`.
 
 ## Runtime assets (bundled in app)
 

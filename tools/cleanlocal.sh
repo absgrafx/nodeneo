@@ -1,6 +1,6 @@
 #!/bin/bash
 # SQLite database + local files (conversations, RPC overrides, chat storage, logs)
-rm -rf ~/Library/Application\ Support/com.nodeneo.app/nodeneo/
+rm -rf ~/Library/Application\ Support/com.absgrafx.nodeneo/nodeneo/
 
-# Keychain items (search "com.nodeneo.app" in Keychain Access)
-security delete-generic-password -s "com.nodeneo.app" 2>/dev/null; true
+# Keychain items (search "com.absgrafx.nodeneo" in Keychain Access)
+security delete-generic-password -s "com.absgrafx.nodeneo" 2>/dev/null; true

@@ -1,4 +1,4 @@
-package com.nodeneo.app
+package com.absgrafx.nodeneo
 
 import io.flutter.embedding.android.FlutterActivity
 
