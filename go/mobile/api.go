@@ -146,6 +146,41 @@ func SetEncryptionKey(keyHex string) string {
 	return resultJSON(map[string]string{"status": "ok"})
 }
 
+// --- Version ---
+
+// GetProxyRouterVersion returns structured version info for the embedded
+// proxy-router SDK as JSON. The "version" field is a git-describe string
+// like "v6.0.1-test-12-g00562be9" — when it contains a hyphen-separated
+// suffix, the SDK is a fork N commits ahead of the upstream tag.
+func GetProxyRouterVersion() string {
+	ver := sdk.ProxyRouterVersion()
+	commit := sdk.ProxyRouterCommit()
+
+	isFork := false
+	upstreamTag := ver
+	forkCommits := 0
+
+	// git describe format: <tag>-<N>-g<hash> when ahead of a tag
+	parts := strings.Split(ver, "-")
+	if len(parts) >= 3 {
+		last := parts[len(parts)-1]
+		countStr := parts[len(parts)-2]
+		if strings.HasPrefix(last, "g") {
+			isFork = true
+			fmt.Sscanf(countStr, "%d", &forkCommits)
+			upstreamTag = strings.Join(parts[:len(parts)-2], "-")
+		}
+	}
+
+	return resultJSON(map[string]interface{}{
+		"version":      ver,
+		"commit":       commit,
+		"is_fork":      isFork,
+		"upstream_tag":  upstreamTag,
+		"fork_commits": forkCommits,
+	})
+}
+
 // --- Logging ---
 
 // GetLogDir returns the absolute path to the log directory.

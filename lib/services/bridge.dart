@@ -83,6 +83,10 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetLogLevel');
 
+  late final _getProxyRouterVersion = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('GetProxyRouterVersion');
+
   late final _appLog = _lib.lookupFunction<
       Void Function(Pointer<Utf8>, Pointer<Utf8>),
       void Function(Pointer<Utf8>, Pointer<Utf8>)>('AppLog');
@@ -314,6 +318,15 @@ class GoBridge {
     calloc.free(k);
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
+  }
+
+  /// Returns structured version info for the embedded proxy-router SDK.
+  /// JSON keys: version, commit, is_fork, upstream_tag, fork_commits
+  Map<String, dynamic> getProxyRouterVersion() {
+    final ptr = _getProxyRouterVersion();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return jsonDecode(result) as Map<String, dynamic>;
   }
 
   /// Returns the absolute path to the log directory (dataDir/logs/).
