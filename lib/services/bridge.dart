@@ -83,6 +83,10 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetLogLevel');
 
+  late final _appLog = _lib.lookupFunction<
+      Void Function(Pointer<Utf8>, Pointer<Utf8>),
+      void Function(Pointer<Utf8>, Pointer<Utf8>)>('AppLog');
+
   late final _startExpertAPI = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('StartExpertAPI');
@@ -337,6 +341,16 @@ class GoBridge {
     final result = ptr.toDartString();
     _freeString(ptr);
     return result;
+  }
+
+  /// Write a Flutter-side log entry to nodeneo.log (unified with Go SDK logs).
+  /// [level]: "debug", "info", "warn", "error".
+  void appLog(String level, String message) {
+    final l = level.toNativeUtf8();
+    final m = message.toNativeUtf8();
+    _appLog(l, m);
+    calloc.free(l);
+    calloc.free(m);
   }
 
   /// Start the Expert Mode API server (native proxy-router swagger + REST).

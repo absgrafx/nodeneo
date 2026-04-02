@@ -5,7 +5,7 @@
 - **Single source of truth:** [`lib/constants/app_brand.dart`](../lib/constants/app_brand.dart) — change **`AppBrand.displayName`** (default **`Morpheus`**).
 - That string drives: **home AppBar**, **lock screen** headline, **MaterialApp.title**, **Network** explainer copy, **Face ID / Touch ID** reason string, etc.
 - **Splash / launcher icons** are PNGs from [`assets/branding/`](../assets/branding/README.md) — rerun `make brand-assets` or `make dev-macos` after changing vectors.
-- Internal identifiers (Dart `RedPillApp`, package name `redpill`, bundle IDs) are unchanged unless you rename the project deliberately.
+- Internal identifiers (Dart `NodeNeoApp`, package name `nodeneo`, bundle IDs `com.absgrafx.nodeneo`) reflect the current project name.
 
 ### Naming ideas (same list as in `app_brand.dart`)
 

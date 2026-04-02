@@ -1,4 +1,4 @@
-module github.com/absgrafx/redpill
+module github.com/absgrafx/nodeneo
 
 go 1.26
 
@@ -12,7 +12,7 @@ require (
 	modernc.org/sqlite v1.29.6
 )
 
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260401165602-d39fea0a8307
+replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260402200226-00562be9c4e3
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
