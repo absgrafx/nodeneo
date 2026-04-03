@@ -37,7 +37,7 @@ Goal: Prove the architecture works. Go library compiles, Flutter talks to it, wa
 | 0.12 | Onboarding screen — wire to real wallet   | DONE        | Real BIP-39 create + mnemonic backup flow  |
 | 0.15 | Home screen — live balance + models       | DONE        | Real chain balance + active models HTTP    |
 | 0.16 | Active models HTTP endpoint integration   | DONE        | 5-min cache, hash invalidation, chain fallback |
-| 0.17 | CocoaPods + entitlements setup            | DONE        | network.client, path_provider plugin       |
+| 0.17 | CocoaPods + entitlements setup            | DONE        | Unsandboxed, hardened runtime, keychain-access-groups |
 | 1.0  | Model tap → session → chat (MVP)          | DONE        | CreateConversation FFI, ChatScreen, SendPrompt |
 
 

@@ -34,7 +34,7 @@ jobs:
       tag_name: ${{ steps.semver.outputs.tag_name }}
       vfull: ${{ steps.semver.outputs.vfull }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -90,7 +90,7 @@ jobs:
       TAG_NAME: ${{ needs.generate-tag.outputs.tag_name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ── Toolchains ──
       - uses: subosito/flutter-action@v2
@@ -99,10 +99,10 @@ jobs:
           channel: stable
           cache: true
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: go/go.sum
+          cache-dependency-path: go/go.mod
 
       - name: Install Python dependencies (branding pipeline)
         run: pip3 install --break-system-packages cairosvg
@@ -291,7 +291,7 @@ jobs:
 
       # ── Upload artifact (all branches) ──
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.DMG_NAME }}
           path: ${{ env.DMG_PATH }}
