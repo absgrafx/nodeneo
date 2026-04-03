@@ -42,7 +42,7 @@ jobs:
       - name: Compute next version
         id: semver
         run: |
-          VMAJ_NEW=1
+          VMAJ_NEW=2
           VMIN_NEW=0
           VPAT_NEW=0
 
