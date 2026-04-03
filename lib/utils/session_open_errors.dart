@@ -252,9 +252,9 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
 
   if (lower.contains('execution reverted')) {
     return SessionOpenErrorParts(
-      headline: 'The smart contract rejected the transaction.',
-      supporting: 'Something in the on-chain step did not satisfy the contract (allowance, stake, timing, etc.).',
-      whatNext: 'Check balances above, adjust session length, or try another model.',
+      headline: 'Transaction timing conflict.',
+      supporting: 'The on-chain session transaction reverted — this usually happens when a prior approval hasn\'t fully propagated across network nodes.',
+      whatNext: 'Tap Retry — it typically succeeds on the next attempt. If it keeps failing, try a shorter session or different model.',
       rawTechnical: technical,
     );
   }
