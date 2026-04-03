@@ -12,7 +12,7 @@ require (
 	modernc.org/sqlite v1.29.6
 )
 
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260403174633-4880e68bd8f7
+replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260403203413-7a3d7d4dce0c
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
