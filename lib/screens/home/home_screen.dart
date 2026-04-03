@@ -19,12 +19,10 @@ import '../../widgets/crypto_token_icons.dart';
 import '../chat/chat_screen.dart';
 import '../chat/conversation_transcript_screen.dart';
 import '../security/security_settings_screen.dart';
-import '../sessions/on_chain_sessions_screen.dart';
-import '../settings/expert_mode_screen.dart';
-import '../settings/log_settings_screen.dart';
-import '../settings/session_length_settings_screen.dart';
+import '../settings/expert_screen.dart';
+import '../settings/sessions_screen.dart';
+import '../settings/wallet_screen.dart';
 import '../../widgets/session_close_flow.dart';
-import '../wallet/wallet_security_actions.dart';
 import '../../widgets/send_token_sheet.dart';
 
 
@@ -65,12 +63,12 @@ String conversationMetaLine(
 
 class HomeScreen extends StatefulWidget {
   final Future<void> Function()? onWalletErased;
-  final Future<void> Function()? onOpenNetworkSettings;
+  final Future<void> Function()? onRpcChanged;
 
   const HomeScreen({
     super.key,
     this.onWalletErased,
-    this.onOpenNetworkSettings,
+    this.onRpcChanged,
   });
 
   @override
@@ -376,8 +374,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         title: const Text('Delete conversation?'),
         content: const Text(
           'Removes this thread from this device and submits an on-chain close if a session is still open '
-          '(same as ✕ — stake returns per contract rules). If the network refuses the close, the thread '
-          'is still removed locally and you can retry from Network / Open on-chain sessions.',
+          '(same as close — stake returns per contract rules). If the network refuses the close, the thread '
+          'is still removed locally and you can retry from Settings > Sessions.',
         ),
         actions: [
           TextButton(
@@ -401,7 +399,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Conversation removed locally. On-chain close failed — check Open on-chain sessions or retry.\n$warn',
+              'Conversation removed locally. On-chain close failed — check Sessions in Settings or retry.\n$warn',
             ),
           ),
         );
@@ -622,69 +620,93 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh, size: 22),
+            onPressed: () {
+              _loadWallet();
+              _loadModels();
+              _loadConversations();
+            },
+          ),
           PopupMenuButton<String>(
-            tooltip: 'More',
+            tooltip: 'Settings',
             icon: const Icon(Icons.more_horiz, size: 24),
             onSelected: (value) async {
-              if (value == 'refresh') {
-                _loadWallet();
-                _loadModels();
-                _loadConversations();
-              } else if (value == 'network') {
-                final cb = widget.onOpenNetworkSettings;
-                if (cb != null) await cb();
-              } else if (value == 'session_length') {
+              if (value == 'wallet') {
                 await Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
-                    builder: (_) => const SessionLengthSettingsScreen(),
+                    builder: (_) => WalletScreen(
+                      onWalletErased: widget.onWalletErased,
+                    ),
                   ),
                 );
               } else if (value == 'sessions') {
                 await Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
-                    builder: (_) => const OnChainSessionsScreen(),
-                  ),
-                );
-              } else if (value == 'logs') {
-                await Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const LogSettingsScreen(),
+                    builder: (_) => const SessionsScreen(),
                   ),
                 );
               } else if (value == 'expert') {
-                await Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ExpertModeScreen(),
+                final rpcChanged = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute<bool>(
+                    builder: (_) => const ExpertScreen(),
                   ),
                 );
+                if (rpcChanged == true) {
+                  await widget.onRpcChanged?.call();
+                }
               } else if (value == 'security') {
-                Navigator.of(context).push<void>(
+                await Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
                     builder: (_) => const SecuritySettingsScreen(),
                   ),
-                );
-              } else if (value == 'export_key') {
-                await showExportPrivateKeyFlow(context);
-              } else if (value == 'erase_wallet') {
-                await showEraseWalletFlow(
-                  context,
-                  onWalletErased: widget.onWalletErased,
                 );
               } else if (value == 'about') {
                 _showAboutSheet(context);
               }
             },
-            itemBuilder: (context) => [
-              const PopupMenuItem<String>(
-                value: 'refresh',
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'wallet',
                 child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.refresh, size: 22),
-                  title: Text('Refresh'),
+                  leading: Icon(Icons.account_balance_wallet_outlined, size: 22),
+                  title: Text('Wallet'),
+                  subtitle: Text(
+                    'Export key · manage',
+                    style: TextStyle(fontSize: 11),
+                  ),
                 ),
               ),
-              const PopupMenuItem<String>(
+              PopupMenuItem<String>(
+                value: 'sessions',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.timer_outlined, size: 22),
+                  title: Text('Sessions'),
+                  subtitle: Text(
+                    'Duration · active sessions',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'expert',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.terminal, size: 22),
+                  title: Text('Expert'),
+                  subtitle: Text(
+                    'Network · logs · REST API',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ),
+              PopupMenuItem<String>(
                 value: 'security',
                 child: ListTile(
                   dense: true,
@@ -697,113 +719,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   ),
                 ),
               ),
-              const PopupMenuItem<String>(
-                value: 'network',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.settings_ethernet, size: 22),
-                  title: Text('Network'),
-                  subtitle: Text(
-                    'Custom Base RPC (optional)',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'session_length',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.timer_outlined, size: 22),
-                  title: Text('Session length'),
-                  subtitle: Text(
-                    'Default on-chain chat duration',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'sessions',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.hub_outlined, size: 22),
-                  title: Text('Sessions'),
-                  subtitle: Text(
-                    'Open on-chain inference sessions',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'logs',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.article_outlined, size: 22),
-                  title: Text('Logs'),
-                  subtitle: Text(
-                    'Log level · log files',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'expert',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.terminal, size: 22),
-                  title: Text('Expert Mode'),
-                  subtitle: Text(
-                    'Local REST API · scripting',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem<String>(
-                value: 'export_key',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    Icons.key_outlined,
-                    size: 22,
-                    color: NeoTheme.amber,
-                  ),
-                  title: Text('Export private key'),
-                  subtitle: Text(
-                    'MetaMask, Rabby, etc.',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
               PopupMenuItem<String>(
-                value: 'erase_wallet',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    Icons.delete_forever_outlined,
-                    size: 22,
-                    color: NeoTheme.red.withValues(alpha: 0.9),
-                  ),
-                  title: Text(
-                    'Erase wallet on this device',
-                    style: TextStyle(
-                      color: NeoTheme.red.withValues(alpha: 0.95),
-                    ),
-                  ),
-                  subtitle: const Text(
-                    'Clears saved phrase; on-chain funds unchanged',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem<String>(
                 value: 'about',
                 child: ListTile(
                   dense: true,
@@ -830,7 +746,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 morBalance: _morBalance,
                 rpcChecking: _rpcChecking,
                 rpcReachable: _rpcReachable,
-                onOpenNetworkSettings: widget.onOpenNetworkSettings,
+                onOpenExpert: () async {
+                  final rpcChanged = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute<bool>(
+                      builder: (_) => const ExpertScreen(),
+                    ),
+                  );
+                  if (rpcChanged == true) {
+                    await widget.onRpcChanged?.call();
+                  }
+                },
                 onSendMor: () {
                   showSendTokenSheet(
                     context,
@@ -1509,7 +1434,7 @@ class _WalletCard extends StatelessWidget {
   final String morBalance;
   final bool rpcChecking;
   final bool? rpcReachable;
-  final Future<void> Function()? onOpenNetworkSettings;
+  final Future<void> Function()? onOpenExpert;
   final VoidCallback onSendMor;
   final VoidCallback onSendEth;
 
@@ -1519,7 +1444,7 @@ class _WalletCard extends StatelessWidget {
     required this.morBalance,
     required this.rpcChecking,
     required this.rpcReachable,
-    required this.onOpenNetworkSettings,
+    required this.onOpenExpert,
     required this.onSendMor,
     required this.onSendEth,
   });
@@ -1614,14 +1539,14 @@ class _WalletCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Tooltip(
                       message: rpcChecking
-                          ? 'Checking whether your Base RPC URL(s) respond…'
+                          ? 'Checking whether your Base RPC URL(s) respond...'
                           : rpcReachable == true
                               ? 'At least one configured Base RPC URL is reachable (same list the app uses).'
-                              : 'No configured Base RPC URL responded. Tap to open network settings.',
+                              : 'No configured Base RPC URL responded. Tap to open Expert settings.',
                       child: _WalletRpcStatusPill(
                         rpcChecking: rpcChecking,
                         rpcReachable: rpcReachable,
-                        onOpenNetworkSettings: onOpenNetworkSettings,
+                        onOpenExpert: onOpenExpert,
                       ),
                     ),
                   ],
@@ -1955,12 +1880,12 @@ class _HistoryConversationTile extends StatelessWidget {
 class _WalletRpcStatusPill extends StatelessWidget {
   final bool rpcChecking;
   final bool? rpcReachable;
-  final Future<void> Function()? onOpenNetworkSettings;
+  final Future<void> Function()? onOpenExpert;
 
   const _WalletRpcStatusPill({
     required this.rpcChecking,
     required this.rpcReachable,
-    required this.onOpenNetworkSettings,
+    required this.onOpenExpert,
   });
 
   @override
@@ -2004,8 +1929,8 @@ class _WalletRpcStatusPill extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: !ok && onOpenNetworkSettings != null
-            ? () => onOpenNetworkSettings!()
+        onTap: !ok && onOpenExpert != null
+            ? () => onOpenExpert!()
             : null,
         borderRadius: BorderRadius.circular(6),
         child: Container(
