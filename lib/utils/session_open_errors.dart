@@ -250,6 +250,39 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
     );
   }
 
+  if (lower.contains('not mined after all escalation') ||
+      lower.contains('transaction not mined')) {
+    return SessionOpenErrorParts(
+      headline: 'Transaction could not be confirmed on-chain.',
+      supporting: 'The network may be congested — the transaction was submitted but not mined in time.',
+      whatNext: 'Wait a moment and tap Retry.',
+      rawTechnical: technical,
+    );
+  }
+
+  if (lower.contains('failed to connect to provider') ||
+      lower.contains('provider request failed') ||
+      lower.contains('failed to initiate session')) {
+    return SessionOpenErrorParts(
+      headline: 'Could not reach the provider.',
+      supporting: 'The provider\'s endpoint is not responding — this is a provider-side issue.',
+      whatNext: 'Try a different model or check back later when the provider may be online.',
+      rawTechnical: technical,
+    );
+  }
+
+  if (lower.contains('connection refused') ||
+      lower.contains('connection reset') ||
+      lower.contains('broken pipe') ||
+      lower.contains('eof')) {
+    return SessionOpenErrorParts(
+      headline: 'Network connection dropped.',
+      supporting: 'The RPC node or provider closed the connection unexpectedly.',
+      whatNext: 'Check your network, or switch RPC in Expert Mode > Network. Then tap Retry.',
+      rawTechnical: technical,
+    );
+  }
+
   if (lower.contains('execution reverted')) {
     return SessionOpenErrorParts(
       headline: 'Transaction timing conflict.',
@@ -263,6 +296,14 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
     return SessionOpenErrorParts(
       headline: 'Wallet transaction ordering conflict.',
       whatNext: 'Wait for pending transactions, then tap Retry.',
+      rawTechnical: technical,
+    );
+  }
+
+  if (lower.contains('max gas price limit exceeded')) {
+    return SessionOpenErrorParts(
+      headline: 'Gas prices are unusually high right now.',
+      whatNext: 'Wait for network fees to drop, then try again.',
       rawTechnical: technical,
     );
   }
@@ -300,4 +341,69 @@ String sessionOpenErrorSnackMessage(String? raw) {
   var out = sb.toString().trim();
   if (out.length > 220) return '${out.substring(0, 217)}…';
   return out;
+}
+
+// ── Close session error classification ───────────────────────────
+
+/// User-facing message for close-session failures shown in SnackBars
+/// on the Sessions screen.
+String sessionCloseErrorMessage(String? raw) {
+  if (raw == null || raw.trim().isEmpty) {
+    return 'Could not close session. Check your network and try again.';
+  }
+  final lower = raw.toLowerCase();
+
+  if (lower.contains('insufficient allowance')) {
+    return 'Protocol funding pool issue — the network cannot settle the '
+        'provider payment right now. This is not a wallet problem. '
+        'Auto-close will keep retrying.';
+  }
+
+  if (lower.contains('insufficient funds for gas') ||
+      lower.contains('insufficient funds for intrinsic')) {
+    return 'Not enough ETH for gas to close this session. '
+        'Add a small amount of ETH to your wallet, then try again.';
+  }
+
+  if (lower.contains('insufficient mor') ||
+      lower.contains('transfer amount exceeds balance')) {
+    return 'Not enough MOR in wallet to settle this session. '
+        'Add MOR, or wait for auto-close to retry.';
+  }
+
+  if (lower.contains('not mined after all escalation') ||
+      lower.contains('transaction not mined')) {
+    return 'Close transaction was not confirmed — the network may be '
+        'congested. Try again shortly, or auto-close will retry.';
+  }
+
+  if (lower.contains('execution reverted')) {
+    return 'Close transaction reverted — this can be a timing issue. '
+        'Try again in a moment, or auto-close will retry.';
+  }
+
+  if (lower.contains('nonce too low') ||
+      lower.contains('replacement transaction')) {
+    return 'Transaction ordering conflict. Wait a moment for pending '
+        'transactions to clear, then try again.';
+  }
+
+  if (lower.contains('failed to get session report')) {
+    return 'Could not generate session usage report. '
+        'Try closing again, or let auto-close handle it.';
+  }
+
+  if (lower.contains('connection refused') ||
+      lower.contains('timeout') ||
+      lower.contains('connection reset')) {
+    return 'Network connection issue. Check your connection and try again.';
+  }
+
+  var msg = raw.trim();
+  const prefix = 'failed to send transaction:';
+  if (msg.toLowerCase().startsWith(prefix)) {
+    msg = msg.substring(prefix.length).trim();
+  }
+  if (msg.length > 200) msg = '${msg.substring(0, 197)}…';
+  return msg;
 }

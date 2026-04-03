@@ -908,22 +908,28 @@ class _SectionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: NeoTheme.ethBlue.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: NeoTheme.ethBlue.withValues(alpha: 0.20)),
-      ),
-      child: Center(
-        child: Text(
-          title,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.6,
-            color: NeoTheme.ethBlue.withValues(alpha: 0.85),
+    return Transform.translate(
+      offset: const Offset(-20, 0),
+      child: SizedBox(
+        width: MediaQuery.sizeOf(context).width,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: NeoTheme.amber.withValues(alpha: 0.10),
+            border: Border.symmetric(
+              horizontal: BorderSide(color: NeoTheme.amber.withValues(alpha: 0.25)),
+            ),
+          ),
+          child: Center(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+                color: NeoTheme.amber.withValues(alpha: 0.90),
+              ),
+            ),
           ),
         ),
       ),
