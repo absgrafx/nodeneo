@@ -83,6 +83,10 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetLogLevel');
 
+  late final _setSessionMaintenanceInterval = _lib.lookupFunction<
+      Pointer<Utf8> Function(Int64),
+      Pointer<Utf8> Function(int)>('SetSessionMaintenanceInterval');
+
   late final _getProxyRouterVersion = _lib.lookupFunction<
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetProxyRouterVersion');
@@ -354,6 +358,16 @@ class GoBridge {
     final result = ptr.toDartString();
     _freeString(ptr);
     return result;
+  }
+
+  /// Sets how often the SDK checks for expired sessions and auto-closes them.
+  /// [seconds]: interval in seconds; 0 disables auto-close. Default is 900 (15 min).
+  void setSessionMaintenanceInterval(int seconds) {
+    final ptr = _setSessionMaintenanceInterval(seconds);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
   }
 
   /// Write a Flutter-side log entry to nodeneo.log (unified with Go SDK logs).
