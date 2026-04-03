@@ -22,7 +22,7 @@ class AppLockService {
       accessibility: KeychainAccessibility.first_unlock_this_device,
       accountName: 'Node Neo App Lock',
     ),
-    mOptions: MacOsOptions(useDataProtectionKeyChain: false),
+    mOptions: MacOsOptions(),
   );
 
   /// When false, [AppLockGate] shows the lock screen.
