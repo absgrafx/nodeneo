@@ -18,14 +18,6 @@ class WalletScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          Text(
-            'EXPORT',
-            style: theme.textTheme.labelSmall?.copyWith(
-              letterSpacing: 0.8,
-              color: theme.hintColor,
-            ),
-          ),
-          const SizedBox(height: 12),
           _SettingsCard(
             icon: Icons.key_outlined,
             iconColor: NeoTheme.amber,
@@ -60,11 +52,24 @@ class WalletScreen extends StatelessWidget {
 
           const SizedBox(height: 48),
 
-          Text(
-            'DANGER ZONE',
-            style: theme.textTheme.labelSmall?.copyWith(
-              letterSpacing: 0.8,
-              color: NeoTheme.red.withValues(alpha: 0.8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            decoration: BoxDecoration(
+              color: NeoTheme.red.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: NeoTheme.red.withValues(alpha: 0.15)),
+            ),
+            child: Center(
+              child: Text(
+                'Danger Zone',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
+                  color: NeoTheme.red.withValues(alpha: 0.7),
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 12),

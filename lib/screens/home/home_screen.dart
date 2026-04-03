@@ -699,7 +699,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.terminal, size: 22),
-                  title: Text('Expert'),
+                  title: Text('Expert Mode'),
                   subtitle: Text(
                     'Network · logs · REST API',
                     style: TextStyle(fontSize: 11),

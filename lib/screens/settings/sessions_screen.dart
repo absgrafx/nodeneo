@@ -240,14 +240,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           // ── Section 1: Default Duration ──
-          Text(
-            'DEFAULT DURATION',
-            style: theme.textTheme.labelSmall?.copyWith(
-              letterSpacing: 0.8,
-              color: theme.hintColor,
-            ),
-          ),
-          const SizedBox(height: 12),
+          const _SectionBanner(title: 'Default Duration'),
+          const SizedBox(height: 16),
           if (_durationLoading)
             const Center(
               child: Padding(
@@ -325,19 +319,13 @@ class _SessionsScreenState extends State<SessionsScreen> {
           const SizedBox(height: 32),
 
           // ── Section 2: Active Sessions ──
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'ACTIVE SESSIONS',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    letterSpacing: 0.8,
-                    color: theme.hintColor,
-                  ),
-                ),
-              ),
-              if (!_sessionsLoading && _sessions.length >= 2)
-                _closingAll
+          const _SectionBanner(title: 'Active Sessions'),
+          if (!_sessionsLoading && _sessions.length >= 2)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: _closingAll
                     ? const SizedBox(
                         width: 18,
                         height: 18,
@@ -360,8 +348,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
                           ),
                         ),
                       ),
-            ],
-          ),
+              ),
+            ),
           const SizedBox(height: 12),
 
           if (_sessionsLoading)
@@ -511,6 +499,38 @@ class _SessionsScreenState extends State<SessionsScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Full-width section banner ──────────────────────────────────
+
+class _SectionBanner extends StatelessWidget {
+  final String title;
+
+  const _SectionBanner({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: NeoTheme.ethBlue.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: NeoTheme.ethBlue.withValues(alpha: 0.20)),
+      ),
+      child: Center(
+        child: Text(
+          title,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+            color: NeoTheme.ethBlue.withValues(alpha: 0.85),
+          ),
+        ),
       ),
     );
   }
