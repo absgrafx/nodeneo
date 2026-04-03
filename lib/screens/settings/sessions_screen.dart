@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/bridge.dart';
 import '../../services/session_duration_store.dart';
 import '../../theme.dart';
+import '../../utils/session_open_errors.dart';
 import '../../widgets/session_close_flow.dart';
 
 /// Combined Sessions screen: default duration picker + active on-chain sessions.
@@ -142,8 +143,10 @@ class _SessionsScreenState extends State<SessionsScreen> {
       await _refreshSessions();
     } on GoBridgeException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(sessionCloseErrorMessage(e.message)),
+          duration: const Duration(seconds: 8),
+        ));
       }
     } finally {
       if (mounted) setState(() => _closing.remove(sid));
@@ -197,9 +200,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
         GoBridge().closeSession(sid);
         closed++;
       } on GoBridgeException catch (e) {
-        errors.add('${sid.substring(0, 8)}...: ${e.message}');
+        errors.add('${sid.substring(0, 8)}…: ${sessionCloseErrorMessage(e.message)}');
       } catch (e) {
-        errors.add('${sid.substring(0, 8)}...: $e');
+        errors.add('${sid.substring(0, 8)}…: $e');
       } finally {
         if (mounted) setState(() => _closing.remove(sid));
       }
@@ -513,22 +516,28 @@ class _SectionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: NeoTheme.ethBlue.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: NeoTheme.ethBlue.withValues(alpha: 0.20)),
-      ),
-      child: Center(
-        child: Text(
-          title,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.6,
-            color: NeoTheme.ethBlue.withValues(alpha: 0.85),
+    return Transform.translate(
+      offset: const Offset(-20, 0),
+      child: SizedBox(
+        width: MediaQuery.sizeOf(context).width,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: NeoTheme.amber.withValues(alpha: 0.10),
+            border: Border.symmetric(
+              horizontal: BorderSide(color: NeoTheme.amber.withValues(alpha: 0.25)),
+            ),
+          ),
+          child: Center(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+                color: NeoTheme.amber.withValues(alpha: 0.90),
+              ),
+            ),
           ),
         ),
       ),
