@@ -66,6 +66,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _sessionId;
   final List<_ChatBubble> _messages = [];
   bool _sending = false;
+  bool _reopeningSession = false;
 
   /// Persisted: request SSE/streaming from the provider vs one-shot completion.
   bool _preferStreaming = ChatStreamingPreferenceStore.defaultStreaming;
@@ -410,6 +411,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     var sid = _sessionId;
     if (sid == null || sid.isEmpty) {
+      if (mounted) setState(() => _reopeningSession = true);
       try {
         sid = await _openSessionAndPersist();
       } on GoBridgeException catch (e) {
@@ -420,10 +422,12 @@ class _ChatScreenState extends State<ChatScreen> {
           }
           _input.text = text;
           _sending = false;
+          _reopeningSession = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(sessionOpenErrorSnackMessage(e.message)),
+            duration: const Duration(seconds: 8),
             action: SnackBarAction(
               label: 'Retry',
               onPressed: () {
@@ -442,13 +446,15 @@ class _ChatScreenState extends State<ChatScreen> {
           }
           _input.text = text;
           _sending = false;
+          _reopeningSession = false;
         });
         return;
       }
+      if (mounted) setState(() => _reopeningSession = false);
     }
 
     if (sid == null || sid.isEmpty) {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) setState(() { _sending = false; _reopeningSession = false; });
       return;
     }
 
@@ -541,11 +547,18 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _recoverSession() async {
     final cid = _conversationId;
     if (cid == null || !mounted) return;
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _reopeningSession = true;
+      _sessionId = null;
+    });
     try {
       await _openSessionAndPersist();
       if (!mounted) return;
-      setState(() => _sending = false);
+      setState(() {
+        _sending = false;
+        _reopeningSession = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('New session opened — send your message again.')),
@@ -553,13 +566,28 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } on GoBridgeException catch (e) {
       if (mounted) {
-        setState(() => _sending = false);
+        setState(() {
+          _sending = false;
+          _reopeningSession = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(sessionOpenErrorSnackMessage(e.message))),
+          SnackBar(
+            content: Text(sessionOpenErrorSnackMessage(e.message)),
+            duration: const Duration(seconds: 8),
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: _recoverSession,
+            ),
+          ),
         );
       }
     } catch (e) {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _reopeningSession = false;
+        });
+      }
     }
   }
 
@@ -795,17 +823,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   itemCount: _messages.length + (_sending ? 1 : 0),
                   itemBuilder: (ctx, i) {
                     if (_sending && i == _messages.length) {
-                      return const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                         child: Row(
                           children: [
-                            SizedBox(
+                            const SizedBox(
                               width: 18,
                               height: 18,
                               child: CircularProgressIndicator(strokeWidth: 2, color: NeoTheme.green),
                             ),
-                            SizedBox(width: 12),
-                            Text('Thinking…', style: TextStyle(color: Color(0xFF6B7280), fontSize: 13)),
+                            const SizedBox(width: 12),
+                            Text(
+                              _reopeningSession
+                                  ? 'Reopening session (staking MOR)…'
+                                  : 'Thinking…',
+                              style: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+                            ),
                           ],
                         ),
                       );
@@ -873,9 +906,30 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                             if (b.isError && b.onReconnect != null) ...[
                               const SizedBox(height: 10),
-                              FilledButton.tonal(
-                                onPressed: _sending ? null : b.onReconnect,
-                                child: const Text('Reconnect session'),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  FilledButton.tonal(
+                                    onPressed: _sending ? null : b.onReconnect,
+                                    child: const Text('Reconnect session'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  TextButton(
+                                    onPressed: () {
+                                      setState(() => _messages.remove(b));
+                                    },
+                                    child: const Text('Dismiss'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (b.isError && b.onReconnect == null) ...[
+                              const SizedBox(height: 10),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() => _messages.remove(b));
+                                },
+                                child: const Text('Dismiss'),
                               ),
                             ],
                           ],
