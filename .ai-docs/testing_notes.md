@@ -23,8 +23,8 @@ Hot-wallet demo on **Base mainnet**. This doc covers persistence, moving funds, 
 
 ## Wallet persistence (normal use)
 
-- The **BIP-39 mnemonic** is stored in the OS **secure store**:
-    - **macOS:** Keychain (via `flutter_secure_storage`). If Keychain returns **-34018** (missing entitlement / unsigned debug), the app falls back to **`Application Support/nodeneo/.mnemonic_vault`** inside the app container — still sandboxed, but not hardware-backed like Keychain. After a successful Keychain write, the fallback file is removed.
+- The **BIP-39 mnemonic** (or private key) is stored in the OS **secure store**:
+    - **macOS:** Data Protection Keychain (via `flutter_secure_storage`, provisioning profile + `keychain-access-groups` entitlement). The app is **unsandboxed** — data lives in the normal `~/Library/Application Support/` location.
     - **iOS / Android:** Keychain / Keystore as configured by the plugin
 - The **Go SDK** only holds keys **in memory**. On each cold start, the app **re-imports** the saved mnemonic so you keep the **same address** and balances.
 - **Export private key:** **Wallet** (toolbar icon on home) → **Export private key** — use this to import the same account into **MetaMask** (or another wallet). Base mainnet, same derivation path as the app (`m/44'/60'/0'/0/0`).
@@ -63,15 +63,15 @@ Use this when you want to be sure **no Node Neo secrets** remain, or the app sti
 2. Search for **`nodeneo`**, **`flutter_secure_storage`**, or your app name.
 3. Delete entries tied to **Node Neo** / **com.absgrafx.nodeneo** (inspect “Kind” / account if unsure).
 
-### B. App sandbox data (SQLite, chats, preferences)
+### B. App data (SQLite, chats, logs)
 
-Sandboxed macOS app data lives under the **container** (paths can vary slightly by install):
+macOS app data lives under Application Support:
 
 ```text
-~/Library/Containers/com.absgrafx.nodeneo/Data/Library/Application Support/
+~/Library/Application Support/com.absgrafx.nodeneo/nodeneo/
 ```
 
-Look for a **`nodeneo`** folder (contains `nodeneo.db`, chat files, etc.). **Quit the app**, then delete that folder to wipe local DBs.  
+Contains `nodeneo.db` (chat / session data) and `logs/nodeneo.log`. **Quit the app**, then delete that folder to wipe local DBs.  
 This does **not** remove Keychain items by itself — do **A** or in-app **Erase** for secrets.
 
 ### C. Full container nuke (last resort)

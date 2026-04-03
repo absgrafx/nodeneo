@@ -149,7 +149,7 @@ These were the original implementations before the SDK integration. They still e
 - `README.md` — updated for absgrafx org
 - `Makefile` — go-test, go-macos (c-shared build), flutter-macos, run-macos targets
 - `.gitignore` — Go vendor, Flutter build, IDE, secrets
-- Entitlements: `com.apple.security.network.client` added for outbound RPC
+- Entitlements: unsandboxed (`app-sandbox = false`), `disable-library-validation` for Go dylib, `keychain-access-groups` for Data Protection Keychain
 
 ---
 

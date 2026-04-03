@@ -21,13 +21,16 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _mnemonicController = TextEditingController();
+  final _privateKeyController = TextEditingController();
   bool _isCreating = false;
   String? _createdMnemonic;
   String? _createdAddress;
+  bool _importByPrivateKey = false;
 
   @override
   void dispose() {
     _mnemonicController.dispose();
+    _privateKeyController.dispose();
     super.dispose();
   }
 
@@ -70,9 +73,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     widget.onComplete();
   }
 
-  void _activateDbEncryption(String mnemonic) {
+  void _activateDbEncryption(String secret) {
     try {
-      final keyBytes = sha256.convert(utf8.encode(mnemonic.trim())).bytes;
+      final keyBytes = sha256.convert(utf8.encode(secret.trim())).bytes;
       final keyHex = keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
       GoBridge().setEncryptionKey(keyHex);
     } catch (e) {
@@ -80,7 +83,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  Future<void> _importWallet() async {
+  Future<void> _importWalletByMnemonic() async {
     final mnemonic = _mnemonicController.text.trim();
     if (mnemonic.split(' ').length < 12) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -101,6 +104,41 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           SnackBar(content: Text('Import failed: ${e.message}')),
         );
       }
+    }
+  }
+
+  Future<void> _importWalletByPrivateKey() async {
+    var hexKey = _privateKeyController.text.trim();
+    if (hexKey.startsWith('0x') || hexKey.startsWith('0X')) {
+      hexKey = hexKey.substring(2);
+    }
+    if (hexKey.length != 64 || !RegExp(r'^[0-9a-fA-F]+$').hasMatch(hexKey)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid 64-character hex private key')),
+      );
+      return;
+    }
+    try {
+      final bridge = GoBridge();
+      bridge.importWalletPrivateKey(hexKey);
+      await WalletVault.instance.savePrivateKey(hexKey);
+      _activateDbEncryption(hexKey);
+      if (!mounted) return;
+      widget.onComplete();
+    } on GoBridgeException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Import failed: ${e.message}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _importWallet() async {
+    if (_importByPrivateKey) {
+      await _importWalletByPrivateKey();
+    } else {
+      await _importWalletByMnemonic();
     }
   }
 
@@ -176,14 +214,97 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  TextField(
-                    controller: _mnemonicController,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      hintText: 'Enter your 12 or 24-word recovery phrase...',
+                  // Import method toggle
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF374151)),
                     ),
-                    style: const TextStyle(fontSize: 14),
+                    padding: const EdgeInsets.all(3),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _importByPrivateKey = false),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              decoration: BoxDecoration(
+                                color: !_importByPrivateKey
+                                    ? NeoTheme.green.withValues(alpha: 0.15)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(8),
+                                border: !_importByPrivateKey
+                                    ? Border.all(color: NeoTheme.green.withValues(alpha: 0.3))
+                                    : null,
+                              ),
+                              child: Text(
+                                'Recovery Phrase',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: !_importByPrivateKey
+                                      ? NeoTheme.green
+                                      : const Color(0xFF6B7280),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _importByPrivateKey = true),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              decoration: BoxDecoration(
+                                color: _importByPrivateKey
+                                    ? NeoTheme.green.withValues(alpha: 0.15)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(8),
+                                border: _importByPrivateKey
+                                    ? Border.all(color: NeoTheme.green.withValues(alpha: 0.3))
+                                    : null,
+                              ),
+                              child: Text(
+                                'Private Key',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _importByPrivateKey
+                                      ? NeoTheme.green
+                                      : const Color(0xFF6B7280),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(height: 12),
+
+                  if (_importByPrivateKey)
+                    TextField(
+                      controller: _privateKeyController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        hintText: 'Enter hex private key (with or without 0x prefix)...',
+                      ),
+                      style: const TextStyle(fontSize: 14, fontFamily: 'JetBrains Mono'),
+                    )
+                  else
+                    TextField(
+                      controller: _mnemonicController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        hintText: 'Enter your 12 or 24-word recovery phrase...',
+                      ),
+                      style: const TextStyle(fontSize: 14),
+                    ),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
