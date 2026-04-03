@@ -4,13 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../config/chain_config.dart';
-import '../../constants/app_brand.dart';
 import '../../services/bridge.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
 import '../../theme.dart';
 
-/// Combined Expert screen: Network RPC + REST API + Logging.
+/// Expert Mode screen: Network RPC + REST API.
 ///
 /// Pops with `true` when RPC settings are saved/cleared so the caller can
 /// restart the SDK.
@@ -39,21 +38,12 @@ class _ExpertScreenState extends State<ExpertScreen> {
   final _apiBaseUrlCtrl = TextEditingController();
   String _detectedIp = '';
 
-  // ── Logging state ───────────────────────────────────────────
-  String _logLevel = 'info';
-  String _logDir = '';
-  List<_LogFileInfo> _logFiles = [];
-  String _logTail = '';
-  bool _loadingTail = false;
-  final _tailScrollCtrl = ScrollController();
-
   @override
   void initState() {
     super.initState();
     _loadRpc();
     _detectLocalIp();
     _refreshApiStatus();
-    _loadLogs();
   }
 
   @override
@@ -61,7 +51,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     _rpcCtrl.dispose();
     _apiPortCtrl.dispose();
     _apiBaseUrlCtrl.dispose();
-    _tailScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -272,88 +261,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  //  LOGGING
-  // ═══════════════════════════════════════════════════════════════
-
-  void _loadLogs() {
-    try {
-      final bridge = GoBridge();
-      _logLevel = bridge.getLogLevel();
-      _logDir = bridge.getLogDir();
-    } catch (_) {}
-    _scanLogFiles();
-    _loadLogTail();
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _loadLogTail() async {
-    if (_logDir.isEmpty) return;
-    final logFile = File('$_logDir/nodeneo.log');
-    if (!logFile.existsSync()) {
-      setState(() => _logTail = '(no log file yet)');
-      return;
-    }
-    setState(() => _loadingTail = true);
-    try {
-      final lines = await logFile.readAsLines();
-      final tail =
-          lines.length <= 50 ? lines : lines.sublist(lines.length - 50);
-      if (mounted) {
-        setState(() {
-          _logTail = tail.join('\n');
-          _loadingTail = false;
-        });
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_tailScrollCtrl.hasClients) {
-            _tailScrollCtrl.jumpTo(_tailScrollCtrl.position.maxScrollExtent);
-          }
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _logTail = '(error reading log: $e)';
-          _loadingTail = false;
-        });
-      }
-    }
-  }
-
-  void _scanLogFiles() {
-    if (_logDir.isEmpty) return;
-    final dir = Directory(_logDir);
-    if (!dir.existsSync()) return;
-    final entries = dir.listSync()
-      ..sort(
-          (a, b) => b.statSync().modified.compareTo(a.statSync().modified));
-    _logFiles = entries
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.log'))
-        .map((f) {
-      final stat = f.statSync();
-      return _LogFileInfo(
-        name: f.uri.pathSegments.last,
-        path: f.path,
-        sizeKb: (stat.size / 1024).ceil(),
-        modified: stat.modified,
-      );
-    }).toList();
-  }
-
-  void _setLogLevel(String level) {
-    try {
-      GoBridge().setLogLevel(level);
-      setState(() => _logLevel = level);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Log level set to ${level.toUpperCase()}')),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed: $e')));
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
   //  BUILD
   // ═══════════════════════════════════════════════════════════════
 
@@ -383,10 +290,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   const _SectionBanner(title: 'REST API'),
                   const SizedBox(height: 16),
                   _buildApiSection(theme),
-                  const SizedBox(height: 32),
-                  const _SectionBanner(title: 'Logging'),
-                  const SizedBox(height: 16),
-                  _buildLoggingSection(theme),
                   const SizedBox(height: 24),
                 ],
               ),
@@ -481,45 +384,48 @@ class _ExpertScreenState extends State<ExpertScreen> {
             );
           }),
         ],
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: (_rpcSaving || _rpcTesting) ? null : _testRpc,
-                icon: _rpcTesting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.wifi_tethering, size: 18),
-                label: Text(_rpcTesting ? 'Testing...' : 'Test'),
+            OutlinedButton.icon(
+              onPressed: (_rpcSaving || _rpcTesting) ? null : _testRpc,
+              icon: _rpcTesting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.wifi_tethering, size: 16),
+              label: Text(_rpcTesting ? 'Testing...' : 'Test',
+                  style: const TextStyle(fontSize: 13)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton(
-                onPressed: (_rpcSaving || _rpcTesting) ? null : _saveRpc,
-                style:
-                    FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-                child: _rpcSaving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Text('Save'),
+            const SizedBox(width: 12),
+            FilledButton(
+              onPressed: (_rpcSaving || _rpcTesting) ? null : _saveRpc,
+              style: FilledButton.styleFrom(
+                backgroundColor: NeoTheme.green,
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
               ),
+              child: _rpcSaving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Text('Save', style: TextStyle(fontSize: 13)),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Center(
           child: TextButton(
             onPressed: (_rpcSaving || _rpcTesting) ? null : _useDefaultRpc,
             child: Text(
               'Clear — use built-in public RPCs',
-              style: TextStyle(fontSize: 12, color: theme.hintColor),
+              style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
           ),
         ),
@@ -637,26 +543,27 @@ class _ExpertScreenState extends State<ExpertScreen> {
           ],
         ),
         const SizedBox(height: 14),
-        if (_apiRunning)
-          FilledButton.icon(
-            onPressed: _stopApi,
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              minimumSize: const Size(double.infinity, 44),
-            ),
-            icon: const Icon(Icons.stop_circle_outlined, size: 20),
-            label: const Text('Stop API Server'),
-          )
-        else
-          FilledButton.icon(
-            onPressed: _startApi,
-            style: FilledButton.styleFrom(
-              backgroundColor: NeoTheme.green,
-              minimumSize: const Size(double.infinity, 44),
-            ),
-            icon: const Icon(Icons.play_circle_outline, size: 20),
-            label: const Text('Start API Server'),
-          ),
+        Center(
+          child: _apiRunning
+              ? FilledButton.icon(
+                  onPressed: _stopApi,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                  label: const Text('Stop API Server', style: TextStyle(fontSize: 13)),
+                )
+              : FilledButton.icon(
+                  onPressed: _startApi,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: NeoTheme.green,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  icon: const Icon(Icons.play_circle_outline, size: 18),
+                  label: const Text('Start API Server', style: TextStyle(fontSize: 13)),
+                ),
+        ),
         if (_apiRunning)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -716,187 +623,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     );
   }
 
-  // ── Logging section ──────────────────────────────────────────
-
-  Widget _buildLoggingSection(ThemeData theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.tune, size: 18),
-            const SizedBox(width: 10),
-            Text('Log Level',
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w600)),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF374151)),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _logLevel,
-                  isDense: true,
-                  items: const [
-                    DropdownMenuItem(value: 'debug', child: Text('Debug')),
-                    DropdownMenuItem(value: 'info', child: Text('Info')),
-                    DropdownMenuItem(value: 'warn', child: Text('Warning')),
-                    DropdownMenuItem(
-                        value: 'error', child: Text('Error only')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) _setLogLevel(v);
-                  },
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        if (_logDir.isNotEmpty) ...[
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF374151)),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _logDir,
-                    style: const TextStyle(
-                        fontFamily: 'JetBrains Mono',
-                        fontSize: 10,
-                        color: Color(0xFFD1D5DB)),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Copy path',
-                  icon: const Icon(Icons.copy_rounded, size: 16),
-                  style: IconButton.styleFrom(
-                    minimumSize: const Size(32, 32),
-                    padding: const EdgeInsets.all(4),
-                  ),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: _logDir));
-                    ScaffoldMessenger.of(context)
-                      ..clearSnackBars()
-                      ..showSnackBar(const SnackBar(
-                        content: Text('Log path copied'),
-                        behavior: SnackBarBehavior.floating,
-                        duration: Duration(seconds: 2),
-                      ));
-                  },
-                ),
-                if (Platform.isMacOS)
-                  IconButton(
-                    tooltip: 'Open in Finder',
-                    icon: const Icon(Icons.folder_open, size: 16),
-                    style: IconButton.styleFrom(
-                      minimumSize: const Size(32, 32),
-                      padding: const EdgeInsets.all(4),
-                    ),
-                    onPressed: () => Process.run('open', [_logDir]),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Logs rotate: 10 MB per file, up to 5 rotated files.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.hintColor, fontSize: 10),
-          ),
-        ],
-
-        if (_logFiles.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          for (final lf in _logFiles)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Row(
-                children: [
-                  const Icon(Icons.description_outlined,
-                      size: 14, color: Color(0xFF6B7280)),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(lf.name,
-                        style: const TextStyle(
-                            fontFamily: 'JetBrains Mono',
-                            fontSize: 10,
-                            color: Color(0xFFD1D5DB))),
-                  ),
-                  Text('${lf.sizeKb} KB',
-                      style: const TextStyle(
-                          fontFamily: 'JetBrains Mono',
-                          fontSize: 9,
-                          color: Color(0xFF9CA3AF))),
-                ],
-              ),
-            ),
-        ],
-
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: Text('Recent output',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600, fontSize: 13)),
-            ),
-            IconButton(
-              tooltip: 'Refresh logs',
-              icon: _loadingTail
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh, size: 18),
-              onPressed: _loadingTail ? null : _loadLogTail,
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Container(
-          width: double.infinity,
-          height: 200,
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF1E293B)),
-          ),
-          child: _loadingTail
-              ? const Center(
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Scrollbar(
-                  controller: _tailScrollCtrl,
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    controller: _tailScrollCtrl,
-                    padding: const EdgeInsets.all(8),
-                    child: SelectableText(
-                      _logTail.isEmpty ? '(empty)' : _logTail,
-                      style: const TextStyle(
-                        fontFamily: 'JetBrains Mono',
-                        fontSize: 9,
-                        color: Color(0xFFD1D5DB),
-                        height: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
 }
 
 // ── Full-width section banner ──────────────────────────────────
@@ -908,19 +634,19 @@ class _SectionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform.translate(
-      offset: const Offset(-20, 0),
-      child: SizedBox(
-        width: MediaQuery.sizeOf(context).width,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: NeoTheme.amber.withValues(alpha: 0.10),
-            border: Border.symmetric(
-              horizontal: BorderSide(color: NeoTheme.amber.withValues(alpha: 0.25)),
-            ),
-          ),
-          child: Center(
+    final screenW = MediaQuery.sizeOf(context).width;
+    return SizedBox(
+      height: 36,
+      child: Transform.translate(
+        offset: const Offset(-20, 0),
+        child: OverflowBox(
+          maxWidth: screenW,
+          maxHeight: 36,
+          alignment: Alignment.centerLeft,
+          child: Container(
+            width: screenW,
+            color: NeoTheme.amber.withValues(alpha: 0.08),
+            alignment: Alignment.center,
             child: Text(
               title,
               style: TextStyle(
@@ -996,16 +722,3 @@ class _ScopeOption extends StatelessWidget {
   }
 }
 
-class _LogFileInfo {
-  final String name;
-  final String path;
-  final int sizeKb;
-  final DateTime modified;
-
-  const _LogFileInfo({
-    required this.name,
-    required this.path,
-    required this.sizeKb,
-    required this.modified,
-  });
-}

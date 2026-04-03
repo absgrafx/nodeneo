@@ -516,19 +516,19 @@ class _SectionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform.translate(
-      offset: const Offset(-20, 0),
-      child: SizedBox(
-        width: MediaQuery.sizeOf(context).width,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: NeoTheme.amber.withValues(alpha: 0.10),
-            border: Border.symmetric(
-              horizontal: BorderSide(color: NeoTheme.amber.withValues(alpha: 0.25)),
-            ),
-          ),
-          child: Center(
+    final screenW = MediaQuery.sizeOf(context).width;
+    return SizedBox(
+      height: 36,
+      child: Transform.translate(
+        offset: const Offset(-20, 0),
+        child: OverflowBox(
+          maxWidth: screenW,
+          maxHeight: 36,
+          alignment: Alignment.centerLeft,
+          child: Container(
+            width: screenW,
+            color: NeoTheme.amber.withValues(alpha: 0.08),
+            alignment: Alignment.center,
             child: Text(
               title,
               style: TextStyle(
