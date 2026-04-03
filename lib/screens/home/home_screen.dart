@@ -4,8 +4,6 @@ import 'dart:math' show min;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
-import 'package:package_info_plus/package_info_plus.dart';
-
 import '../../app_route_observer.dart';
 import '../../constants/app_brand.dart';
 import '../../constants/network_tokens.dart';
@@ -19,6 +17,7 @@ import '../../widgets/crypto_token_icons.dart';
 import '../chat/chat_screen.dart';
 import '../chat/conversation_transcript_screen.dart';
 import '../security/security_settings_screen.dart';
+import '../settings/about_screen.dart';
 import '../settings/expert_screen.dart';
 import '../settings/sessions_screen.dart';
 import '../settings/wallet_screen.dart';
@@ -497,87 +496,44 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-  Future<void> _showAboutSheet(BuildContext context) async {
-    final theme = Theme.of(context);
-    final info = await PackageInfo.fromPlatform();
-
-    Map<String, dynamic>? prInfo;
-    try {
-      prInfo = GoBridge().getProxyRouterVersion();
-    } catch (_) {}
-
-    final appVer = info.version;
-    final buildNum = info.buildNumber;
-
-    final prVersion = prInfo?['version'] as String? ?? 'unknown';
-    final isFork = prInfo?['is_fork'] as bool? ?? false;
-    final upstreamTag = prInfo?['upstream_tag'] as String? ?? prVersion;
-    final forkCommits = prInfo?['fork_commits'] as int? ?? 0;
-
-    if (!mounted) return;
-
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: theme.colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset(
-                  'assets/branding/splash_logo.png',
-                  width: 56,
-                  height: 56,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  AppBrand.displayName,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  AppBrand.tagline,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.hintColor,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                _AboutRow(
-                  label: 'App version',
-                  value: 'v$appVer ($buildNum)',
-                  theme: theme,
-                ),
-                const SizedBox(height: 8),
-                _AboutRow(
-                  label: 'Proxy-router',
-                  value: isFork
-                      ? '$upstreamTag + $forkCommits commits (fork)'
-                      : prVersion,
-                  theme: theme,
-                ),
-                if (prInfo?['commit'] case final String c when c.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _AboutRow(
-                    label: 'SDK commit',
-                    value: c.length > 12 ? c.substring(0, 12) : c,
-                    theme: theme,
-                    mono: true,
-                  ),
-                ],
-                const SizedBox(height: 16),
-              ],
-            ),
+  Future<void> _onSettingsTap(BuildContext context, String key) async {
+    Navigator.of(context).pop(); // close the drawer first
+    if (key == 'wallet') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => WalletScreen(
+            onWalletErased: widget.onWalletErased,
           ),
-        );
-      },
-    );
+        ),
+      );
+    } else if (key == 'sessions') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const SessionsScreen(),
+        ),
+      );
+    } else if (key == 'expert') {
+      final rpcChanged = await Navigator.of(context).push<bool>(
+        MaterialPageRoute<bool>(
+          builder: (_) => const ExpertScreen(),
+        ),
+      );
+      if (rpcChanged == true) {
+        await widget.onRpcChanged?.call();
+      }
+    } else if (key == 'security') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const SecuritySettingsScreen(),
+        ),
+      );
+    } else if (key == 'about') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const AboutScreen(),
+        ),
+      );
+    }
   }
 
   @override
@@ -595,6 +551,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         onRename: (c) => _renameConversationDialog(context, c),
         onTogglePin: _togglePin,
         relativeTime: _relativeUpdated,
+      ),
+      endDrawer: _SettingsDrawer(
+        theme: theme,
+        onTap: (key) => _onSettingsTap(context, key),
       ),
       appBar: AppBar(
         automaticallyImplyLeading: true,
@@ -629,106 +589,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               _loadConversations();
             },
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.more_horiz, size: 24),
-            onSelected: (value) async {
-              if (value == 'wallet') {
-                await Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => WalletScreen(
-                      onWalletErased: widget.onWalletErased,
-                    ),
-                  ),
-                );
-              } else if (value == 'sessions') {
-                await Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SessionsScreen(),
-                  ),
-                );
-              } else if (value == 'expert') {
-                final rpcChanged = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute<bool>(
-                    builder: (_) => const ExpertScreen(),
-                  ),
-                );
-                if (rpcChanged == true) {
-                  await widget.onRpcChanged?.call();
-                }
-              } else if (value == 'security') {
-                await Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SecuritySettingsScreen(),
-                  ),
-                );
-              } else if (value == 'about') {
-                _showAboutSheet(context);
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem<String>(
-                value: 'wallet',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.account_balance_wallet_outlined, size: 22),
-                  title: Text('Wallet'),
-                  subtitle: Text(
-                    'Export key · manage',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              PopupMenuItem<String>(
-                value: 'sessions',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.timer_outlined, size: 22),
-                  title: Text('Sessions'),
-                  subtitle: Text(
-                    'Duration · active sessions',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              PopupMenuItem<String>(
-                value: 'expert',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.terminal, size: 22),
-                  title: Text('Expert Mode'),
-                  subtitle: Text(
-                    'Network · logs · REST API',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              PopupMenuItem<String>(
-                value: 'security',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.lock_outline, size: 22),
-                  title: Text('Security'),
-                  subtitle: Text(
-                    'App lock · biometrics',
-                    style: TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-              PopupMenuItem<String>(
-                value: 'about',
-                child: ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.info_outline, size: 22),
-                  title: Text('About'),
-                ),
-              ),
-            ],
+          Builder(
+            builder: (ctx) => IconButton(
+              tooltip: 'Settings',
+              icon: const Icon(Icons.more_horiz, size: 24),
+              onPressed: () => Scaffold.of(ctx).openEndDrawer(),
+            ),
           ),
         ],
       ),
@@ -2051,6 +1917,140 @@ class _BalanceChip extends StatelessWidget {
 
 // --- Model Tile ---
 
+class _SettingsDrawer extends StatelessWidget {
+  final ThemeData theme;
+  final void Function(String key) onTap;
+
+  const _SettingsDrawer({required this.theme, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final drawerWidth = min(360.0, MediaQuery.sizeOf(context).width * 0.85);
+    return Drawer(
+      width: drawerWidth,
+      backgroundColor: theme.colorScheme.surface,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DrawerHeader(
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.fromLTRB(20, 16, 16, 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest
+                    .withValues(alpha: 0.35),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Settings',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Manage your wallet, sessions, network, and preferences.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            _SettingsDrawerItem(
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Wallet',
+              subtitle: 'Export key · manage',
+              onTap: () => onTap('wallet'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.timer_outlined,
+              title: 'Sessions',
+              subtitle: 'Duration · active sessions',
+              onTap: () => onTap('sessions'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.terminal,
+              title: 'Expert Mode',
+              subtitle: 'Network · REST API',
+              onTap: () => onTap('expert'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.lock_outline,
+              title: 'Security',
+              subtitle: 'App lock · biometrics',
+              onTap: () => onTap('security'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.info_outline,
+              title: 'Version & Logs',
+              subtitle: 'About · log viewer',
+              onTap: () => onTap('about'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsDrawerItem extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _SettingsDrawerItem({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Icon(icon, size: 24, color: theme.colorScheme.onSurface.withValues(alpha: 0.7)),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, size: 20, color: theme.hintColor.withValues(alpha: 0.5)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ModelTile extends StatelessWidget {
   final ModelStatusEntry entry;
   final VoidCallback onTap;
@@ -2178,43 +2178,3 @@ class _ModelTile extends StatelessWidget {
   }
 }
 
-class _AboutRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final ThemeData theme;
-  final bool mono;
-
-  const _AboutRow({
-    required this.label,
-    required this.value,
-    required this.theme,
-    this.mono = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 110,
-          child: Text(
-            label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.hintColor,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: (mono
-                    ? theme.textTheme.bodySmall
-                        ?.copyWith(fontFamily: 'monospace')
-                    : theme.textTheme.bodySmall)
-                ?.copyWith(fontWeight: FontWeight.w600),
-          ),
-        ),
-      ],
-    );
-  }
-}
