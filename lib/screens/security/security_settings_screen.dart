@@ -1,7 +1,11 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../services/app_lock_service.dart';
+import '../../services/keychain_sync_store.dart';
+import '../../services/wallet_vault.dart';
 import '../../theme.dart';
 import 'app_lock_autofill.dart';
 import 'app_lock_setup_screen.dart';
@@ -19,6 +23,8 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
   bool _lockOn = false;
   bool _bioOn = false;
   bool _bioAvailable = false;
+  bool _icloudSync = false;
+  bool _icloudSyncChanging = false;
 
   @override
   void initState() {
@@ -32,11 +38,13 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
     final can = dev && await auth.canCheckBiometrics;
     final lock = await AppLockService.instance.isLockEnabled;
     final bio = await AppLockService.instance.biometricEnabled;
+    final sync = await KeychainSyncStore.instance.isEnabled();
     if (!mounted) return;
     setState(() {
       _lockOn = lock;
       _bioOn = bio;
       _bioAvailable = can;
+      _icloudSync = sync;
       _loading = false;
     });
   }
@@ -132,6 +140,26 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
     if (mounted) await _reload();
   }
 
+  Future<void> _setICloudSync(bool v) async {
+    setState(() => _icloudSyncChanging = true);
+    await KeychainSyncStore.instance.setEnabled(v);
+    try {
+      await WalletVault.instance.resyncKeychainItems();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Keychain update error: $e')),
+        );
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _icloudSync = v;
+        _icloudSyncChanging = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -182,6 +210,67 @@ class _SecuritySettingsScreenState extends State<SecuritySettingsScreen> {
                     onPressed: _confirmDisableLock,
                     child: const Text('Turn off app lock', style: TextStyle(color: Color(0xFFF87171))),
                   ),
+                ],
+
+                if (Platform.isMacOS || Platform.isIOS) ...[
+                  const SizedBox(height: 32),
+                  Divider(color: theme.dividerColor.withValues(alpha: 0.3)),
+                  const SizedBox(height: 16),
+                  Text(
+                    'iCloud Keychain',
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'When enabled, your wallet secret is stored in iCloud Keychain and syncs across your Apple devices '
+                    'signed into the same Apple ID. Convenient for multi-device access, but means '
+                    'your secret leaves this device.',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.35),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Sync wallet to iCloud Keychain'),
+                    subtitle: Text(
+                      _icloudSync
+                          ? 'Your recovery phrase / private key will sync across devices.'
+                          : 'Wallet secret stays on this device only.',
+                      style: TextStyle(fontSize: 12, color: theme.hintColor),
+                    ),
+                    value: _icloudSync,
+                    onChanged: _icloudSyncChanging ? null : (v) => _setICloudSync(v),
+                    activeThumbColor: NeoTheme.green,
+                  ),
+                  if (_icloudSync)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: NeoTheme.amber.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: NeoTheme.amber.withValues(alpha: 0.25)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.warning_amber_rounded, size: 18, color: NeoTheme.amber.withValues(alpha: 0.9)),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Anyone with access to your Apple ID can read the synced wallet secret. '
+                                'Keep your Apple ID credentials and two-factor authentication secure.',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: NeoTheme.amber.withValues(alpha: 0.85),
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ],
             ),
