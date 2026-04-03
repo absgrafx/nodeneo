@@ -202,10 +202,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return '${t.month}/${t.day}';
   }
 
+  static final BigInt _minEthWei = BigInt.parse('1000000000000000'); // 0.001 ETH
+  static final BigInt _minMorWei = BigInt.parse('5000000000000000000'); // 5 MOR
+
   bool get _walletUnfunded {
     final eth = BigInt.tryParse(_rawEthWei) ?? BigInt.zero;
     final mor = BigInt.tryParse(_rawMorWei) ?? BigInt.zero;
-    return eth == BigInt.zero && mor == BigInt.zero;
+    return eth < _minEthWei || mor < _minMorWei;
   }
 
   void _loadWallet() {

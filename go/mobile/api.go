@@ -207,6 +207,20 @@ func GetLogLevel() string {
 	return logger.GetLevel()
 }
 
+// SetSessionMaintenanceInterval changes how often the SDK checks for expired sessions
+// and auto-closes them (reclaiming locked MOR). intervalSeconds of 0 disables auto-close.
+// Default is 900 (15 minutes). Provider-initiated closes already refund MOR on-chain
+// immediately, so this only catches naturally-expired sessions.
+func SetSessionMaintenanceInterval(intervalSeconds int64) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	client.SetMaintenanceInterval(time.Duration(intervalSeconds) * time.Second)
+	return resultJSON(map[string]string{"status": "ok", "interval_seconds": fmt.Sprintf("%d", intervalSeconds)})
+}
+
 // --- Wallet (native via SDK — embedded proxy-router wallet) ---
 
 // CreateWallet generates a new BIP-39 wallet. Returns JSON:

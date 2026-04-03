@@ -13,10 +13,27 @@ static inline void neo_invoke_stream_cb(neo_stream_cb cb, const char* t, int is_
 */
 import "C"
 import (
+	"encoding/json"
+	"fmt"
+	"runtime/debug"
 	"unsafe"
 
 	"github.com/absgrafx/nodeneo/mobile"
 )
+
+// safeCall wraps an FFI-exported function so that an unrecovered Go panic
+// returns a JSON error string instead of crashing the host process via abort().
+func safeCall(fn func() string) (ret *C.char) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			msg := fmt.Sprintf("panic: %v\n%s", r, stack)
+			b, _ := json.Marshal(map[string]string{"error": msg})
+			ret = C.CString(string(b))
+		}
+	}()
+	return C.CString(fn())
+}
 
 // freeWith is a helper the Dart side must call to free returned strings.
 //
@@ -29,15 +46,9 @@ func FreeString(s *C.char) {
 
 //export Init
 func Init(dataDir, ethNodeURL *C.char, chainID C.longlong, diamondAddr, morTokenAddr, blockscoutURL *C.char) *C.char {
-	result := mobile.Init(
-		C.GoString(dataDir),
-		C.GoString(ethNodeURL),
-		int64(chainID),
-		C.GoString(diamondAddr),
-		C.GoString(morTokenAddr),
-		C.GoString(blockscoutURL),
-	)
-	return C.CString(result)
+	dd, eu, ci := C.GoString(dataDir), C.GoString(ethNodeURL), int64(chainID)
+	da, mt, bs := C.GoString(diamondAddr), C.GoString(morTokenAddr), C.GoString(blockscoutURL)
+	return safeCall(func() string { return mobile.Init(dd, eu, ci, da, mt, bs) })
 }
 
 //export Shutdown
@@ -68,6 +79,11 @@ func SetLogLevel(level *C.char) *C.char {
 //export GetLogLevel
 func GetLogLevel() *C.char {
 	return C.CString(mobile.GetLogLevel())
+}
+
+//export SetSessionMaintenanceInterval
+func SetSessionMaintenanceInterval(intervalSeconds C.longlong) *C.char {
+	return safeCall(func() string { return mobile.SetSessionMaintenanceInterval(int64(intervalSeconds)) })
 }
 
 //export AppLog
@@ -126,12 +142,14 @@ func VerifyRecoveryPrivateKey(hexKey *C.char) *C.char {
 
 //export SendETH
 func SendETH(toAddr, amountWei *C.char) *C.char {
-	return C.CString(mobile.SendETH(C.GoString(toAddr), C.GoString(amountWei)))
+	to, amt := C.GoString(toAddr), C.GoString(amountWei)
+	return safeCall(func() string { return mobile.SendETH(to, amt) })
 }
 
 //export SendMOR
 func SendMOR(toAddr, amountWei *C.char) *C.char {
-	return C.CString(mobile.SendMOR(C.GoString(toAddr), C.GoString(amountWei)))
+	to, amt := C.GoString(toAddr), C.GoString(amountWei)
+	return safeCall(func() string { return mobile.SendMOR(to, amt) })
 }
 
 // --- Models ---
@@ -160,12 +178,14 @@ func EstimateOpenSessionStake(modelID *C.char, durationSeconds C.longlong, direc
 
 //export OpenSession
 func OpenSession(modelID *C.char, durationSeconds C.longlong, directPayment C.int) *C.char {
-	return C.CString(mobile.OpenSession(C.GoString(modelID), int64(durationSeconds), directPayment != 0))
+	m, d, dp := C.GoString(modelID), int64(durationSeconds), directPayment != 0
+	return safeCall(func() string { return mobile.OpenSession(m, d, dp) })
 }
 
 //export CloseSession
 func CloseSession(sessionID *C.char) *C.char {
-	return C.CString(mobile.CloseSession(C.GoString(sessionID)))
+	s := C.GoString(sessionID)
+	return safeCall(func() string { return mobile.CloseSession(s) })
 }
 
 //export GetSession
@@ -182,12 +202,8 @@ func GetUnclosedUserSessions() *C.char {
 
 //export SendPrompt
 func SendPrompt(sessionID, conversationID, prompt *C.char, stream C.int) *C.char {
-	return C.CString(mobile.SendPrompt(
-		C.GoString(sessionID),
-		C.GoString(conversationID),
-		C.GoString(prompt),
-		stream != 0,
-	))
+	sid, cid, p, s := C.GoString(sessionID), C.GoString(conversationID), C.GoString(prompt), stream != 0
+	return safeCall(func() string { return mobile.SendPrompt(sid, cid, p, s) })
 }
 
 // SendPromptStream runs the same path as SendPrompt but forwards each streamed delta to [cb]
