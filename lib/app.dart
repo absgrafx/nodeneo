@@ -267,13 +267,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
       onFullFactoryReset: _fullFactoryReset,
       child: HomeScreen(
         onWalletErased: _handleWalletErased,
-        onOpenNetworkSettings: () async {
-          final changed = await Navigator.of(context).push<bool>(
-            MaterialPageRoute<bool>(builder: (_) => const NetworkSettingsScreen()),
-          );
-          if (!mounted) return;
-          if (changed == true) await _restartSdkAfterRpcChange();
-        },
+        onRpcChanged: _restartSdkAfterRpcChange,
       ),
     );
   }
