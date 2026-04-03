@@ -369,17 +369,23 @@ class _ExpertScreenState extends State<ExpertScreen> {
         }
       },
       child: Scaffold(
-        appBar: AppBar(title: const Text('Expert')),
+        appBar: AppBar(title: const Text('Expert Mode')),
         body: _rpcLoading
             ? const Center(
                 child: CircularProgressIndicator(color: NeoTheme.green))
             : ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
+                  const _SectionBanner(title: 'Network'),
+                  const SizedBox(height: 16),
                   _buildNetworkSection(theme),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 32),
+                  const _SectionBanner(title: 'REST API'),
+                  const SizedBox(height: 16),
                   _buildApiSection(theme),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 32),
+                  const _SectionBanner(title: 'Logging'),
+                  const SizedBox(height: 16),
                   _buildLoggingSection(theme),
                   const SizedBox(height: 24),
                 ],
@@ -394,12 +400,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'NETWORK',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(letterSpacing: 0.8, color: theme.hintColor),
-        ),
-        const SizedBox(height: 12),
         Text(
           _rpcOverridePreview != null && _rpcOverridePreview!.isNotEmpty
               ? 'Using a custom RPC override.'
@@ -538,12 +538,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'REST API',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(letterSpacing: 0.8, color: theme.hintColor),
-        ),
-        const SizedBox(height: 12),
         Text(
           'Start the full proxy-router HTTP server with Swagger documentation and all REST endpoints.',
           style: theme.textTheme.bodySmall
@@ -728,12 +722,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'LOGGING',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(letterSpacing: 0.8, color: theme.hintColor),
-        ),
-        const SizedBox(height: 12),
         Row(
           children: [
             const Icon(Icons.tune, size: 18),
@@ -907,6 +895,38 @@ class _ExpertScreenState extends State<ExpertScreen> {
                 ),
         ),
       ],
+    );
+  }
+}
+
+// ── Full-width section banner ──────────────────────────────────
+
+class _SectionBanner extends StatelessWidget {
+  final String title;
+
+  const _SectionBanner({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: NeoTheme.ethBlue.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: NeoTheme.ethBlue.withValues(alpha: 0.20)),
+      ),
+      child: Center(
+        child: Text(
+          title,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+            color: NeoTheme.ethBlue.withValues(alpha: 0.85),
+          ),
+        ),
+      ),
     );
   }
 }
