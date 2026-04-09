@@ -1651,6 +1651,7 @@ class _HistoryConversationTile extends StatelessWidget {
     final isPinned = c['pinned'] == true;
     final showPinIcon = isPinned;
     final isTee = c['is_tee'] == true;
+    final isApi = c['source'] == 'api';
     return Slidable(
       key: ValueKey('drawer-$cid'),
       groupTag: 'history-drawer',
@@ -1704,6 +1705,10 @@ class _HistoryConversationTile extends StatelessWidget {
             ],
             if (isTee) ...[
               const Text('🛡️', style: TextStyle(fontSize: 14)),
+              const SizedBox(width: 5),
+            ],
+            if (isApi) ...[
+              Icon(Icons.smart_toy_outlined, size: 15, color: NeoTheme.green.withValues(alpha: 0.7)),
               const SizedBox(width: 5),
             ],
             Expanded(

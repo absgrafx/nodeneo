@@ -38,12 +38,22 @@ class _ExpertScreenState extends State<ExpertScreen> {
   final _apiBaseUrlCtrl = TextEditingController();
   String _detectedIp = '';
 
+  // ── Gateway state ─────────────────────────────────────────
+  bool _gwRunning = false;
+  String _gwAddress = '';
+  bool _gwNetworkAccessible = false;
+  final _gwPortCtrl = TextEditingController(text: '8083');
+  List<Map<String, dynamic>> _apiKeys = [];
+  String? _newKeyFull; // shown once after generation
+
   @override
   void initState() {
     super.initState();
     _loadRpc();
     _detectLocalIp();
     _refreshApiStatus();
+    _refreshGatewayStatus();
+    _loadApiKeys();
   }
 
   @override
@@ -51,6 +61,7 @@ class _ExpertScreenState extends State<ExpertScreen> {
     _rpcCtrl.dispose();
     _apiPortCtrl.dispose();
     _apiBaseUrlCtrl.dispose();
+    _gwPortCtrl.dispose();
     super.dispose();
   }
 
@@ -261,6 +272,200 @@ class _ExpertScreenState extends State<ExpertScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  //  GATEWAY
+  // ═══════════════════════════════════════════════════════════════
+
+  void _refreshGatewayStatus() {
+    try {
+      final status = GoBridge().gatewayStatus();
+      final addr = status['address'] as String? ?? '';
+      setState(() {
+        _gwRunning = status['running'] as bool? ?? false;
+        _gwAddress = addr;
+        if (addr.isNotEmpty) {
+          _gwNetworkAccessible = addr.startsWith('0.0.0.0');
+          final parts = addr.split(':');
+          if (parts.length >= 2) {
+            final p = int.tryParse(parts.last);
+            if (p != null) _gwPortCtrl.text = p.toString();
+          }
+        }
+      });
+    } catch (_) {}
+  }
+
+  void _startGateway() {
+    try {
+      final port = int.tryParse(_gwPortCtrl.text.trim()) ?? 8083;
+      final host = _gwNetworkAccessible ? '0.0.0.0' : '127.0.0.1';
+      final addr = '$host:$port';
+      GoBridge().startGateway(addr);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gateway started on $addr')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+    _refreshGatewayStatus();
+  }
+
+  void _stopGateway() {
+    try {
+      GoBridge().stopGateway();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gateway stopped')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+    _refreshGatewayStatus();
+  }
+
+  void _loadApiKeys() {
+    try {
+      final keys = GoBridge().listAPIKeys();
+      setState(() {
+        _apiKeys = keys.cast<Map<String, dynamic>>();
+      });
+    } catch (_) {}
+  }
+
+  void _generateApiKey() {
+    final nameCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Generate API Key'),
+        content: TextField(
+          controller: nameCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Key name (optional)',
+            hintText: 'e.g. Cursor, LangChain',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doGenerateKey(nameCtrl.text.trim());
+            },
+            style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
+            child: const Text('Generate'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _doGenerateKey(String name) {
+    try {
+      final result = GoBridge().generateAPIKey(name);
+      final fullKey = result['key'] as String? ?? '';
+      setState(() => _newKeyFull = fullKey);
+      _loadApiKeys();
+      _showNewKeyDialog(fullKey);
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  void _showNewKeyDialog(String key) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('API Key Created'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Copy this key now. It will not be shown again.',
+              style: TextStyle(fontSize: 13, color: Color(0xFFEF4444)),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF374151)),
+              ),
+              child: SelectableText(
+                key,
+                style: const TextStyle(
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: 11,
+                  color: Color(0xFFD1D5DB),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: key));
+              ScaffoldMessenger.of(ctx)
+                ..clearSnackBars()
+                ..showSnackBar(const SnackBar(
+                  content: Text('Key copied to clipboard'),
+                  behavior: SnackBarBehavior.floating,
+                ));
+              Navigator.pop(ctx);
+            },
+            style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
+            icon: const Icon(Icons.copy_rounded, size: 16),
+            label: const Text('Copy & Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _revokeApiKey(String id, String prefix) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Revoke API Key'),
+        content: Text(
+          'Revoke key $prefix...? This will immediately block any app using this key.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              try {
+                GoBridge().revokeAPIKey(id);
+                _loadApiKeys();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Key revoked')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text('Error: $e')));
+              }
+            },
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            child: const Text('Revoke'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   //  BUILD
   // ═══════════════════════════════════════════════════════════════
 
@@ -290,6 +495,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   const _SectionBanner(title: 'REST API'),
                   const SizedBox(height: 16),
                   _buildApiSection(theme),
+                  const SizedBox(height: 32),
+                  const _SectionBanner(title: 'API Gateway'),
+                  const SizedBox(height: 16),
+                  _buildGatewaySection(theme),
                   const SizedBox(height: 24),
                 ],
               ),
@@ -623,6 +832,246 @@ class _ExpertScreenState extends State<ExpertScreen> {
     );
   }
 
+  // ── Gateway section ──────────────────────────────────────────
+
+  Widget _buildGatewaySection(ThemeData theme) {
+    final host = _gwNetworkAccessible
+        ? (_detectedIp.isNotEmpty ? _detectedIp : '127.0.0.1')
+        : '127.0.0.1';
+    final port = _gwPortCtrl.text.trim().isEmpty ? '8083' : _gwPortCtrl.text.trim();
+    final gatewayBaseUrl = 'http://$host:$port/v1';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'OpenAI-compatible API for external tools (Cursor, LangChain, etc.). '
+          'Handles model resolution and session management automatically.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.hintColor, height: 1.35),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _ScopeOption(
+                icon: Icons.computer,
+                label: 'Local only',
+                selected: !_gwNetworkAccessible,
+                enabled: !_gwRunning,
+                onTap: () => setState(() => _gwNetworkAccessible = false),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _ScopeOption(
+                icon: Icons.wifi,
+                label: 'Network',
+                selected: _gwNetworkAccessible,
+                enabled: !_gwRunning,
+                onTap: () => setState(() => _gwNetworkAccessible = true),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: 100,
+          child: TextField(
+            controller: _gwPortCtrl,
+            enabled: !_gwRunning,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(
+              labelText: 'Port',
+              hintText: '8083',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Center(
+          child: _gwRunning
+              ? FilledButton.icon(
+                  onPressed: _stopGateway,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                  label: const Text('Stop Gateway', style: TextStyle(fontSize: 13)),
+                )
+              : FilledButton.icon(
+                  onPressed: _startGateway,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: NeoTheme.green,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  icon: const Icon(Icons.play_circle_outline, size: 18),
+                  label: const Text('Start Gateway', style: TextStyle(fontSize: 13)),
+                ),
+        ),
+        if (_gwRunning)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Center(
+              child: Text(
+                'Listening on $_gwAddress',
+                style: TextStyle(
+                    fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.9)),
+              ),
+            ),
+          ),
+
+        // ── Connection info ────────────────────────────
+        const SizedBox(height: 16),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF374151)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.terminal_rounded, size: 14, color: Color(0xFF9CA3AF)),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Cursor / OpenAI Config',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Copy config',
+                    icon: const Icon(Icons.copy_rounded, size: 14),
+                    style: IconButton.styleFrom(
+                      minimumSize: const Size(28, 28),
+                      padding: const EdgeInsets.all(4),
+                    ),
+                    onPressed: () {
+                      final snippet = 'Base URL: $gatewayBaseUrl';
+                      Clipboard.setData(ClipboardData(text: snippet));
+                      ScaffoldMessenger.of(context)
+                        ..clearSnackBars()
+                        ..showSnackBar(const SnackBar(
+                          content: Text('Copied'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 2),
+                        ));
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Base URL:  $gatewayBaseUrl',
+                style: const TextStyle(
+                  fontFamily: 'JetBrains Mono', fontSize: 10, color: Color(0xFFD1D5DB)),
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'API Key:   sk-... (generate below)',
+                style: TextStyle(
+                  fontFamily: 'JetBrains Mono', fontSize: 10, color: Color(0xFFD1D5DB)),
+              ),
+            ],
+          ),
+        ),
+
+        // ── API Keys ───────────────────────────────────
+        const SizedBox(height: 20),
+        Row(
+          children: [
+            Text(
+              'API Keys',
+              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: _generateApiKey,
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Generate Key', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (_apiKeys.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E293B).withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF374151)),
+            ),
+            child: Text(
+              'No API keys yet. Generate one to allow external apps to connect.',
+              style: TextStyle(fontSize: 12, color: theme.hintColor),
+              textAlign: TextAlign.center,
+            ),
+          )
+        else
+          ...List.generate(_apiKeys.length, (i) {
+            final k = _apiKeys[i];
+            final prefix = k['prefix'] as String? ?? '';
+            final name = k['name'] as String? ?? '';
+            final id = k['id'] as String? ?? '';
+            final lastUsed = k['last_used'] as int? ?? 0;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF374151)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.key_rounded, size: 16, color: Color(0xFF9CA3AF)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$prefix...',
+                            style: const TextStyle(
+                              fontFamily: 'JetBrains Mono', fontSize: 11, color: Color(0xFFD1D5DB)),
+                          ),
+                          if (name.isNotEmpty)
+                            Text(name, style: TextStyle(fontSize: 10, color: theme.hintColor)),
+                          if (lastUsed > 0)
+                            Text(
+                              'Last used: ${DateTime.fromMillisecondsSinceEpoch(lastUsed * 1000).toLocal().toString().substring(0, 16)}',
+                              style: TextStyle(fontSize: 9, color: theme.hintColor),
+                            ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Revoke key',
+                      icon: Icon(Icons.delete_outline, size: 16, color: Colors.red.shade400),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(32, 32),
+                        padding: const EdgeInsets.all(4),
+                      ),
+                      onPressed: () => _revokeApiKey(id, prefix),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+      ],
+    );
+  }
 }
 
 // ── Full-width section banner ──────────────────────────────────

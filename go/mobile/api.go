@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
+	"github.com/absgrafx/nodeneo/internal/gateway"
 	"github.com/absgrafx/nodeneo/internal/logger"
 	"github.com/absgrafx/nodeneo/internal/store"
 	openai "github.com/sashabaranov/go-openai"
@@ -876,6 +877,116 @@ func ExpertAPIStatus() string {
 	addr := client.HTTPServerAddr()
 	running := addr != ""
 	return resultJSON(map[string]interface{}{"running": running, "address": addr})
+}
+
+// --- Gateway (OpenAI-compatible API for external consumers like Cursor) ---
+
+var gw *gateway.Gateway
+
+// StartGateway starts the OpenAI-compatible gateway HTTP server.
+// address is "host:port", e.g. "127.0.0.1:8083" or "0.0.0.0:8083".
+func StartGateway(address string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	if db == nil {
+		return errJSON(fmt.Errorf("database not initialized"))
+	}
+	if gw != nil && gw.Running() {
+		return errJSON(fmt.Errorf("gateway already running on %s", gw.Addr()))
+	}
+
+	dur, _ := db.GetPreference("gateway_session_duration")
+	durationSec := int64(3600)
+	if dur != "" {
+		fmt.Sscanf(dur, "%d", &durationSec)
+	}
+
+	gw = gateway.New(client, db, func(format string, args ...interface{}) {
+		logger.Info("[GATEWAY] "+format, args...)
+	}, durationSec)
+
+	if err := gw.Start(address); err != nil {
+		return errJSON(err)
+	}
+	logger.Info("Gateway started on %s", address)
+	return resultJSON(map[string]string{"status": "ok", "address": address})
+}
+
+// StopGateway stops the gateway HTTP server.
+func StopGateway() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if gw == nil {
+		return resultJSON(map[string]string{"status": "ok"})
+	}
+	if err := gw.Stop(); err != nil {
+		return errJSON(err)
+	}
+	gw = nil
+	logger.Info("Gateway stopped")
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// GatewayStatus returns whether the gateway is running and on which address.
+func GatewayStatus() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if gw == nil {
+		return resultJSON(map[string]interface{}{"running": false, "address": ""})
+	}
+	return resultJSON(map[string]interface{}{"running": gw.Running(), "address": gw.Addr()})
+}
+
+// --- API Key management ---
+
+// GenerateAPIKey creates a new API key for gateway access.
+// Returns the full key (shown once to the user) and metadata.
+func GenerateAPIKey(name string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	fullKey, info, err := db.GenerateAPIKey(name)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]interface{}{
+		"id":     info.ID,
+		"key":    fullKey,
+		"prefix": info.Prefix,
+		"name":   info.Name,
+	})
+}
+
+// ListAPIKeys returns all active API keys (never exposes secrets).
+func ListAPIKeys() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	keys, err := db.ListAPIKeys()
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(keys)
+}
+
+// RevokeAPIKey deletes an API key, immediately blocking access.
+func RevokeAPIKey(id string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.RevokeAPIKey(id); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
 }
 
 // --- Helpers ---
