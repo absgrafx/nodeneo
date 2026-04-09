@@ -323,4 +323,39 @@ func ExpertAPIStatus() *C.char {
 	return C.CString(mobile.ExpertAPIStatus())
 }
 
+// --- Gateway (OpenAI-compatible API) ---
+
+//export StartGateway
+func StartGateway(address *C.char) *C.char {
+	a := C.GoString(address)
+	return safeCall(func() string { return mobile.StartGateway(a) })
+}
+
+//export StopGateway
+func StopGateway() *C.char {
+	return safeCall(func() string { return mobile.StopGateway() })
+}
+
+//export GatewayStatus
+func GatewayStatus() *C.char {
+	return C.CString(mobile.GatewayStatus())
+}
+
+// --- API Keys ---
+
+//export GenerateAPIKey
+func GenerateAPIKey(name *C.char) *C.char {
+	return safeCall(func() string { return mobile.GenerateAPIKey(C.GoString(name)) })
+}
+
+//export ListAPIKeys
+func ListAPIKeys() *C.char {
+	return C.CString(mobile.ListAPIKeys())
+}
+
+//export RevokeAPIKey
+func RevokeAPIKey(id *C.char) *C.char {
+	return safeCall(func() string { return mobile.RevokeAPIKey(C.GoString(id)) })
+}
+
 func main() {}
