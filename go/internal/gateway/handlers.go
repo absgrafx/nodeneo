@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -93,8 +94,9 @@ func (g *Gateway) handleStreamingCompletion(w http.ResponseWriter, r *http.Reque
 
 	requestID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	var fullResponse string
+	params := chatParamsFromRequest(req)
 
-	err := g.sdk.SendPromptWithMessages(r.Context(), sess.SessionID, req.Messages, true, func(text string, isLast bool) error {
+	_, err := g.sdk.SendPromptWithMessagesAndParams(r.Context(), sess.SessionID, req.Messages, true, params, func(text string, isLast bool) error {
 		if isLast {
 			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
@@ -140,7 +142,8 @@ func (g *Gateway) handleStreamingCompletion(w http.ResponseWriter, r *http.Reque
 
 func (g *Gateway) handleNonStreamingCompletion(w http.ResponseWriter, r *http.Request, sess sessionResult, req openai.ChatCompletionRequest, convID string) {
 	var fullResponse string
-	err := g.sdk.SendPromptWithMessages(r.Context(), sess.SessionID, req.Messages, false, func(text string, isLast bool) error {
+	params := chatParamsFromRequest(req)
+	_, err := g.sdk.SendPromptWithMessagesAndParams(r.Context(), sess.SessionID, req.Messages, false, params, func(text string, isLast bool) error {
 		fullResponse += text
 		return nil
 	})
@@ -204,6 +207,40 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// chatParamsFromRequest extracts tuning parameters from an OpenAI chat request.
+func chatParamsFromRequest(req openai.ChatCompletionRequest) *sdk.ChatParams {
+	p := &sdk.ChatParams{}
+	hasOverride := false
+	if req.Temperature != 0 {
+		t := req.Temperature
+		p.Temperature = &t
+		hasOverride = true
+	}
+	if req.TopP != 0 {
+		tp := req.TopP
+		p.TopP = &tp
+		hasOverride = true
+	}
+	if req.MaxTokens != 0 {
+		p.MaxTokens = &req.MaxTokens
+		hasOverride = true
+	}
+	if req.FrequencyPenalty != 0 {
+		fp := req.FrequencyPenalty
+		p.FrequencyPenalty = &fp
+		hasOverride = true
+	}
+	if req.PresencePenalty != 0 {
+		pp := req.PresencePenalty
+		p.PresencePenalty = &pp
+		hasOverride = true
+	}
+	if !hasOverride {
+		return nil
+	}
+	return p
 }
 
 // getOrCreateConversation returns a conversation ID for this API request.

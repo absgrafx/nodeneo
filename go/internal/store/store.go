@@ -99,6 +99,12 @@ func (s *Store) migrate() error {
 	if err := s.ensureAPIKeysTable(); err != nil {
 		return err
 	}
+	if err := s.ensureConversationTuningColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureMessageMetadataColumn(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -160,6 +166,56 @@ func (s *Store) ensureAPIKeysTable() error {
 		return fmt.Errorf("store: create api_keys: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ensureConversationTuningColumn() error {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'tuning_params'`).Scan(&n)
+	if err != nil {
+		return fmt.Errorf("store: pragma tuning_params: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE conversations ADD COLUMN tuning_params TEXT`); err != nil {
+		return fmt.Errorf("store: add tuning_params column: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureMessageMetadataColumn() error {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'metadata'`).Scan(&n)
+	if err != nil {
+		return fmt.Errorf("store: pragma metadata: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE messages ADD COLUMN metadata TEXT`); err != nil {
+		return fmt.Errorf("store: add metadata column: %w", err)
+	}
+	return nil
+}
+
+// SetConversationTuning stores the tuning params JSON blob for a conversation.
+func (s *Store) SetConversationTuning(conversationID, tuningJSON string) error {
+	_, err := s.db.Exec(`UPDATE conversations SET tuning_params = ?, updated_at = ? WHERE id = ?`,
+		tuningJSON, time.Now().Unix(), conversationID)
+	return err
+}
+
+// GetConversationTuning returns the stored tuning params JSON blob (empty string if not set).
+func (s *Store) GetConversationTuning(conversationID string) (string, error) {
+	var raw *string
+	err := s.db.QueryRow(`SELECT tuning_params FROM conversations WHERE id = ?`, conversationID).Scan(&raw)
+	if err != nil {
+		return "", err
+	}
+	if raw == nil {
+		return "", nil
+	}
+	return *raw, nil
 }
 
 // --- API Key management ---
@@ -273,6 +329,11 @@ func (s *Store) RevokeAPIKey(id string) error {
 }
 
 func (s *Store) SaveMessage(conversationID, role, content string) error {
+	return s.SaveMessageWithMetadata(conversationID, role, content, "")
+}
+
+// SaveMessageWithMetadata persists a message with optional metadata JSON (usage, latency, etc.).
+func (s *Store) SaveMessageWithMetadata(conversationID, role, content, metadata string) error {
 	id := fmt.Sprintf("%s-%d", role, time.Now().UnixNano())
 	now := time.Now().Unix()
 	stored := s.encrypt(content)
@@ -281,11 +342,20 @@ func (s *Store) SaveMessage(conversationID, role, content string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(
-		`INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)`,
-		id, conversationID, role, stored, now,
-	); err != nil {
-		return err
+	if metadata != "" {
+		if _, err := tx.Exec(
+			`INSERT INTO messages (id, conversation_id, role, content, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, conversationID, role, stored, metadata, now,
+		); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(
+			`INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)`,
+			id, conversationID, role, stored, now,
+		); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE conversations SET updated_at = ? WHERE id = ?`, now, conversationID); err != nil {
 		return err
@@ -486,12 +556,13 @@ type Message struct {
 	ID        string `json:"id"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
+	Metadata  string `json:"metadata,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 }
 
 func (s *Store) GetMessages(conversationID string) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, created_at FROM messages 
+		`SELECT id, role, content, COALESCE(metadata, ''), created_at FROM messages 
 		 WHERE conversation_id = ? ORDER BY created_at ASC`, conversationID)
 	if err != nil {
 		return nil, err
@@ -501,7 +572,7 @@ func (s *Store) GetMessages(conversationID string) ([]Message, error) {
 	var out []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Metadata, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.Content = s.decrypt(m.Content)

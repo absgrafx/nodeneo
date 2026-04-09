@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "nodeneo-morpheus": {
+      "command": "node",
+      "args": ["/Volumes/moon/repo/personal_mor/nodeneo/mcp-server/dist/index.js"],
+      "env": {
+        "NODENEO_GATEWAY_URL": "http://127.0.0.1:8069",
+        "NODENEO_API_KEY": "sk-7b0278f71bdff5bafda8727aab33f39c3aa4e7297793c0d7dcf1ad356b4f3c67"
+      }
+    }
+  }
+}

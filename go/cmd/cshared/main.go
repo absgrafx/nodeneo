@@ -2,12 +2,37 @@ package main
 
 /*
 #include <stdlib.h>
+#include <stdint.h>
 
 typedef void (*neo_stream_cb)(const char* text, int is_last);
+typedef void (*neo_completion_cb)(const char* result_json);
+
+// Async variants pass an int64 delta ID instead of a string pointer.
+// Dart retrieves the actual text via the synchronous ReadStreamDelta export.
+typedef void (*neo_async_signal_cb)(int64_t delta_id, int is_last);
+typedef void (*neo_async_done_cb)(int64_t result_id);
 
 static inline void neo_invoke_stream_cb(neo_stream_cb cb, const char* t, int is_last) {
 	if (cb != NULL) {
 		cb(t, is_last);
+	}
+}
+
+static inline void neo_invoke_completion_cb(neo_completion_cb cb, const char* r) {
+	if (cb != NULL) {
+		cb(r);
+	}
+}
+
+static inline void neo_invoke_async_signal(neo_async_signal_cb cb, int64_t id, int is_last) {
+	if (cb != NULL) {
+		cb(id, is_last);
+	}
+}
+
+static inline void neo_invoke_async_done(neo_async_done_cb cb, int64_t id) {
+	if (cb != NULL) {
+		cb(id);
 	}
 }
 */
@@ -16,10 +41,38 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/absgrafx/nodeneo/mobile"
 )
+
+// deltaStore holds string data for async FFI callbacks. Go stores text here
+// and passes only the int64 key through the NativeCallable.listener callback.
+// Dart retrieves the text synchronously via ReadStreamDelta, which is safe
+// because synchronous FFI calls read the return value before Go can free it.
+var (
+	deltaStoreMu sync.Mutex
+	deltaStoreM  = map[int64]string{}
+	deltaSeq     int64
+)
+
+func storeDelta(text string) int64 {
+	id := atomic.AddInt64(&deltaSeq, 1)
+	deltaStoreMu.Lock()
+	deltaStoreM[id] = text
+	deltaStoreMu.Unlock()
+	return id
+}
+
+func popDelta(id int64) string {
+	deltaStoreMu.Lock()
+	text := deltaStoreM[id]
+	delete(deltaStoreM, id)
+	deltaStoreMu.Unlock()
+	return text
+}
 
 // safeCall wraps an FFI-exported function so that an unrecovered Go panic
 // returns a JSON error string instead of crashing the host process via abort().
@@ -40,6 +93,15 @@ func safeCall(fn func() string) (ret *C.char) {
 //export FreeString
 func FreeString(s *C.char) {
 	C.free(unsafe.Pointer(s))
+}
+
+// ReadStreamDelta retrieves a stored delta/result string by ID.
+// Called synchronously from Dart after receiving an async signal callback.
+// The returned C string is safe because Dart reads it immediately (synchronous FFI).
+//
+//export ReadStreamDelta
+func ReadStreamDelta(id C.longlong) *C.char {
+	return C.CString(popDelta(int64(id)))
 }
 
 // --- Lifecycle ---
@@ -235,6 +297,115 @@ func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, c
 	return C.CString(out)
 }
 
+// SendPromptWithOptions sends a prompt with tuning parameters.
+// [optionsJSON] is a JSON blob with temperature, top_p, max_tokens, etc.
+//
+//export SendPromptWithOptions
+func SendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON *C.char, stream C.int, cb C.neo_stream_cb) *C.char {
+	chunk := func(text string, last bool) error {
+		if cb == nil {
+			return nil
+		}
+		ct := C.CString(text)
+		var lastInt C.int
+		if last {
+			lastInt = 1
+		}
+		C.neo_invoke_stream_cb(cb, ct, lastInt)
+		C.free(unsafe.Pointer(ct))
+		return nil
+	}
+	out := mobile.SendPromptWithOptions(
+		C.GoString(sessionID),
+		C.GoString(conversationID),
+		C.GoString(prompt),
+		C.GoString(optionsJSON),
+		stream != 0,
+		chunk,
+	)
+	return C.CString(out)
+}
+
+// SendPromptWithOptionsAsync is the non-blocking variant of SendPromptWithOptions.
+// Callbacks pass int64 delta IDs instead of string pointers. Dart retrieves
+// the actual text via the synchronous ReadStreamDelta export, avoiding the
+// use-after-free race inherent in passing C string pointers through
+// NativeCallable.listener's async message port.
+//
+//export SendPromptWithOptionsAsync
+func SendPromptWithOptionsAsync(sessionID, conversationID, prompt, optionsJSON *C.char, stream C.int, cb C.neo_async_signal_cb, doneCb C.neo_async_done_cb) {
+	sid := C.GoString(sessionID)
+	cid := C.GoString(conversationID)
+	p := C.GoString(prompt)
+	o := C.GoString(optionsJSON)
+	s := stream != 0
+
+	chunk := func(text string, last bool) error {
+		if cb == nil {
+			return nil
+		}
+		id := storeDelta(text)
+		var lastInt C.int
+		if last {
+			lastInt = 1
+		}
+		C.neo_invoke_async_signal(cb, C.int64_t(id), lastInt)
+		return nil
+	}
+
+	done := func(resultJSON string) {
+		id := storeDelta(resultJSON)
+		C.neo_invoke_async_done(doneCb, C.int64_t(id))
+	}
+
+	mobile.SendPromptWithOptionsAsync(sid, cid, p, o, s, chunk, done)
+}
+
+// SendPromptStreamAsync is the non-blocking variant of SendPromptStream.
+// Same signal-based pattern as SendPromptWithOptionsAsync.
+//
+//export SendPromptStreamAsync
+func SendPromptStreamAsync(sessionID, conversationID, prompt *C.char, stream C.int, cb C.neo_async_signal_cb, doneCb C.neo_async_done_cb) {
+	sid := C.GoString(sessionID)
+	cid := C.GoString(conversationID)
+	p := C.GoString(prompt)
+	s := stream != 0
+
+	chunk := func(text string, last bool) error {
+		if cb == nil {
+			return nil
+		}
+		id := storeDelta(text)
+		var lastInt C.int
+		if last {
+			lastInt = 1
+		}
+		C.neo_invoke_async_signal(cb, C.int64_t(id), lastInt)
+		return nil
+	}
+
+	done := func(resultJSON string) {
+		id := storeDelta(resultJSON)
+		C.neo_invoke_async_done(doneCb, C.int64_t(id))
+	}
+
+	mobile.SendPromptWithStreamCallbackAsync(sid, cid, p, s, chunk, done)
+}
+
+// --- Conversation Tuning ---
+
+//export SetConversationTuning
+func SetConversationTuning(conversationID, tuningJSON *C.char) *C.char {
+	return safeCall(func() string {
+		return mobile.SetConversationTuning(C.GoString(conversationID), C.GoString(tuningJSON))
+	})
+}
+
+//export GetConversationTuning
+func GetConversationTuning(conversationID *C.char) *C.char {
+	return C.CString(mobile.GetConversationTuning(C.GoString(conversationID)))
+}
+
 // --- Conversations ---
 
 //export ClaimEmptyDraftForModel
@@ -326,9 +497,9 @@ func ExpertAPIStatus() *C.char {
 // --- Gateway (OpenAI-compatible API) ---
 
 //export StartGateway
-func StartGateway(address *C.char) *C.char {
+func StartGateway(address *C.char, cloudflaredQuickTunnel C.int) *C.char {
 	a := C.GoString(address)
-	return safeCall(func() string { return mobile.StartGateway(a) })
+	return safeCall(func() string { return mobile.StartGateway(a, cloudflaredQuickTunnel != 0) })
 }
 
 //export StopGateway

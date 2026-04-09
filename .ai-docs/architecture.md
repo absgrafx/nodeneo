@@ -26,9 +26,17 @@ Node Neo embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-ro
 - **Sessions** — open / close / query on-chain sessions; list **unclosed** sessions for the wallet
 - **Chat** — `SendPrompt` → internal `SendPromptV2` / MOR-RPC to the provider (streaming aggregated in Go before returning over FFI)
 
-### Flutter ↔ Go
+### Flutter ↔ Go (Async FFI Bridge)
 - **dart:ffi** to a **c-shared** library (`libnodeneo.dylib` / future `.xcframework` / `.so`)
 - JSON in/out on the boundary; SQLite for **local** conversations/messages lives in Node Neo’s `internal/store` and is driven from `go/mobile/api.go`
+- **Streaming uses a signal + fetch pattern** to avoid FFI use-after-free:
+  - Go stores delta text in a thread-safe map (`deltaStoreM`) keyed by `int64` ID (atomic counter)
+  - Go invokes Dart’s `NativeCallable.listener` with the ID only (not a `char*` pointer)
+  - Dart synchronously calls `ReadStreamDelta(id)` to fetch the string while Go guarantees it is alive
+  - Dart frees the C-allocated string after copying to a Dart `String`
+- **Async wrappers** (`SendPromptWithOptionsAsync`, `SendPromptStreamAsync`) run the SDK call in a Go goroutine, signalling Dart via callbacks when deltas arrive and when the call completes
+- **Chat tuning parameters** (temperature, top_p, max_tokens, frequency/presence penalty) are passed through the FFI as JSON, converted to `ChatParams` in Go, and forwarded to the SDK
+- **Response metadata**: SDK returns the full provider response as `json.RawMessage`; Go mobile layer stores it in SQLite alongside the assistant message; Dart UI renders summary rows and raw JSON
 
 ### Reference: standalone proxy-router HTTP API
 A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/chat/completions`, `/blockchain/sessions/...`). That surface is useful for **documentation and parity** with [Morpheus-Marketplace-API](https://github.com/MorpheusAIs/Morpheus-Marketplace-API); Node Neo does **not** require it at runtime.
@@ -147,7 +155,9 @@ When running the **full** proxy-router binary, these routes mirror what the embe
 - **Chat** — `SendPrompt(sessionID, conversationID, prompt, stream)`; user + assistant rows persisted to SQLite on each completed prompt.
 - **RPC** — Optional `eth_rpc_override.txt`; multi-endpoint + backoff in SDK eth client.
 
-**Streaming UI:** With **Streaming reply** on, Dart uses **`SendPromptStream`** + **`NativeCallable.listener`** so provider deltas update the chat before the final JSON returns. Non-streaming mode uses **`SendPrompt`** with `stream: false`.
+**Streaming UI:** With **Streaming reply** on (default), Dart uses **`SendPromptWithOptionsAsync`** with `stream: true` and **`NativeCallable.listener`** so provider deltas update the chat bubble in real time (~30fps UI throttle, `jumpTo` scrolling). Non-streaming mode uses **`SendPromptWithOptionsAsync`** with `stream: false`. Both paths support chat tuning parameters (temperature, top_p, max_tokens, frequency/presence penalty) via per-conversation persistence in SQLite.
+
+**Response metadata:** Each assistant message stores the full raw provider response JSON alongside the text. The Response Info sheet shows summary rows (latency, token counts, finish reason, model) and the complete JSON for debugging.
 
 ---
 
@@ -161,6 +171,7 @@ CREATE TABLE conversations (
     title       TEXT,
     is_tee      INTEGER DEFAULT 0,
     source      TEXT DEFAULT 'ui',    -- 'ui' or 'api' (gateway-originated)
+    tuning      TEXT,                  -- JSON: per-conversation tuning params
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
@@ -170,6 +181,7 @@ CREATE TABLE messages (
     conversation_id TEXT NOT NULL REFERENCES conversations(id),
     role            TEXT NOT NULL,
     content         TEXT NOT NULL,
+    metadata        TEXT,              -- full provider response JSON (assistant msgs)
     created_at      INTEGER NOT NULL
 );
 
