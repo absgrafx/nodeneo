@@ -235,6 +235,34 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('GetPreference');
 
+  // --- Gateway ---
+
+  late final _startGateway = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('StartGateway');
+
+  late final _stopGateway = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('StopGateway');
+
+  late final _gatewayStatus = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('GatewayStatus');
+
+  // --- API Keys ---
+
+  late final _generateAPIKey = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('GenerateAPIKey');
+
+  late final _listAPIKeys = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ListAPIKeys');
+
+  late final _revokeAPIKey = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('RevokeAPIKey');
+
   // --- Helpers ---
 
   /// Call a Go function that returns a C string, read it, free it, parse JSON.
@@ -814,6 +842,74 @@ class GoBridge {
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
     return json['value'] as String? ?? '';
+  }
+
+  // --- Gateway ---
+
+  /// Start the OpenAI-compatible gateway HTTP server.
+  /// [address] is "host:port", e.g. "127.0.0.1:8083" or "0.0.0.0:8083".
+  Map<String, dynamic> startGateway(String address) {
+    final a = address.toNativeUtf8();
+    final ptr = _startGateway(a);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(a);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Stop the gateway HTTP server.
+  void stopGateway() {
+    final ptr = _stopGateway();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns {"running": bool, "address": "..."}.
+  Map<String, dynamic> gatewayStatus() {
+    final ptr = _gatewayStatus();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return jsonDecode(result) as Map<String, dynamic>;
+  }
+
+  // --- API Keys ---
+
+  /// Generate a new API key. Returns {"id", "key", "prefix", "name"}.
+  /// The "key" field is the full secret — shown once and never again.
+  Map<String, dynamic> generateAPIKey(String name) {
+    final n = name.toNativeUtf8();
+    final ptr = _generateAPIKey(n);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(n);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// List all active API keys (no secrets exposed).
+  List<dynamic> listAPIKeys() {
+    final result = _callString(_listAPIKeys);
+    final decoded = jsonDecode(result);
+    if (decoded is Map && decoded.containsKey('error')) {
+      throw GoBridgeException(decoded['error'] as String);
+    }
+    return (decoded ?? []) as List<dynamic>;
+  }
+
+  /// Revoke an API key by ID, immediately blocking access.
+  void revokeAPIKey(String id) {
+    final i = id.toNativeUtf8();
+    final ptr = _revokeAPIKey(i);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(i);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
   }
 }
 

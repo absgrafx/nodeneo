@@ -2,11 +2,14 @@ package store
 
 import (
 	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -90,6 +93,12 @@ func (s *Store) migrate() error {
 	if err := s.ensureConversationPinnedColumn(); err != nil {
 		return err
 	}
+	if err := s.ensureConversationSourceColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureAPIKeysTable(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -119,6 +128,146 @@ func (s *Store) ensureConversationPinnedColumn() error {
 	}
 	if _, err := s.db.Exec(`ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("store: add pinned column: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureConversationSourceColumn() error {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'source'`).Scan(&n)
+	if err != nil {
+		return fmt.Errorf("store: pragma source: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE conversations ADD COLUMN source TEXT DEFAULT 'ui'`); err != nil {
+		return fmt.Errorf("store: add source column: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureAPIKeysTable() error {
+	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS api_keys (
+		id         TEXT PRIMARY KEY,
+		key_hash   TEXT NOT NULL,
+		key_prefix TEXT NOT NULL,
+		name       TEXT DEFAULT '',
+		created_at INTEGER NOT NULL,
+		last_used  INTEGER DEFAULT 0
+	)`)
+	if err != nil {
+		return fmt.Errorf("store: create api_keys: %w", err)
+	}
+	return nil
+}
+
+// --- API Key management ---
+
+type APIKeyInfo struct {
+	ID        string `json:"id"`
+	Prefix    string `json:"prefix"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
+	LastUsed  int64  `json:"last_used"`
+}
+
+// GenerateAPIKey creates a new API key with the given name.
+// Returns the full key (shown once) and the stored metadata.
+func (s *Store) GenerateAPIKey(name string) (fullKey string, info APIKeyInfo, err error) {
+	raw := make([]byte, 32)
+	if _, err = rand.Read(raw); err != nil {
+		return "", APIKeyInfo{}, fmt.Errorf("store: generate key: %w", err)
+	}
+	fullKey = "sk-" + hex.EncodeToString(raw)
+	prefix := fullKey[:9]
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(fullKey), bcrypt.DefaultCost)
+	if err != nil {
+		return "", APIKeyInfo{}, fmt.Errorf("store: hash key: %w", err)
+	}
+
+	id := fmt.Sprintf("key-%d", time.Now().UnixNano())
+	now := time.Now().Unix()
+
+	if _, err := s.db.Exec(
+		`INSERT INTO api_keys (id, key_hash, key_prefix, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+		id, string(hash), prefix, name, now,
+	); err != nil {
+		return "", APIKeyInfo{}, err
+	}
+
+	info = APIKeyInfo{ID: id, Prefix: prefix, Name: name, CreatedAt: now}
+	return fullKey, info, nil
+}
+
+// ValidateAPIKey checks whether rawKey is a valid, non-revoked key.
+// Returns the key info on success.
+func (s *Store) ValidateAPIKey(rawKey string) (APIKeyInfo, bool, error) {
+	if len(rawKey) < 9 {
+		return APIKeyInfo{}, false, nil
+	}
+	prefix := rawKey[:9]
+
+	rows, err := s.db.Query(
+		`SELECT id, key_hash, key_prefix, name, created_at, last_used FROM api_keys WHERE key_prefix = ?`, prefix)
+	if err != nil {
+		return APIKeyInfo{}, false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var info APIKeyInfo
+		var hash string
+		if err := rows.Scan(&info.ID, &hash, &info.Prefix, &info.Name, &info.CreatedAt, &info.LastUsed); err != nil {
+			return APIKeyInfo{}, false, err
+		}
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(rawKey)) == nil {
+			return info, true, nil
+		}
+	}
+	return APIKeyInfo{}, false, rows.Err()
+}
+
+// UpdateAPIKeyLastUsed bumps the last_used timestamp.
+func (s *Store) UpdateAPIKeyLastUsed(id string) error {
+	_, err := s.db.Exec(`UPDATE api_keys SET last_used = ? WHERE id = ?`, time.Now().Unix(), id)
+	return err
+}
+
+// ListAPIKeys returns all active keys (never exposes hashes).
+func (s *Store) ListAPIKeys() ([]APIKeyInfo, error) {
+	rows, err := s.db.Query(`SELECT id, key_prefix, name, created_at, last_used FROM api_keys ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []APIKeyInfo
+	for rows.Next() {
+		var k APIKeyInfo
+		if err := rows.Scan(&k.ID, &k.Prefix, &k.Name, &k.CreatedAt, &k.LastUsed); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	if out == nil {
+		out = []APIKeyInfo{}
+	}
+	return out, rows.Err()
+}
+
+// RevokeAPIKey deletes a key, immediately blocking further use.
+func (s *Store) RevokeAPIKey(id string) error {
+	res, err := s.db.Exec(`DELETE FROM api_keys WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("store: no api key %q", id)
 	}
 	return nil
 }
@@ -171,20 +320,21 @@ func (s *Store) maybeAutofillConversationTitle(tx *sql.Tx, conversationID, userC
 }
 
 type Conversation struct {
-	ID              string `json:"id"`
-	ModelID         string `json:"model_id"`
-	ModelName       string `json:"model_name"`
-	Title           string `json:"title"`
-	IsTEE           bool   `json:"is_tee"`
-	Pinned          bool   `json:"pinned"`
-	UpdatedAt       int64  `json:"updated_at"`
-	SessionID       string `json:"session_id,omitempty"`
-	SessionEndsAt   int64  `json:"session_ends_at,omitempty"` // unix seconds from chain; 0 omitted
+	ID            string `json:"id"`
+	ModelID       string `json:"model_id"`
+	ModelName     string `json:"model_name"`
+	Title         string `json:"title"`
+	IsTEE         bool   `json:"is_tee"`
+	Pinned        bool   `json:"pinned"`
+	UpdatedAt     int64  `json:"updated_at"`
+	SessionID     string `json:"session_id,omitempty"`
+	SessionEndsAt int64  `json:"session_ends_at,omitempty"` // unix seconds from chain; 0 omitted
+	Source        string `json:"source,omitempty"`           // "ui" or "api"
 }
 
 func (s *Store) ListConversations(limit int) ([]Conversation, error) {
 	rows, err := s.db.Query(
-		`SELECT id, model_id, COALESCE(model_name,''), COALESCE(title,''), is_tee, COALESCE(pinned,0), updated_at, COALESCE(session_id,'') 
+		`SELECT id, model_id, COALESCE(model_name,''), COALESCE(title,''), is_tee, COALESCE(pinned,0), updated_at, COALESCE(session_id,''), COALESCE(source,'ui')
 		 FROM conversations ORDER BY pinned DESC, updated_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -195,7 +345,7 @@ func (s *Store) ListConversations(limit int) ([]Conversation, error) {
 	for rows.Next() {
 		var c Conversation
 		var isTee, pinned int
-		if err := rows.Scan(&c.ID, &c.ModelID, &c.ModelName, &c.Title, &isTee, &pinned, &c.UpdatedAt, &c.SessionID); err != nil {
+		if err := rows.Scan(&c.ID, &c.ModelID, &c.ModelName, &c.Title, &isTee, &pinned, &c.UpdatedAt, &c.SessionID, &c.Source); err != nil {
 			return nil, err
 		}
 		c.IsTEE = isTee != 0
@@ -361,15 +511,26 @@ func (s *Store) GetMessages(conversationID string) ([]Message, error) {
 }
 
 func (s *Store) CreateConversation(id, modelID, modelName, provider string, isTEE bool) error {
+	return s.createConversation(id, modelID, modelName, provider, isTEE, "ui")
+}
+
+func (s *Store) CreateConversationWithSource(id, modelID, modelName, provider string, isTEE bool, source string) error {
+	return s.createConversation(id, modelID, modelName, provider, isTEE, source)
+}
+
+func (s *Store) createConversation(id, modelID, modelName, provider string, isTEE bool, source string) error {
 	now := time.Now().Unix()
 	tee := 0
 	if isTEE {
 		tee = 1
 	}
+	if source == "" {
+		source = "ui"
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO conversations (id, model_id, model_name, provider, is_tee, created_at, updated_at) 
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, modelID, modelName, provider, tee, now, now,
+		`INSERT INTO conversations (id, model_id, model_name, provider, is_tee, created_at, updated_at, source) 
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, modelID, modelName, provider, tee, now, now, source,
 	)
 	return err
 }
@@ -380,14 +541,14 @@ func (s *Store) LatestEmptyConversationForModel(modelID string) (Conversation, b
 	var c Conversation
 	var isTee, pinned int
 	err := s.db.QueryRow(
-		`SELECT c.id, c.model_id, COALESCE(c.model_name,''), COALESCE(c.title,''), c.is_tee, COALESCE(c.pinned,0), c.updated_at, COALESCE(c.session_id,'')
+		`SELECT c.id, c.model_id, COALESCE(c.model_name,''), COALESCE(c.title,''), c.is_tee, COALESCE(c.pinned,0), c.updated_at, COALESCE(c.session_id,''), COALESCE(c.source,'ui')
 		 FROM conversations c
 		 WHERE c.model_id = ?
 		   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
 		 ORDER BY c.updated_at DESC
 		 LIMIT 1`,
 		modelID,
-	).Scan(&c.ID, &c.ModelID, &c.ModelName, &c.Title, &isTee, &pinned, &c.UpdatedAt, &c.SessionID)
+	).Scan(&c.ID, &c.ModelID, &c.ModelName, &c.Title, &isTee, &pinned, &c.UpdatedAt, &c.SessionID, &c.Source)
 	if err == sql.ErrNoRows {
 		return Conversation{}, false, nil
 	}

@@ -61,6 +61,12 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │  │  Wallet    │  │  Network   │  │  On-chain sessions │  │
 │  │  send/erase│  │  / RPC     │  │  list + close      │  │
 │  └────────────┘  └────────────┘  └────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │  Expert Mode: API Gateway section                   │  │
+│  │  • Start/stop gateway, port config                  │  │
+│  │  • API key generate / list / revoke                 │  │
+│  │  • Connection info card                             │  │
+│  └─────────────────────────────────────────────────────┘  │
 │                         │                                 │
 │              dart:ffi → c-shared lib (JSON strings)       │
 │                         │                                 │
@@ -70,6 +76,18 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │  • Init / Shutdown, wallet FFI wrappers                  │
 │  • SQLite: CreateConversation, SaveMessage (on SendPrompt)│
 │  • Delegates chain/session/chat → proxy-router mobile SDK │
+│  • Gateway: StartGateway, StopGateway, GatewayStatus     │
+│  • API Keys: GenerateAPIKey, ListAPIKeys, RevokeAPIKey   │
+├─────────────────────────────────────────────────────────┤
+│          API Gateway (`go/internal/gateway/`)             │
+│                                                           │
+│  • OpenAI-compatible HTTP server (configurable port)     │
+│  • POST /v1/chat/completions — streaming + non-streaming │
+│  • GET  /v1/models — cached from active.mor.org          │
+│  • GET  /health — unauthenticated health check           │
+│  • Bearer token auth, CORS, request logging              │
+│  • Automatic session management (resolve → reuse → open) │
+│  • Conversations persisted with source:"api" for UI      │
 ├─────────────────────────────────────────────────────────┤
 │     Proxy-router mobile SDK (`proxy-router/mobile/`)      │
 │                                                           │
@@ -83,12 +101,26 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │                   Store (Go — SQLite)                     │
 │                                                           │
 │  modernc.org/sqlite — conversations, messages, prefs      │
-│  (Chat **browser** UI = next; persistence on send = yes)   │
+│  api_keys table — bcrypt-hashed Bearer tokens             │
+│  conversations.source column — "ui" or "api" origin       │
 ├─────────────────────────────────────────────────────────┤
 │                   Platform Layer                          │
 │                                                           │
 │  Keychain / Keystore (mnemonic), Application Support      │
 │  (RPC override file, chat_streaming_preference.txt, DB)    │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│              MCP Server (`mcp-server/`)                   │
+│                                                           │
+│  TypeScript stdio process — @modelcontextprotocol/sdk    │
+│  • morpheus_models tool — list available models          │
+│  • morpheus_chat tool — send prompts to Morpheus models  │
+│  • Calls gateway HTTP API on localhost (fully local)     │
+│  • Configured via .cursor/mcp.json for Cursor/Claude     │
+│                                                           │
+│  Cursor Agent ←stdio→ MCP Server ←HTTP→ Gateway ←SDK→    │
+│                                        Morpheus Network   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -128,6 +160,7 @@ CREATE TABLE conversations (
     model_name  TEXT,
     title       TEXT,
     is_tee      INTEGER DEFAULT 0,
+    source      TEXT DEFAULT 'ui',    -- 'ui' or 'api' (gateway-originated)
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
@@ -151,6 +184,16 @@ CREATE TABLE model_cache (
 CREATE TABLE preferences (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+CREATE TABLE api_keys (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    key_hash    TEXT NOT NULL,       -- bcrypt hash of the full sk-... key
+    key_prefix  TEXT NOT NULL,       -- first 12 chars for display
+    created_at  INTEGER NOT NULL,
+    last_used   INTEGER DEFAULT 0,
+    revoked     INTEGER DEFAULT 0
 );
 ```
 
@@ -224,8 +267,42 @@ CREATE TABLE preferences (
 | Session open / close / list | SDK + `OnChainSessionsScreen` |
 | OpenAI-shaped chat | `SendPrompt` → `SendPromptV2` |
 | Optional dedicated RPC | `eth_rpc_override.txt` + `chain_config` defaults |
+| `/v1/models` (Marketplace API) | Gateway fetches from `active.mor.org` with cache + SDK fallback |
+| `/v1/chat/completions` | Gateway: auto session mgmt + OpenAI format |
+| API key auth | Gateway: `sk-` Bearer tokens, bcrypt-hashed |
+| MCP tool discovery | MCP server: `morpheus_models` + `morpheus_chat` tools |
 
-**What we deliberately skip:** Cognito, API keys, billing, multi-tenant gateway as a dependency in the inference path.
+**What we deliberately skip:** Cognito, billing, multi-tenant gateway. API keys are single-user, local-only (no central relay).
+
+---
+
+## API Gateway & MCP — Local AI Agent Integration
+
+Node Neo doubles as a **personal Morpheus gateway** for external applications and AI agents. All traffic stays local.
+
+### Gateway (`go/internal/gateway/`)
+
+An OpenAI-compatible HTTP server that runs alongside the main app on a configurable port (default 8083). It reuses the same proxy-router SDK and SQLite store as the UI, so sessions and conversations are shared.
+
+**Key design decisions:**
+- **No upstream modifications** — All gateway code lives in `nodeneo/go/`, never touching `proxy-router/`
+- **Shared state** — API-initiated conversations appear in the UI (marked with a robot icon via `source: "api"`)
+- **Model list from active.mor.org** — Same source as the UI, with 5-min in-memory cache, ETag support, and SDK fallback (matches Marketplace API's `DirectModelService` pattern)
+- **Transparent session lifecycle** — Resolves model name → blockchain ID, reuses open sessions, opens new ones automatically
+
+### MCP Server (`mcp-server/`)
+
+A lightweight TypeScript process using `@modelcontextprotocol/sdk` that bridges AI agents (Cursor, Claude Desktop) to the gateway via stdio.
+
+**Why MCP instead of OpenAI base URL override?**
+- Cursor proxies "Override OpenAI Base URL" requests through their own servers, which blocks localhost via SSRF protection
+- MCP servers run as local processes — stdio communication never leaves the machine
+- Prompts stay between the user and the Morpheus provider, preserving the privacy guarantee
+
+**Data flow:**
+```
+AI Agent (Cursor/Claude) ←stdio→ MCP Server ←HTTP localhost→ Gateway ←SDK→ Morpheus Network
+```
 
 ---
 

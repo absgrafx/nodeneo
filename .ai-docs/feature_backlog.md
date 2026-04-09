@@ -127,48 +127,69 @@ Node Neo running on a desktop becomes a **personal Morpheus gateway** — other 
 
 Recommendation: implement all three, layered. OpenAI-compat for inference, OpenAPI for full surface, MCP for agent discovery. API keys gate everything.
 
-### Requirements
+### What's Built (v0.1 — April 2026)
 
-#### API Key Management
-- Generate API keys from Expert Mode (or a dedicated "API Access" settings screen)
-- Keys are stored securely (Keychain or encrypted in the app DB)
-- Each key has a **permission tier**:
-  - **Chat** — inference only (`/v1/chat/completions`, prompt endpoints)
-  - **Read** — chat + read-only endpoints (models list, session info, balances)
-  - **Admin** — full access (open/close sessions, wallet operations, settings)
-- Keys can be **revoked** individually
-- Keys have optional **expiry** (never, 24h, 7d, 30d, custom)
-- Show active keys with last-used timestamp and client IP
+#### Go Gateway (`nodeneo/go/internal/gateway/`)
+- **`POST /v1/chat/completions`** — OpenAI-compatible chat endpoint with streaming (SSE) and non-streaming support
+- **`GET /v1/models`** — Fetches models directly from `active.mor.org/active_models.json` with 5-minute in-memory cache, ETag support, and SDK fallback. Response includes Morpheus-specific fields (`blockchainID`, `tags`, `modelType`) alongside standard OpenAI fields
+- **`GET /health`** — Health check (unauthenticated)
+- **Bearer token auth** — `sk-` prefixed API keys, bcrypt-hashed in SQLite, with `last_used` tracking
+- **Session management** — Automatic model name → blockchain ID resolution, session reuse (scans unclosed sessions), and transparent session opening
+- **Conversation persistence** — API-initiated conversations saved to SQLite with `source: "api"`, visible in the NodeNeo UI with a robot icon
+- **Request logging** — Middleware logs all inbound requests for debugging
+- **CORS** — Permissive headers for local/LAN use
+- **Configurable port** — Independent from the Expert Mode API/Swagger port, configurable via UI
+
+#### Flutter UI (Expert Mode)
+- **Gateway section** — Start/stop toggle, configurable port, connection info card
+- **API key management** — Generate, list (with last-used timestamps), revoke keys
+- **Conversation list** — API-source conversations marked with `smart_toy` icon
+
+#### MCP Server (`nodeneo/mcp-server/`)
+- **TypeScript stdio server** using `@modelcontextprotocol/sdk`
+- **`morpheus_models` tool** — Lists available Morpheus models via the gateway
+- **`morpheus_chat` tool** — Sends chat prompts to any Morpheus model, supports multi-turn messages
+- **Fully local** — Communicates with gateway on localhost via stdio, no traffic leaves the machine
+- **Cursor integration** — Configured via `.cursor/mcp.json`, auto-discovered by Cursor
+
+#### Key Learnings
+- **Cursor's "Override OpenAI Base URL" proxies through their servers** — SSRF protection blocks `127.0.0.1`. The OpenAI-compatible endpoint works for non-Cursor clients (LangChain, curl, custom apps) but Cursor requires MCP for local/private use.
+- **MCP is the right pattern for IDE integration** — Tools run as local processes, prompts never leave the machine. This aligns with the privacy goals of Morpheus.
+- **Cloudflared tunnel validated the pipeline** — End-to-end test confirmed the full flow works: Cursor → gateway → SDK → Morpheus provider → response rendered in Cursor.
+
+### What's Next (v0.2+)
+
+#### API Key Enhancements
+- **Permission tiers**: Chat (inference only) / Read (+ models, sessions, balances) / Admin (full access)
+- **Key expiry**: never, 24h, 7d, 30d, custom
+- **Rate limiting** per key (configurable)
+- **Spending limits** per key (MOR budget cap)
+- Show client IP on last-used
+
+#### MCP Server Expansion
+- **More tools**: `session_status`, `open_session`, `close_session`, `wallet_balance`
+- **Resources**: `models://list`, `wallet://balance`, `sessions://active`
+- **Streaming support**: Investigate MCP streaming for long responses
+- **MCP SSE transport**: For remote/network MCP clients (not just stdio)
+- **Auto-start**: Launch MCP server alongside the gateway from the NodeNeo UI
+- **Dynamic config**: Generate `.cursor/mcp.json` from the UI with the correct port/key
 
 #### Service Discovery / "Bot Primer"
-- When Expert Mode API is running, serve a machine-readable descriptor at a well-known path:
-  - `/.well-known/ai-plugin.json` (OpenAI plugin format) — describes the node, auth method, API spec URL
-  - `/v1/models` — OpenAI-compatible model list (returns available Morpheus models)
-  - `/.well-known/mcp.json` or MCP SSE endpoint — for MCP-aware agents
-  - Swagger at existing `/swagger/index.html`
-- The descriptor includes: node name, capabilities, supported models, auth requirements, endpoint URLs
-- A human-readable "Getting Started" page at the root when accessed via browser (like the Swagger UI but simpler — "Here's how to connect a bot to this node")
-
-#### OpenAI-Compatible Inference Endpoint
-- `POST /v1/chat/completions` — accepts standard OpenAI request format
-- Maps to Morpheus session open + prompt internally
-- Handles session lifecycle transparently (reuse active session, open new if needed)
-- Supports streaming (`stream: true` → SSE)
-- Returns standard OpenAI response format (including `usage`, `model`, `finish_reason`)
-- `Authorization: Bearer <api-key>` header for auth
+- `/.well-known/ai-plugin.json` (OpenAI plugin format) — node name, auth method, API spec URL
+- `/.well-known/mcp.json` — for MCP-aware agents to discover the node
+- Swagger at existing `/swagger/index.html`
+- Human-readable "Getting Started" page at root — "Here's how to connect a bot to this node"
 
 #### Network Exposure
-- Already have Local/Network toggle in Expert Mode
-- When "Network" is selected, bind to `0.0.0.0` (already implemented)
-- Consider mDNS/Bonjour announcement so the node is discoverable on the LAN without knowing the IP
-- Firewall guidance in the UI ("Make sure port 8082 is accessible on your network")
+- **mDNS/Bonjour** announcement so the node is discoverable on LAN without knowing the IP
+- **HTTPS** for non-localhost (self-signed cert or Let's Encrypt)
+- Firewall guidance in the UI
 
-### MCP Server Implementation
-- Expose as an MCP server (SSE transport or stdio for local)
-- **Tools**: `chat` (send prompt), `list_models`, `session_status`, `open_session`, `close_session`
-- **Resources**: `models://list`, `wallet://balance`, `sessions://active`
-- MCP clients connect, discover tools, and invoke them with the API key
-- This is how an AI agent running on another machine would "learn" what your node can do
+#### Broader Ecosystem Integration
+- **OpenClaw** — Determine integration protocol and wire up
+- **Continue.dev** — Works out of the box with the OpenAI-compatible endpoint (direct connection, no SSRF issue)
+- **LangChain / LlamaIndex** — Works via OpenAI-compatible endpoint
+- **Claude Desktop** — MCP server can be configured for Claude Desktop too
 
 ### Security Considerations
 - API keys should be long, random, and never logged in plaintext
@@ -184,6 +205,7 @@ Recommendation: implement all three, layered. OpenAI-compat for inference, OpenA
 - How does the MOR spending work when an external client opens sessions through the node? The node owner's wallet pays — should there be spending limits per key?
 - What does the OpenClaw integration specifically need? Get their API/protocol docs.
 - Should the "bot primer" page be customizable (node name, description, available models)?
+- Should the MCP server be bundled inside the Go binary (Go MCP implementation) instead of a separate TypeScript process?
 
 ---
 
@@ -243,4 +265,74 @@ Recommendation: implement all three, layered. OpenAI-compat for inference, OpenA
 
 ---
 
-*Last updated: 2026-04-03*
+## 7. File Attachments for Chat Context
+
+**Priority:** Medium (usability)
+
+### Problem
+Users can't attach files (documents, code, images, etc.) to provide context for a conversation. Everything must be typed or pasted into the prompt.
+
+### Requirements
+- Attach one or more files to a chat conversation via a clip/attach icon near the prompt bar
+- Attachments are **per-conversation** (stored in SQLite alongside the chat record), not per-session — they survive session close/reopen
+- Supported file types (initial): `.txt`, `.md`, `.json`, `.csv`, `.pdf`, `.py`, `.js`, `.ts`, `.go`, `.dart`, `.log`, images (`.png`, `.jpg`, `.gif`)
+- File contents are included as context in the prompt sent to the provider (prepended or as a system message, depending on size)
+- Show attached files as chips/tags below the prompt bar with remove (×) option
+- Size limits: individual file cap (e.g. 100KB text, 1MB images), total conversation context budget
+- Drag-and-drop support on desktop platforms
+
+### Open Questions
+- How does the Morpheus provider protocol handle large context? Is there a token limit per prompt?
+- Should attached images be sent as base64 inline (multimodal models) or just described as text?
+- Should we support attaching URLs (fetch and include page content)?
+- Storage: store file contents in SQLite blob, or save to app support directory with a reference?
+
+---
+
+## 8. Rich Media Rendering (Images, Video from LLMs)
+
+**Priority:** Medium (future models)
+
+### Problem
+When multimodal/generative models become available on the Morpheus network, the app needs to render image and video outputs — not just text.
+
+### Requirements
+- Detect when an LLM response contains image data (base64 inline, URL, or binary)
+- Render images inline in the chat bubble (with tap-to-expand/fullscreen)
+- Support common formats: PNG, JPEG, GIF, WebP, SVG
+- Video rendering: support MP4/WebM playback inline or in a modal player
+- Save/export generated media to local filesystem (share sheet on mobile)
+- Loading states for media generation (progress indicator while model generates)
+- Markdown image syntax (`![alt](url)`) should render as actual images
+
+### Open Questions
+- Which Morpheus models will support image/video generation? Timeline?
+- What's the response format — base64 in JSON, presigned URL, streaming binary?
+- Should we support streaming image generation (progressive rendering)?
+- Cache policy for generated media (keep in conversation DB, or ephemeral)?
+- Accessibility: alt text for generated images
+
+---
+
+## Bug Fixes / Technical Debt
+
+### BUG: SDK log level not syncing with UI setting
+**Severity:** Medium
+- When the user changes log level to Debug in Version & Logs, the Flutter wrapper switches but the Go SDK's zap logger stays at INFO
+- After an SDK restart (app relaunch), the log level resets to INFO regardless of the saved preference
+- **Fix needed:** `setLogLevel` must propagate to the Go SDK's zap logger atomically, and the saved preference must be applied during SDK initialization (before first log line)
+
+### BUG: Empty provider responses shown as "(empty response)"
+**Severity:** Medium
+- When a provider returns 200 with empty content, the chat shows a blank bubble with "(empty response)" — no retry option, no explanation
+- **Fix needed:** Detect empty responses and show "No response received — the provider may be busy. Tap to retry." with a retry action button, consistent with other error bubble patterns
+
+### Enhancement: HTTP request/response logging for inference calls
+**Severity:** Low-Medium (debugging)
+- At DEBUG level, the SDK logs session cache lookups and semaphore acquisition, but NOT the actual HTTP request to the provider or the response status/body
+- The inference HTTP exchange goes through the proxy-router's internal client which doesn't surface in the MOBILE logger
+- **Fix needed:** In the SDK's `sendPrompt`/`sendPromptWithStream` path, log the outbound request URL, headers (sanitized), response status code, content length, and first N bytes of response body at DEBUG level. Log empty responses at WARN level.
+
+---
+
+*Last updated: 2026-04-09*
