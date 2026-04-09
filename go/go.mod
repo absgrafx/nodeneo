@@ -9,10 +9,11 @@ require (
 	github.com/ethereum/go-ethereum v1.17.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/tyler-smith/go-bip39 v1.1.0
+	golang.org/x/crypto v0.49.0
 	modernc.org/sqlite v1.29.6
 )
 
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260403211407-b863dd98c90b
+replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260409231008-e18581efcf45
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
@@ -290,7 +291,6 @@ require (
 	go.uber.org/zap/exp v0.3.0 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.52.0 // indirect

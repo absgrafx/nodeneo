@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart' show compute;
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../services/bridge.dart';
 import '../../widgets/chat_message_body.dart';
 import '../../services/chat_streaming_preference_store.dart';
+import '../../services/default_tuning_store.dart';
 import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../../utils/session_cost_estimate.dart';
@@ -71,6 +73,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Persisted: request SSE/streaming from the provider vs one-shot completion.
   bool _preferStreaming = ChatStreamingPreferenceStore.defaultStreaming;
 
+  // --- Tuning parameters (Expert Mode) ---
+  double _temperature = 1.0;
+  double _topP = 1.0;
+  int _maxTokens = 2048;
+  double _frequencyPenalty = 0.0;
+  double _presencePenalty = 0.0;
+
   /// On-chain session length for this chat (from [SessionDurationStore] presets).
   int _sessionDurationSeconds = SessionDurationStore.defaultSeconds;
 
@@ -91,8 +100,21 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     setState(() => _sessionDurationSeconds = sec);
     await _loadStreamingPreference();
+    await _loadDefaultTuning();
     if (!mounted) return;
     await _bootstrap();
+  }
+
+  Future<void> _loadDefaultTuning() async {
+    final d = await DefaultTuningStore.instance.read();
+    if (!mounted) return;
+    setState(() {
+      _temperature = (d['temperature'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTemperature;
+      _topP = (d['top_p'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTopP;
+      _maxTokens = (d['max_tokens'] as num?)?.toInt() ?? DefaultTuningStore.defaultMaxTokens;
+      _frequencyPenalty = (d['frequency_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultFrequencyPenalty;
+      _presencePenalty = (d['presence_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultPresencePenalty;
+    });
   }
 
   Future<void> _refreshCostHint() async {
@@ -183,9 +205,15 @@ class _ChatScreenState extends State<ChatScreen> {
           final m = Map<String, dynamic>.from(e);
           final role = m['role'] as String? ?? 'user';
           final content = m['content'] as String? ?? '';
-          loaded.add(_ChatBubble(role: role, text: content));
+          Map<String, dynamic>? meta;
+          final rawMeta = m['metadata'] as String?;
+          if (rawMeta != null && rawMeta.isNotEmpty) {
+            try { meta = jsonDecode(rawMeta) as Map<String, dynamic>; } catch (_) {}
+          }
+          loaded.add(_ChatBubble(role: role, text: content, metadata: meta));
         }
         if (!mounted) return;
+        _loadTuningForConversation(resumeCid);
         final sid = (resumeSid != null && resumeSid.isNotEmpty) ? resumeSid : null;
         _completeStep(message: 'Conversation loaded');
         setState(() {
@@ -210,11 +238,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // --- New session flow ---
     try {
       final bridge = GoBridge();
-
-      // 1. Connect to network (RPC / Diamond contract)
       _startStep('Connecting to Morpheus network…');
       await _refreshCostHint();
-      _completeStep(message: 'Connected to network');
 
       // Internal: check if there's already a draft conversation with a live session
       final draft = bridge.claimEmptyDraftForModel(
@@ -228,30 +253,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
       // Fast path: draft already has a live session
       if (convId.isNotEmpty && sid.isNotEmpty) {
-        _addLog('Existing session found — reusing', level: _LogLevel.ok);
+        _completeStep(message: 'Existing session found');
         if (!mounted) return;
-        await _transitionToReady(convId, sid);
+        _transitionToReady(convId, sid);
         return;
       }
 
-      // 2. Check for a reusable on-chain session for this model
-      _startStep('Checking for reusable on-chain session…');
+      _completeStep(message: 'Connected to network');
+
       final reuse = bridge.reusableSessionForModel(widget.modelId);
       var sessionId = (reuse['session_id'] as String?)?.trim() ?? '';
 
       if (sessionId.isNotEmpty) {
-        _completeStep(message: 'Reusing existing session');
+        _addLog('Reusing existing on-chain session', level: _LogLevel.ok);
       } else {
-        _completeStep(message: 'No reusable session');
-
-        // 3. Open a new session (provider selection → TEE attestation → on-chain stake)
         await _openSessionWithLog(widget.modelId);
         if (_phase == _BootstrapPhase.error) return;
         sessionId = _lastOpenedSessionId!;
       }
 
-      // 4. Create local conversation and link the session
-      _startStep('Creating conversation…');
+      // Create local conversation and link the session
+      _startStep('Preparing conversation…');
       if (convId.isEmpty) {
         convId = _newConversationId();
         bridge.createConversation(
@@ -263,11 +285,11 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
       bridge.setConversationSession(conversationId: convId, sessionId: sessionId);
-      _completeStep(message: 'Conversation created');
+      _completeStep(message: 'Conversation ready');
 
-      // 5. Ready
+      // Ready
       if (!mounted) return;
-      await _transitionToReady(convId, sessionId);
+      _transitionToReady(convId, sessionId);
     } on GoBridgeException catch (e) {
       if (_phase != _BootstrapPhase.error) {
         _completeStep(message: e.message, level: _LogLevel.error);
@@ -287,19 +309,17 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _transitionToReady(String convId, String sessionId) async {
-    _addLog(
-      widget.isTEE
-          ? 'Secure session established — you can begin'
-          : 'Session established — you can begin',
-      level: _LogLevel.ok,
-    );
-    // Let the user see the completed log for a moment
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
+  String? _readyBannerMessage;
+
+  void _transitionToReady(String convId, String sessionId) {
+    final readyMsg = widget.isTEE
+        ? 'Secure session ready for ${widget.modelName}'
+        : 'Session ready for ${widget.modelName}';
     if (!mounted) return;
     setState(() {
       _conversationId = convId;
       _sessionId = sessionId;
+      _readyBannerMessage = readyMsg;
       _showBootLog = true;
       _phase = _BootstrapPhase.ready;
     });
@@ -310,13 +330,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Runs the real proxy-router OpenSession flow on a background isolate.
   /// Go internally: select provider → TEE attestation (if secure) → on-chain open.
   Future<void> _openSessionWithLog(String modelId) async {
-    // The Go SDK's OpenSession does these steps internally in order:
-    //   1. Select provider from bids
-    //   2. If TEE: verify hardware attestation (TLS fingerprint, RTMR registers)
-    //   3. Open on-chain session (MOR stake transaction)
-    // We show the TEE step as the active spinner since it's the first meaningful wait.
     if (widget.isTEE) {
-      _startStep('Verifying secure (TEE) attestation with provider…');
+      _startStep('Verifying secure (TEE) attestation…');
     } else {
       _startStep('Opening on-chain session (staking MOR)…');
     }
@@ -349,7 +364,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _startStep('Opening on-chain session (staking MOR)…');
       }
 
-      _completeStep(message: 'On-chain session opened (MOR staked)');
+      _completeStep(message: 'On-chain session opened');
       _lastOpenedSessionId = sid;
     } on GoBridgeException catch (e) {
       _completeStep(message: e.message, level: _LogLevel.error);
@@ -396,6 +411,65 @@ class _ChatScreenState extends State<ChatScreen> {
     return sid;
   }
 
+  Map<String, dynamic>? _extractMetadata(Map<String, dynamic> res) {
+    final meta = <String, dynamic>{};
+    if (res.containsKey('latency_ms')) meta['latency_ms'] = res['latency_ms'];
+    if (res.containsKey('provider_response')) meta['provider_response'] = res['provider_response'];
+    // Legacy fields (pre-existing metadata stored in DB before the provider_response change)
+    if (res.containsKey('finish_reason')) meta['finish_reason'] = res['finish_reason'];
+    if (res.containsKey('usage')) meta['usage'] = res['usage'];
+    if (res.containsKey('model')) meta['model'] = res['model'];
+    return meta.isEmpty ? null : meta;
+  }
+
+  void _loadTuningForConversation(String conversationId) {
+    try {
+      final raw = GoBridge().getConversationTuning(conversationId);
+      if (raw.isEmpty) return;
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      setState(() {
+        _temperature = (json['temperature'] as num?)?.toDouble() ?? 1.0;
+        _topP = (json['top_p'] as num?)?.toDouble() ?? 1.0;
+        _maxTokens = (json['max_tokens'] as num?)?.toInt() ?? 2048;
+        _frequencyPenalty = (json['frequency_penalty'] as num?)?.toDouble() ?? 0.0;
+        _presencePenalty = (json['presence_penalty'] as num?)?.toDouble() ?? 0.0;
+      });
+    } catch (_) {}
+  }
+
+  void _saveTuningForConversation() {
+    final cid = _conversationId;
+    if (cid == null) return;
+    try {
+      final json = jsonEncode({
+        'temperature': _temperature,
+        'top_p': _topP,
+        'max_tokens': _maxTokens,
+        'frequency_penalty': _frequencyPenalty,
+        'presence_penalty': _presencePenalty,
+      });
+      GoBridge().setConversationTuning(conversationId: cid, tuningJSON: json);
+    } catch (_) {}
+  }
+
+  bool get _hasTuningOverrides =>
+      _temperature != 1.0 ||
+      _topP != 1.0 ||
+      _maxTokens != 2048 ||
+      _frequencyPenalty != 0.0 ||
+      _presencePenalty != 0.0 ||
+      !_preferStreaming;
+
+  Map<String, dynamic> _buildTuningOptions() {
+    final opts = <String, dynamic>{};
+    if (_temperature != 1.0) opts['temperature'] = _temperature;
+    if (_topP != 1.0) opts['top_p'] = _topP;
+    if (_maxTokens != 2048) opts['max_tokens'] = _maxTokens;
+    if (_frequencyPenalty != 0.0) opts['frequency_penalty'] = _frequencyPenalty;
+    if (_presencePenalty != 0.0) opts['presence_penalty'] = _presencePenalty;
+    return opts;
+  }
+
   Future<void> _send() async {
     final text = _input.text.trim();
     final cid = _conversationId;
@@ -403,6 +477,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     setState(() {
       _showBootLog = false;
+      _readyBannerMessage = null;
       _messages.add(_ChatBubble(role: 'user', text: text));
       _input.clear();
       _sending = true;
@@ -463,43 +538,51 @@ class _ChatScreenState extends State<ChatScreen> {
       final bridge = GoBridge();
       if (_preferStreaming) {
         var accumulated = '';
+        int streamBubbleIdx = -1;
         if (mounted) {
           setState(() {
             _messages.add(_ChatBubble(role: 'assistant', text: ''));
+            streamBubbleIdx = _messages.length - 1;
           });
           streamingAssistantPending = true;
         }
-        final res = bridge.sendPromptWithStream(
+        var lastUiUpdate = DateTime.now();
+        const uiThrottle = Duration(milliseconds: 33);
+        final res = await bridge.sendPromptWithOptionsAsync(
           sid,
           cid,
           text,
           stream: true,
+          options: _buildTuningOptions(),
           onDelta: (delta, isLast) {
             accumulated += delta;
-            if (!mounted) return;
-            setState(() {
-              if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
-                _messages.removeLast();
-              }
-              _messages.add(_ChatBubble(role: 'assistant', text: accumulated));
-            });
-            if (isLast) {
-              _scrollToBottom();
+            if (!mounted || streamBubbleIdx < 0) return;
+            final now = DateTime.now();
+            if (isLast || now.difference(lastUiUpdate) >= uiThrottle) {
+              lastUiUpdate = now;
+              setState(() {
+                _messages[streamBubbleIdx] =
+                    _ChatBubble(role: 'assistant', text: accumulated);
+              });
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (_scroll.hasClients) {
+                  _scroll.jumpTo(_scroll.position.maxScrollExtent);
+                }
+              });
             }
           },
         );
         final reply = res['response'] as String? ?? accumulated;
+        final meta = _extractMetadata(res);
         if (!mounted) return;
         setState(() {
-          if (_messages.isNotEmpty && _messages.last.role == 'assistant') {
-            _messages.removeLast();
-          }
-          _messages.add(
-            _ChatBubble(
+          if (streamBubbleIdx >= 0 && streamBubbleIdx < _messages.length) {
+            _messages[streamBubbleIdx] = _ChatBubble(
               role: 'assistant',
               text: reply.isEmpty ? '(empty response)' : reply,
-            ),
-          );
+              metadata: meta,
+            );
+          }
           _sending = false;
         });
       } else {
@@ -591,6 +674,432 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _showTuningDrawer() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: NeoTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                16,
+                20,
+                16 + MediaQuery.of(ctx).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4B5563),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const Text(
+                    'Chat Tuning',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('Streaming', style: TextStyle(fontSize: 14)),
+                        const SizedBox(width: 4),
+                        Tooltip(
+                          message: 'When on, tokens appear as they are generated.\nWhen off, the full response is delivered at once.',
+                          preferBelow: false,
+                          triggerMode: TooltipTriggerMode.tap,
+                          showDuration: const Duration(seconds: 4),
+                          child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+                        ),
+                      ],
+                    ),
+                    subtitle: Text(
+                      _preferStreaming ? 'Tokens arrive in real-time' : 'Full response delivered at once',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                    ),
+                    value: _preferStreaming,
+                    activeColor: NeoTheme.green,
+                    onChanged: (v) {
+                      setState(() => _preferStreaming = v);
+                      setSheetState(() {});
+                      ChatStreamingPreferenceStore.instance.writePreferStreaming(v);
+                    },
+                  ),
+                  const Divider(height: 24, color: Color(0xFF374151)),
+                  _TuningSlider(
+                    label: 'Temperature',
+                    tooltip: 'Controls randomness. Lower values make output\nmore focused; higher values more creative.',
+                    value: _temperature,
+                    min: 0.0,
+                    max: 2.0,
+                    divisions: 20,
+                    format: (v) => v.toStringAsFixed(1),
+                    onChanged: (v) {
+                      setState(() => _temperature = v);
+                      setSheetState(() {});
+                      _saveTuningForConversation();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _TuningSlider(
+                    label: 'Top P',
+                    tooltip: 'Nucleus sampling. Limits token choices to the\ntop P probability mass. Lower = more predictable.',
+                    value: _topP,
+                    min: 0.0,
+                    max: 1.0,
+                    divisions: 20,
+                    format: (v) => v.toStringAsFixed(2),
+                    onChanged: (v) {
+                      setState(() => _topP = v);
+                      setSheetState(() {});
+                      _saveTuningForConversation();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text('Max Tokens', style: TextStyle(fontSize: 13)),
+                            const SizedBox(width: 4),
+                            Tooltip(
+                              message: 'Maximum number of tokens in the response.\nHigher values allow longer replies.',
+                              preferBelow: false,
+                              triggerMode: TooltipTriggerMode.tap,
+                              showDuration: const Duration(seconds: 4),
+                              child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, size: 20),
+                        onPressed: _maxTokens > 64
+                            ? () {
+                                final next = (_maxTokens - 256).clamp(64, 16384);
+                                setState(() => _maxTokens = next);
+                                setSheetState(() {});
+                                _saveTuningForConversation();
+                              }
+                            : null,
+                      ),
+                      Text(
+                        '$_maxTokens',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline, size: 20),
+                        onPressed: _maxTokens < 16384
+                            ? () {
+                                final next = (_maxTokens + 256).clamp(64, 16384);
+                                setState(() => _maxTokens = next);
+                                setSheetState(() {});
+                                _saveTuningForConversation();
+                              }
+                            : null,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _TuningSlider(
+                    label: 'Frequency Penalty',
+                    tooltip: 'Penalises tokens based on how often they already\nappeared. Reduces repetitive phrasing.',
+                    value: _frequencyPenalty,
+                    min: 0.0,
+                    max: 2.0,
+                    divisions: 20,
+                    format: (v) => v.toStringAsFixed(1),
+                    onChanged: (v) {
+                      setState(() => _frequencyPenalty = v);
+                      setSheetState(() {});
+                      _saveTuningForConversation();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _TuningSlider(
+                    label: 'Presence Penalty',
+                    tooltip: 'Penalises tokens that have appeared at all.\nEncourages the model to explore new topics.',
+                    value: _presencePenalty,
+                    min: 0.0,
+                    max: 2.0,
+                    divisions: 20,
+                    format: (v) => v.toStringAsFixed(1),
+                    onChanged: (v) {
+                      setState(() => _presencePenalty = v);
+                      setSheetState(() {});
+                      _saveTuningForConversation();
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            await DefaultTuningStore.instance.write(
+                              temperature: _temperature,
+                              topP: _topP,
+                              maxTokens: _maxTokens,
+                              frequencyPenalty: _frequencyPenalty,
+                              presencePenalty: _presencePenalty,
+                            );
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Current settings saved as default for new chats'),
+                                behavior: SnackBarBehavior.floating,
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.save_outlined, size: 16),
+                          label: const Text('Save as default'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: NeoTheme.green,
+                            side: BorderSide(color: NeoTheme.green.withValues(alpha: 0.5)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _preferStreaming = ChatStreamingPreferenceStore.defaultStreaming;
+                              _temperature = DefaultTuningStore.defaultTemperature;
+                              _topP = DefaultTuningStore.defaultTopP;
+                              _maxTokens = DefaultTuningStore.defaultMaxTokens;
+                              _frequencyPenalty = DefaultTuningStore.defaultFrequencyPenalty;
+                              _presencePenalty = DefaultTuningStore.defaultPresencePenalty;
+                            });
+                            setSheetState(() {});
+                            ChatStreamingPreferenceStore.instance.writePreferStreaming(
+                              ChatStreamingPreferenceStore.defaultStreaming,
+                            );
+                            _saveTuningForConversation();
+                          },
+                          icon: const Icon(Icons.restart_alt, size: 16),
+                          label: const Text('Reset to defaults'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showMetadataSheet(BuildContext ctx, Map<String, dynamic> metadata) {
+    final encoder = const JsonEncoder.withIndent('  ');
+    final formatted = encoder.convert(metadata);
+    showModalBottomSheet<void>(
+      context: ctx,
+      isScrollControlled: true,
+      backgroundColor: NeoTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) {
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            16,
+            20,
+            16 + MediaQuery.of(sheetCtx).viewInsets.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4B5563),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Response Info',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.copy_rounded, size: 18, color: Theme.of(sheetCtx).hintColor),
+                    tooltip: 'Copy JSON',
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: formatted));
+                      if (!sheetCtx.mounted) return;
+                      ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                        const SnackBar(
+                          content: Text('Metadata copied'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (metadata['latency_ms'] != null)
+                _MetadataRow(label: 'Latency', value: '${metadata['latency_ms']} ms'),
+              ..._buildProviderSummaryRows(metadata),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF111827),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    formatted,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: Color(0xFF94A3B8),
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildProviderSummaryRows(Map<String, dynamic> metadata) {
+    final rows = <Widget>[];
+    final pr = metadata['provider_response'];
+    if (pr is Map<String, dynamic>) {
+      // Usage block (works for both streaming and non-streaming shapes)
+      final usage = pr['usage'];
+      if (usage is Map) {
+        if (usage['prompt_tokens'] != null)
+          rows.add(_MetadataRow(label: 'Prompt tokens', value: '${usage['prompt_tokens']}'));
+        if (usage['completion_tokens'] != null)
+          rows.add(_MetadataRow(label: 'Completion tokens', value: '${usage['completion_tokens']}'));
+        if (usage['total_tokens'] != null)
+          rows.add(_MetadataRow(label: 'Total tokens', value: '${usage['total_tokens']}'));
+      }
+      // Finish reason from choices
+      final choices = pr['choices'];
+      if (choices is List && choices.isNotEmpty) {
+        final firstChoice = choices[0];
+        if (firstChoice is Map) {
+          final fr = firstChoice['finish_reason'] ?? firstChoice['finishReason'];
+          if (fr != null) rows.add(_MetadataRow(label: 'Finish reason', value: '$fr'));
+        }
+      }
+      // Model (if present)
+      if (pr['model'] != null) {
+        rows.add(_MetadataRow(label: 'Model', value: '${pr['model']}'));
+      }
+      // Created timestamp
+      if (pr['created'] != null) {
+        rows.add(_MetadataRow(label: 'Created', value: '${pr['created']}'));
+      }
+      // System fingerprint
+      if (pr['system_fingerprint'] != null) {
+        rows.add(_MetadataRow(label: 'System fingerprint', value: '${pr['system_fingerprint']}'));
+      }
+    } else {
+      // Legacy metadata from older DB entries
+      if (metadata['finish_reason'] != null)
+        rows.add(_MetadataRow(label: 'Finish reason', value: '${metadata['finish_reason']}'));
+      final usage = metadata['usage'];
+      if (usage is Map) {
+        if (usage['prompt_tokens'] != null)
+          rows.add(_MetadataRow(label: 'Prompt tokens', value: '${usage['prompt_tokens']}'));
+        if (usage['completion_tokens'] != null)
+          rows.add(_MetadataRow(label: 'Completion tokens', value: '${usage['completion_tokens']}'));
+        if (usage['total_tokens'] != null)
+          rows.add(_MetadataRow(label: 'Total tokens', value: '${usage['total_tokens']}'));
+      }
+      if (metadata['model'] != null)
+        rows.add(_MetadataRow(label: 'Model', value: '${metadata['model']}'));
+    }
+    return rows;
+  }
+
+  Widget _buildSingleStatusLine() {
+    final entry = _bootLog.isNotEmpty ? _bootLog.last : null;
+    final message = entry?.message ?? 'Preparing…';
+    final level = entry?.level ?? _LogLevel.working;
+
+    final Color color;
+    final Widget leading;
+    switch (level) {
+      case _LogLevel.working:
+        color = const Color(0xFF9CA3AF);
+        leading = const SizedBox(
+          width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2, color: NeoTheme.green),
+        );
+      case _LogLevel.ok:
+        color = NeoTheme.green;
+        leading = Icon(Icons.check_circle_outline_rounded, size: 18, color: color);
+      case _LogLevel.error:
+        color = const Color(0xFFF87171);
+        leading = Icon(Icons.error_outline_rounded, size: 18, color: color);
+      case _LogLevel.warn:
+        color = const Color(0xFFF59E0B);
+        leading = Icon(Icons.warning_amber_rounded, size: 18, color: color);
+      case _LogLevel.info:
+        color = const Color(0xFF6B7280);
+        leading = Icon(Icons.chevron_right_rounded, size: 18, color: color);
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        leading,
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            message,
+            style: TextStyle(color: color, fontSize: 14),
+          ),
+        ),
+      ],
+    );
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
@@ -641,87 +1150,10 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
       body: switch (_phase) {
-        _BootstrapPhase.bootstrapping => Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: NeoTheme.green),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Setting up session (${SessionDurationStore.formatDurationLabel(_sessionDurationSeconds)})',
-                        style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: ListView.builder(
-                    controller: _logScroll,
-                    itemCount: _bootLog.length,
-                    itemBuilder: (ctx, i) {
-                      final e = _bootLog[i];
-                      final Color color;
-                      final Widget leading;
-                      switch (e.level) {
-                        case _LogLevel.working:
-                          color = const Color(0xFF9CA3AF);
-                          leading = const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF)),
-                          );
-                        case _LogLevel.info:
-                          color = const Color(0xFF6B7280);
-                          leading = Icon(Icons.chevron_right_rounded, size: 14, color: color);
-                        case _LogLevel.warn:
-                          color = const Color(0xFFF59E0B);
-                          leading = Icon(Icons.warning_amber_rounded, size: 14, color: color);
-                        case _LogLevel.error:
-                          color = const Color(0xFFF87171);
-                          leading = Icon(Icons.error_outline_rounded, size: 14, color: color);
-                        case _LogLevel.ok:
-                          color = NeoTheme.green;
-                          leading = Icon(Icons.check_circle_outline_rounded, size: 14, color: color);
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            leading,
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                e.message,
-                                style: TextStyle(
-                                  color: color,
-                                  fontSize: 12,
-                                  height: 1.4,
-                                  fontFamily: 'monospace',
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'This can take a minute (MOR stake + provider handshake). Keep the app open.',
-                  style: TextStyle(color: Color(0xFF525252), fontSize: 11),
-                ),
-              ],
+        _BootstrapPhase.bootstrapping => Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: _buildSingleStatusLine(),
             ),
           ),
         _BootstrapPhase.error => isTeeAttestationFailure(_error)
@@ -791,8 +1223,46 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
         _BootstrapPhase.ready => Column(
             children: [
-              if (_showBootLog && _messages.isEmpty && _bootLog.isNotEmpty)
-                _BootLogBanner(entries: _bootLog, isTEE: widget.isTEE),
+              if (_readyBannerMessage != null && _messages.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Material(
+                    color: NeoTheme.green.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            widget.isTEE ? Icons.verified_user_rounded : Icons.check_circle_rounded,
+                            size: 22,
+                            color: NeoTheme.green,
+                          ),
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              _readyBannerMessage!,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: NeoTheme.green,
+                              ),
+                            ),
+                          ),
+                          if (widget.isTEE) ...[
+                            const SizedBox(width: 8),
+                            Icon(
+                              Icons.verified_user_rounded,
+                              size: 22,
+                              color: NeoTheme.green,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               if (_sessionId == null || _sessionId!.isEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -870,6 +1340,19 @@ class _ChatScreenState extends State<ChatScreen> {
                               Row(
                                 children: [
                                   const Spacer(),
+                                  if (b.metadata != null && b.metadata!.isNotEmpty)
+                                    IconButton(
+                                      tooltip: 'Response info',
+                                      padding: EdgeInsets.zero,
+                                      visualDensity: VisualDensity.compact,
+                                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                      icon: Icon(
+                                        Icons.data_object_rounded,
+                                        size: 18,
+                                        color: theme.hintColor,
+                                      ),
+                                      onPressed: () => _showMetadataSheet(ctx, b.metadata!),
+                                    ),
                                   IconButton(
                                     tooltip: b.isError ? 'Copy error text' : 'Copy response',
                                     padding: EdgeInsets.zero,
@@ -950,6 +1433,17 @@ class _ChatScreenState extends State<ChatScreen> {
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
+                          IconButton(
+                            onPressed: _sending ? null : _showTuningDrawer,
+                            tooltip: 'Chat tuning',
+                            icon: Icon(
+                              Icons.tune_rounded,
+                              size: 22,
+                              color: _hasTuningOverrides
+                                  ? NeoTheme.green
+                                  : Theme.of(context).hintColor,
+                            ),
+                          ),
                           Expanded(
                             child: TextField(
                               controller: _input,
@@ -1323,6 +1817,111 @@ class _ChatBubble {
   final String text;
   final bool isError;
   final Future<void> Function()? onReconnect;
+  final Map<String, dynamic>? metadata;
 
-  _ChatBubble({required this.role, required this.text, this.isError = false, this.onReconnect});
+  _ChatBubble({required this.role, required this.text, this.isError = false, this.onReconnect, this.metadata});
+}
+
+class _MetadataRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _MetadataRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'monospace',
+              color: Color(0xFFE5E7EB),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TuningSlider extends StatelessWidget {
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final String Function(double) format;
+  final ValueChanged<double> onChanged;
+  final String? tooltip;
+
+  const _TuningSlider({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.format,
+    required this.onChanged,
+    this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label, style: const TextStyle(fontSize: 13)),
+                if (tooltip != null) ...[
+                  const SizedBox(width: 4),
+                  Tooltip(
+                    message: tooltip!,
+                    preferBelow: false,
+                    triggerMode: TooltipTriggerMode.tap,
+                    showDuration: const Duration(seconds: 4),
+                    child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+                  ),
+                ],
+              ],
+            ),
+            Text(
+              format(value),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            activeTrackColor: NeoTheme.green,
+            thumbColor: NeoTheme.green,
+            overlayColor: NeoTheme.green.withValues(alpha: 0.12),
+            inactiveTrackColor: const Color(0xFF374151),
+          ),
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
 }

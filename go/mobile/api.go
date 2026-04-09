@@ -11,6 +11,8 @@ import (
 	"time"
 
 	sdk "github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile"
+	"github.com/absgrafx/nodeneo/internal/cloudflared"
+	"github.com/absgrafx/nodeneo/internal/gateway"
 	"github.com/absgrafx/nodeneo/internal/logger"
 	"github.com/absgrafx/nodeneo/internal/store"
 	openai "github.com/sashabaranov/go-openai"
@@ -519,16 +521,30 @@ func SendPromptWithStreamCallback(sessionID string, conversationID string, promp
 	return sendPromptWithOptionalChunk(sessionID, conversationID, prompt, stream, chunk)
 }
 
+// SendPromptWithStreamCallbackAsync is the non-blocking variant of [SendPromptWithStreamCallback].
+// It launches the prompt in a goroutine and returns immediately. Streaming deltas arrive through
+// [chunk]; the final result JSON is delivered through [done]. This allows the FFI caller's event
+// loop to process delta callbacks in real-time instead of batching them after completion.
+func SendPromptWithStreamCallbackAsync(sessionID, conversationID, prompt string, stream bool, chunk func(text string, isLast bool) error, done func(resultJSON string)) {
+	go func() {
+		result := sendPromptWithOptionalChunk(sessionID, conversationID, prompt, stream, chunk)
+		done(result)
+	}()
+}
+
 func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isLast bool) error) string {
 	mu.Lock()
-	defer mu.Unlock()
-	if client == nil {
+	c := client
+	d := db
+	mu.Unlock()
+
+	if c == nil {
 		return errJSON(errNotInit)
 	}
 
 	var omsgs []openai.ChatCompletionMessage
-	if db != nil {
-		prev, err := db.GetMessages(conversationID)
+	if d != nil {
+		prev, err := d.GetMessages(conversationID)
 		if err != nil {
 			return errJSON(err)
 		}
@@ -538,7 +554,7 @@ func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt
 	}
 
 	var fullResponse string
-	err := client.SendPromptWithMessages(context.Background(), sessionID, omsgs, stream, func(text string, isLast bool) error {
+	err := c.SendPromptWithMessages(context.Background(), sessionID, omsgs, stream, func(text string, isLast bool) error {
 		fullResponse += text
 		if chunk != nil {
 			return chunk(text, isLast)
@@ -549,13 +565,116 @@ func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt
 		return errJSON(err)
 	}
 
-	// Persist only after success so a failed/retry round does not duplicate the user row in SQLite.
-	if db != nil {
-		_ = db.SaveMessage(conversationID, "user", prompt)
-		_ = db.SaveMessage(conversationID, "assistant", fullResponse)
+	if d != nil {
+		_ = d.SaveMessage(conversationID, "user", prompt)
+		_ = d.SaveMessage(conversationID, "assistant", fullResponse)
 	}
 
 	return resultJSON(map[string]string{"response": fullResponse})
+}
+
+// TuningOptions maps the JSON blob from the UI/FFI layer to SDK ChatParams.
+type TuningOptions struct {
+	Temperature      *float32 `json:"temperature,omitempty"`
+	TopP             *float32 `json:"top_p,omitempty"`
+	MaxTokens        *int     `json:"max_tokens,omitempty"`
+	FrequencyPenalty *float32 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float32 `json:"presence_penalty,omitempty"`
+}
+
+func (t *TuningOptions) toChatParams() *sdk.ChatParams {
+	if t == nil {
+		return nil
+	}
+	return &sdk.ChatParams{
+		Temperature:      t.Temperature,
+		TopP:             t.TopP,
+		MaxTokens:        t.MaxTokens,
+		FrequencyPenalty: t.FrequencyPenalty,
+		PresencePenalty:  t.PresencePenalty,
+	}
+}
+
+// SendPromptWithOptions sends a prompt with optional tuning parameters.
+// [optionsJSON] is a JSON blob with temperature, top_p, max_tokens, etc.
+// Empty string or "{}" uses SDK defaults.
+func SendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isLast bool) error) string {
+	return sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON, stream, chunk)
+}
+
+// SendPromptWithOptionsAsync is the non-blocking variant of [SendPromptWithOptions].
+func SendPromptWithOptionsAsync(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isLast bool) error, done func(resultJSON string)) {
+	go func() {
+		result := sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON, stream, chunk)
+		done(result)
+	}()
+}
+
+func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isLast bool) error) string {
+	// Grab references under the lock, then release before the (potentially long) SDK call.
+	mu.Lock()
+	c := client
+	d := db
+	mu.Unlock()
+
+	if c == nil {
+		return errJSON(errNotInit)
+	}
+
+	var opts *TuningOptions
+	if optionsJSON != "" && optionsJSON != "{}" {
+		opts = &TuningOptions{}
+		if err := json.Unmarshal([]byte(optionsJSON), opts); err != nil {
+			return errJSON(fmt.Errorf("invalid options JSON: %w", err))
+		}
+	}
+
+	var omsgs []openai.ChatCompletionMessage
+	if d != nil {
+		prev, err := d.GetMessages(conversationID)
+		if err != nil {
+			return errJSON(err)
+		}
+		omsgs = openAIMessagesFromSQLiteHistory(prev, prompt)
+	} else {
+		omsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
+	}
+
+	startTime := time.Now()
+	var fullResponse string
+
+	rawChunkJSON, err := c.SendPromptWithMessagesAndParams(context.Background(), sessionID, omsgs, stream, opts.toChatParams(), func(text string, isLast bool) error {
+		fullResponse += text
+		if chunk != nil {
+			return chunk(text, isLast)
+		}
+		return nil
+	})
+	if err != nil {
+		return errJSON(err)
+	}
+
+	latencyMs := time.Since(startTime).Milliseconds()
+
+	// Build result: start with any raw provider metadata the SDK captured,
+	// then overlay our own fields so they're always present.
+	result := map[string]interface{}{}
+	if len(rawChunkJSON) > 0 {
+		var raw map[string]interface{}
+		if json.Unmarshal(rawChunkJSON, &raw) == nil {
+			result["provider_response"] = raw
+		}
+	}
+	result["response"] = fullResponse
+	result["latency_ms"] = latencyMs
+
+	if d != nil {
+		_ = d.SaveMessage(conversationID, "user", prompt)
+		metaJSON, _ := json.Marshal(result)
+		_ = d.SaveMessageWithMetadata(conversationID, "assistant", fullResponse, string(metaJSON))
+	}
+
+	return resultJSON(result)
 }
 
 // --- Conversations (local SQLite) ---
@@ -610,6 +729,33 @@ func SetConversationPinned(conversationID string, pinned bool) string {
 		return errJSON(err)
 	}
 	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// SetConversationTuning stores tuning params (JSON blob) for a conversation.
+func SetConversationTuning(conversationID, tuningJSON string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.SetConversationTuning(conversationID, tuningJSON); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// GetConversationTuning returns the stored tuning params JSON blob for a conversation.
+func GetConversationTuning(conversationID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	raw, err := db.GetConversationTuning(conversationID)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]interface{}{"tuning_params": raw})
 }
 
 // ClaimEmptyDraftForModel returns the newest message-less conversation for this model, deletes
@@ -876,6 +1022,149 @@ func ExpertAPIStatus() string {
 	addr := client.HTTPServerAddr()
 	running := addr != ""
 	return resultJSON(map[string]interface{}{"running": running, "address": addr})
+}
+
+// --- Gateway (OpenAI-compatible API for external consumers like Cursor) ---
+
+var gw *gateway.Gateway
+var cfTunnel *cloudflared.QuickTunnel
+
+// StartGateway starts the OpenAI-compatible gateway HTTP server.
+// address is "host:port", e.g. "127.0.0.1:8083" or "0.0.0.0:8083".
+// If cloudflaredQuickTunnel is true, also runs `cloudflared tunnel --url http://127.0.0.1:port`
+// and returns the public https://*.trycloudflare.com URL in JSON (requires cloudflared on PATH).
+func StartGateway(address string, cloudflaredQuickTunnel bool) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if client == nil {
+		return errJSON(errNotInit)
+	}
+	if db == nil {
+		return errJSON(fmt.Errorf("database not initialized"))
+	}
+	if gw != nil && gw.Running() {
+		return errJSON(fmt.Errorf("gateway already running on %s", gw.Addr()))
+	}
+
+	dur, _ := db.GetPreference("gateway_session_duration")
+	durationSec := int64(3600)
+	if dur != "" {
+		fmt.Sscanf(dur, "%d", &durationSec)
+	}
+
+	gw = gateway.New(client, db, func(format string, args ...interface{}) {
+		logger.Info("[GATEWAY] "+format, args...)
+	}, durationSec)
+
+	if err := gw.Start(address); err != nil {
+		return errJSON(err)
+	}
+
+	if cloudflaredQuickTunnel {
+		origin, err := cloudflared.LocalHTTPOrigin(address)
+		if err != nil {
+			_ = gw.Stop()
+			gw = nil
+			return errJSON(err)
+		}
+		t, err := cloudflared.StartQuickTunnel(context.Background(), origin)
+		if err != nil {
+			_ = gw.Stop()
+			gw = nil
+			return errJSON(err)
+		}
+		cfTunnel = t
+		logger.Info("Cloudflare quick tunnel: %s → %s", t.URL, origin)
+	}
+
+	logger.Info("Gateway started on %s", address)
+	out := map[string]interface{}{"status": "ok", "address": address}
+	if cfTunnel != nil {
+		out["cloudflared_url"] = cfTunnel.URL
+	}
+	return resultJSON(out)
+}
+
+// StopGateway stops the gateway HTTP server.
+func StopGateway() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if gw == nil {
+		return resultJSON(map[string]string{"status": "ok"})
+	}
+	if cfTunnel != nil {
+		_ = cfTunnel.Stop()
+		cfTunnel = nil
+	}
+	if err := gw.Stop(); err != nil {
+		return errJSON(err)
+	}
+	gw = nil
+	logger.Info("Gateway stopped")
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// GatewayStatus returns whether the gateway is running and on which address.
+func GatewayStatus() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if gw == nil {
+		return resultJSON(map[string]interface{}{"running": false, "address": ""})
+	}
+	m := map[string]interface{}{"running": gw.Running(), "address": gw.Addr()}
+	if cfTunnel != nil {
+		m["cloudflared_url"] = cfTunnel.URL
+	}
+	return resultJSON(m)
+}
+
+// --- API Key management ---
+
+// GenerateAPIKey creates a new API key for gateway access.
+// Returns the full key (shown once to the user) and metadata.
+func GenerateAPIKey(name string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	fullKey, info, err := db.GenerateAPIKey(name)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]interface{}{
+		"id":     info.ID,
+		"key":    fullKey,
+		"prefix": info.Prefix,
+		"name":   info.Name,
+	})
+}
+
+// ListAPIKeys returns all active API keys (never exposes secrets).
+func ListAPIKeys() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	keys, err := db.ListAPIKeys()
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(keys)
+}
+
+// RevokeAPIKey deletes an API key, immediately blocking access.
+func RevokeAPIKey(id string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.RevokeAPIKey(id); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
 }
 
 // --- Helpers ---
