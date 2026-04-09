@@ -1,11 +1,22 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
-/// Native signature for [GoBridge.sendPromptWithStream] / `SendPromptStream` chunk callback.
+/// Native signature for the synchronous `SendPromptStream` chunk callback.
 typedef NeoStreamDeltaNative = Void Function(Pointer<Utf8> text, Int32 isLast);
+
+/// Native signature for the synchronous `SendPromptStream` completion callback.
+typedef NeoCompletionNative = Void Function(Pointer<Utf8> resultJSON);
+
+/// Async callback: Go passes only an int64 delta ID (not a string pointer).
+/// Dart retrieves the text via the synchronous ReadStreamDelta FFI call.
+typedef NeoAsyncSignalNative = Void Function(Int64 deltaId, Int32 isLast);
+
+/// Async completion callback: same pattern, passes a result ID.
+typedef NeoAsyncDoneNative = Void Function(Int64 resultId);
 
 /// FFI bridge to the Go c-shared library (libnodeneo).
 /// All Go functions return JSON strings; this bridge handles
@@ -215,6 +226,50 @@ class GoBridge {
         Pointer<NativeFunction<NeoStreamDeltaNative>>,
       )>('SendPromptStream');
 
+  late final _sendPromptStreamAsync = _lib.lookupFunction<
+      Void Function(
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Int32,
+        Pointer<NativeFunction<NeoAsyncSignalNative>>,
+        Pointer<NativeFunction<NeoAsyncDoneNative>>,
+      ),
+      void Function(
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        int,
+        Pointer<NativeFunction<NeoAsyncSignalNative>>,
+        Pointer<NativeFunction<NeoAsyncDoneNative>>,
+      )>('SendPromptStreamAsync');
+
+  late final _sendPromptWithOptionsAsync = _lib.lookupFunction<
+      Void Function(
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Int32,
+        Pointer<NativeFunction<NeoAsyncSignalNative>>,
+        Pointer<NativeFunction<NeoAsyncDoneNative>>,
+      ),
+      void Function(
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        Pointer<Utf8>,
+        int,
+        Pointer<NativeFunction<NeoAsyncSignalNative>>,
+        Pointer<NativeFunction<NeoAsyncDoneNative>>,
+      )>('SendPromptWithOptionsAsync');
+
+  /// Synchronous fetch of a stored delta/result string by ID.
+  /// Go returns a C string; safe to read immediately (synchronous FFI).
+  late final _readStreamDelta = _lib.lookupFunction<
+      Pointer<Utf8> Function(Int64),
+      Pointer<Utf8> Function(int)>('ReadStreamDelta');
+
   late final _deleteConversation = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('DeleteConversation');
@@ -235,11 +290,21 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('GetPreference');
 
+  // --- Conversation Tuning ---
+
+  late final _setConversationTuning = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SetConversationTuning');
+
+  late final _getConversationTuning = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('GetConversationTuning');
+
   // --- Gateway ---
 
   late final _startGateway = _lib.lookupFunction<
-      Pointer<Utf8> Function(Pointer<Utf8>),
-      Pointer<Utf8> Function(Pointer<Utf8>)>('StartGateway');
+      Pointer<Utf8> Function(Pointer<Utf8>, Int32),
+      Pointer<Utf8> Function(Pointer<Utf8>, int)>('StartGateway');
 
   late final _stopGateway = _lib.lookupFunction<
       Pointer<Utf8> Function(),
@@ -795,6 +860,145 @@ class GoBridge {
     }
   }
 
+  /// Fetch a delta string from Go's store by ID. Synchronous FFI — the C
+  /// string is read immediately before Go can touch the memory.
+  String _fetchDelta(int deltaId) {
+    final ptr = _readStreamDelta(deltaId);
+    final text = ptr.toDartString();
+    malloc.free(ptr); // Go used C.CString; free after copy
+    return text;
+  }
+
+  /// Non-blocking streaming variant. Returns a [Future] that completes with
+  /// the final result JSON when the prompt finishes. Delta callbacks fire in
+  /// real-time on the Dart event loop because the FFI call returns immediately
+  /// (Go runs the work in a goroutine).
+  ///
+  /// Go stores delta text in a thread-safe map and passes only the int64 key
+  /// through the NativeCallable.listener callback. Dart retrieves the actual
+  /// text via the synchronous [_fetchDelta] call, avoiding the use-after-free
+  /// race inherent in passing C string pointers through async message ports.
+  Future<Map<String, dynamic>> sendPromptStreamAsync(
+    String sessionID,
+    String conversationID,
+    String prompt, {
+    bool stream = true,
+    required void Function(String delta, bool isLast) onDelta,
+  }) {
+    final completer = Completer<Map<String, dynamic>>();
+
+    final sid = sessionID.toNativeUtf8();
+    final cid = conversationID.toNativeUtf8();
+    final p = prompt.toNativeUtf8();
+
+    late final NativeCallable<NeoAsyncSignalNative> deltaCallable;
+    late final NativeCallable<NeoAsyncDoneNative> completionCallable;
+
+    deltaCallable = NativeCallable<NeoAsyncSignalNative>.listener(
+      (int deltaId, int isLast) {
+        final piece = _fetchDelta(deltaId);
+        onDelta(piece, isLast != 0);
+      },
+    );
+
+    completionCallable = NativeCallable<NeoAsyncDoneNative>.listener(
+      (int resultId) {
+        final result = _fetchDelta(resultId);
+        deltaCallable.close();
+        completionCallable.close();
+        calloc.free(sid);
+        calloc.free(cid);
+        calloc.free(p);
+
+        try {
+          final json = jsonDecode(result) as Map<String, dynamic>;
+          if (json.containsKey('error')) {
+            completer.completeError(GoBridgeException(json['error'] as String));
+          } else {
+            completer.complete(json);
+          }
+        } catch (e) {
+          completer.completeError(e);
+        }
+      },
+    );
+
+    _sendPromptStreamAsync(
+      sid,
+      cid,
+      p,
+      stream ? 1 : 0,
+      deltaCallable.nativeFunction,
+      completionCallable.nativeFunction,
+    );
+
+    return completer.future;
+  }
+
+  /// Non-blocking streaming with tuning parameters. [options] is a map with
+  /// keys like "temperature", "top_p", "max_tokens", "frequency_penalty",
+  /// "presence_penalty". Omitted keys use provider defaults.
+  Future<Map<String, dynamic>> sendPromptWithOptionsAsync(
+    String sessionID,
+    String conversationID,
+    String prompt, {
+    bool stream = true,
+    Map<String, dynamic>? options,
+    required void Function(String delta, bool isLast) onDelta,
+  }) {
+    final completer = Completer<Map<String, dynamic>>();
+
+    final sid = sessionID.toNativeUtf8();
+    final cid = conversationID.toNativeUtf8();
+    final p = prompt.toNativeUtf8();
+    final o = (options != null ? jsonEncode(options) : '{}').toNativeUtf8();
+
+    late final NativeCallable<NeoAsyncSignalNative> deltaCallable;
+    late final NativeCallable<NeoAsyncDoneNative> completionCallable;
+
+    deltaCallable = NativeCallable<NeoAsyncSignalNative>.listener(
+      (int deltaId, int isLast) {
+        final piece = _fetchDelta(deltaId);
+        onDelta(piece, isLast != 0);
+      },
+    );
+
+    completionCallable = NativeCallable<NeoAsyncDoneNative>.listener(
+      (int resultId) {
+        final result = _fetchDelta(resultId);
+        deltaCallable.close();
+        completionCallable.close();
+        calloc.free(sid);
+        calloc.free(cid);
+        calloc.free(p);
+        calloc.free(o);
+
+        try {
+          final json = jsonDecode(result) as Map<String, dynamic>;
+          if (json.containsKey('error')) {
+            completer.completeError(GoBridgeException(json['error'] as String));
+          } else {
+            completer.complete(json);
+          }
+        } catch (e) {
+          completer.completeError(e);
+        }
+      },
+    );
+
+    _sendPromptWithOptionsAsync(
+      sid,
+      cid,
+      p,
+      o,
+      stream ? 1 : 0,
+      deltaCallable.nativeFunction,
+      completionCallable.nativeFunction,
+    );
+
+    return completer.future;
+  }
+
   // --- Conversations ---
 
   List<dynamic> getConversations() {
@@ -844,13 +1048,40 @@ class GoBridge {
     return json['value'] as String? ?? '';
   }
 
+  // --- Conversation Tuning ---
+
+  /// Store tuning params (JSON blob) for a conversation.
+  void setConversationTuning({required String conversationId, required String tuningJSON}) {
+    final cid = conversationId.toNativeUtf8();
+    final t = tuningJSON.toNativeUtf8();
+    final ptr = _setConversationTuning(cid, t);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    calloc.free(t);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns the stored tuning params JSON blob (empty string if not set).
+  String getConversationTuning(String conversationId) {
+    final cid = conversationId.toNativeUtf8();
+    final ptr = _getConversationTuning(cid);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json['tuning_params'] as String? ?? '';
+  }
+
   // --- Gateway ---
 
   /// Start the OpenAI-compatible gateway HTTP server.
   /// [address] is "host:port", e.g. "127.0.0.1:8083" or "0.0.0.0:8083".
-  Map<String, dynamic> startGateway(String address) {
+  Map<String, dynamic> startGateway(String address, {bool cloudflaredQuickTunnel = false}) {
     final a = address.toNativeUtf8();
-    final ptr = _startGateway(a);
+    final ptr = _startGateway(a, cloudflaredQuickTunnel ? 1 : 0);
     final result = ptr.toDartString();
     _freeString(ptr);
     calloc.free(a);
