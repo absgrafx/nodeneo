@@ -32,6 +32,9 @@ android/local.properties
 *.apk
 *.aab
 
+# Cursor IDE (per-developer config, may contain secrets)
+.cursor/
+
 # Secrets
 *.env
 *.key
