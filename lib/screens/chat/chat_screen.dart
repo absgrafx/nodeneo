@@ -577,11 +577,23 @@ class _ChatScreenState extends State<ChatScreen> {
         if (!mounted) return;
         setState(() {
           if (streamBubbleIdx >= 0 && streamBubbleIdx < _messages.length) {
-            _messages[streamBubbleIdx] = _ChatBubble(
-              role: 'assistant',
-              text: reply.isEmpty ? '(empty response)' : reply,
-              metadata: meta,
-            );
+            if (reply.isEmpty) {
+              _messages[streamBubbleIdx] = _ChatBubble(
+                role: 'assistant',
+                text: 'No response received — the provider may be busy.',
+                isError: true,
+                onRetry: () async {
+                  _input.text = text;
+                  _send();
+                },
+              );
+            } else {
+              _messages[streamBubbleIdx] = _ChatBubble(
+                role: 'assistant',
+                text: reply,
+                metadata: meta,
+              );
+            }
           }
           _sending = false;
         });
@@ -590,7 +602,19 @@ class _ChatScreenState extends State<ChatScreen> {
         final reply = res['response'] as String? ?? '';
         if (!mounted) return;
         setState(() {
-          _messages.add(_ChatBubble(role: 'assistant', text: reply.isEmpty ? '(empty response)' : reply));
+          if (reply.isEmpty) {
+            _messages.add(_ChatBubble(
+              role: 'assistant',
+              text: 'No response received — the provider may be busy.',
+              isError: true,
+              onRetry: () async {
+                _input.text = text;
+                _send();
+              },
+            ));
+          } else {
+            _messages.add(_ChatBubble(role: 'assistant', text: reply));
+          }
           _sending = false;
         });
       }
@@ -1406,7 +1430,31 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ],
                               ),
                             ],
-                            if (b.isError && b.onReconnect == null) ...[
+                            if (b.isError && b.onRetry != null) ...[
+                              const SizedBox(height: 10),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  FilledButton.tonal(
+                                    onPressed: _sending
+                                        ? null
+                                        : () {
+                                            setState(() => _messages.remove(b));
+                                            b.onRetry!();
+                                          },
+                                    child: const Text('Tap to retry'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  TextButton(
+                                    onPressed: () {
+                                      setState(() => _messages.remove(b));
+                                    },
+                                    child: const Text('Dismiss'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (b.isError && b.onReconnect == null && b.onRetry == null) ...[
                               const SizedBox(height: 10),
                               TextButton(
                                 onPressed: () {
@@ -1817,9 +1865,10 @@ class _ChatBubble {
   final String text;
   final bool isError;
   final Future<void> Function()? onReconnect;
+  final Future<void> Function()? onRetry;
   final Map<String, dynamic>? metadata;
 
-  _ChatBubble({required this.role, required this.text, this.isError = false, this.onReconnect, this.metadata});
+  _ChatBubble({required this.role, required this.text, this.isError = false, this.onReconnect, this.onRetry, this.metadata});
 }
 
 class _MetadataRow extends StatelessWidget {

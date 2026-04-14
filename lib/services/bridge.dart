@@ -82,6 +82,22 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('SetEncryptionKey');
 
+  late final _openWalletDatabase = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('OpenWalletDatabase');
+
+  late final _listWalletDatabases = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ListWalletDatabases');
+
+  late final _exportBackup = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)>('ExportBackup');
+
+  late final _importBackup = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('ImportBackup');
+
   late final _getLogDir = _lib.lookupFunction<
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetLogDir');
@@ -415,6 +431,59 @@ class GoBridge {
     calloc.free(k);
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
+  }
+
+  /// Opens (or creates) a wallet-scoped DB: nodeneo_{fingerprint}.db.
+  /// Migrates legacy nodeneo.db on first call for a wallet.
+  Map<String, dynamic> openWalletDatabase(String fingerprint) {
+    final fp = fingerprint.toNativeUtf8();
+    final ptr = _openWalletDatabase(fp);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(fp);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Returns list of wallet DBs found in the data directory.
+  List<dynamic> listWalletDatabases() {
+    final ptr = _listWalletDatabases();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return jsonDecode(result) as List<dynamic>;
+  }
+
+  /// Export all conversations, messages, and preferences to an encrypted backup file.
+  Map<String, dynamic> exportBackup(String outputPath, String passphrase, String appVersion, String walletPrefix) {
+    final op = outputPath.toNativeUtf8();
+    final pp = passphrase.toNativeUtf8();
+    final av = appVersion.toNativeUtf8();
+    final wp = walletPrefix.toNativeUtf8();
+    final ptr = _exportBackup(op, pp, av, wp);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(op);
+    calloc.free(pp);
+    calloc.free(av);
+    calloc.free(wp);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Import an encrypted backup file, destructively replacing current data.
+  Map<String, dynamic> importBackup(String inputPath, String passphrase) {
+    final ip = inputPath.toNativeUtf8();
+    final pp = passphrase.toNativeUtf8();
+    final ptr = _importBackup(ip, pp);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(ip);
+    calloc.free(pp);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
   }
 
   /// Returns structured version info for the embedded proxy-router SDK.

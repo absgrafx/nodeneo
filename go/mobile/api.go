@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,11 +20,21 @@ import (
 )
 
 var (
-	mu      sync.Mutex
-	client  *sdk.SDK
-	db      *store.Store
-	initErr error
+	mu       sync.Mutex
+	client   *sdk.SDK
+	db       *store.Store
+	initErr  error
+	savedDir string // dataDir from Init, used by OpenWalletDatabase
 )
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func osRename(old, new string) error {
+	return os.Rename(old, new)
+}
 
 func resultJSON(v interface{}) string {
 	b, _ := json.Marshal(v)
@@ -52,6 +63,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 	if err := logger.Init(dataDir, "info"); err != nil {
 		return errJSON(fmt.Errorf("logger init: %w", err))
 	}
+	savedDir = dataDir
 	logger.Info("SDK init: dataDir=%s chainID=%d", dataDir, chainID)
 
 	activeModelsURL := "https://active.mor.org/active_models.json"
@@ -85,6 +97,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		return errJSON(err)
 	}
 	logger.Info("DB opened at %s/nodeneo.db", dataDir)
+	RestoreSavedLogLevel()
 
 	return resultJSON(map[string]string{"status": "ok"})
 }
@@ -126,6 +139,124 @@ func IsReady() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	return client != nil
+}
+
+// OpenWalletDatabase closes any current DB and opens (or creates) a
+// wallet-scoped database named nodeneo_{fingerprint}.db.
+// If the legacy nodeneo.db exists and the scoped DB does not, the legacy
+// file is renamed to the scoped path (one-time migration).
+// fingerprint should be the first 8 hex chars of the wallet address (lowercase, no 0x).
+func OpenWalletDatabase(fingerprint string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if savedDir == "" {
+		return errJSON(fmt.Errorf("sdk not initialized"))
+	}
+	fingerprint = strings.ToLower(strings.TrimSpace(fingerprint))
+	if fingerprint == "" || len(fingerprint) < 4 {
+		return errJSON(fmt.Errorf("invalid fingerprint"))
+	}
+
+	scopedPath := savedDir + "/nodeneo_" + fingerprint + ".db"
+	legacyPath := savedDir + "/nodeneo.db"
+
+	if db != nil {
+		_ = db.Close()
+		db = nil
+	}
+
+	// One-time migration: rename legacy DB → scoped if scoped doesn't exist yet.
+	if !fileExists(scopedPath) && fileExists(legacyPath) {
+		logger.Info("Migrating legacy DB → %s", scopedPath)
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			old := legacyPath + suffix
+			if fileExists(old) {
+				if err := osRename(old, scopedPath+suffix); err != nil {
+					logger.Warn("rename %s → %s: %v", old, scopedPath+suffix, err)
+				}
+			}
+		}
+	}
+
+	var err error
+	db, err = store.New(scopedPath)
+	if err != nil {
+		logger.Error("DB open failed: %v", err)
+		return errJSON(err)
+	}
+	logger.Info("Wallet DB opened: %s", scopedPath)
+	RestoreSavedLogLevel()
+	return resultJSON(map[string]string{"status": "ok", "path": scopedPath})
+}
+
+// ListWalletDatabases returns JSON array of {fingerprint, path, size_bytes}
+// for every nodeneo_*.db file found in the data directory.
+func ListWalletDatabases() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if savedDir == "" {
+		return resultJSON([]interface{}{})
+	}
+
+	entries, err := os.ReadDir(savedDir)
+	if err != nil {
+		return resultJSON([]interface{}{})
+	}
+
+	type dbInfo struct {
+		Fingerprint string `json:"fingerprint"`
+		Path        string `json:"path"`
+		SizeBytes   int64  `json:"size_bytes"`
+	}
+	var dbs []dbInfo
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "nodeneo_") || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		if strings.HasSuffix(name, "-wal") || strings.HasSuffix(name, "-shm") {
+			continue
+		}
+		fp := strings.TrimPrefix(name, "nodeneo_")
+		fp = strings.TrimSuffix(fp, ".db")
+		info, _ := e.Info()
+		size := int64(0)
+		if info != nil {
+			size = info.Size()
+		}
+		dbs = append(dbs, dbInfo{Fingerprint: fp, Path: savedDir + "/" + name, SizeBytes: size})
+	}
+	return resultJSON(dbs)
+}
+
+// ExportBackup creates an encrypted .nodeneo-backup file containing all
+// conversations, messages, and preferences. Passphrase is used to derive
+// the AES-256-GCM key for the archive.
+func ExportBackup(outputPath, passphrase, appVersion, walletPrefix string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(fmt.Errorf("sdk not initialized"))
+	}
+	if err := db.ExportBackup(outputPath, passphrase, appVersion, walletPrefix); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok", "path": outputPath})
+}
+
+// ImportBackup reads and decrypts a .nodeneo-backup file, destructively
+// replacing all conversations, messages, and preferences in the current DB.
+func ImportBackup(inputPath, passphrase string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(fmt.Errorf("sdk not initialized"))
+	}
+	manifest, err := db.ImportBackup(inputPath, passphrase)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(manifest)
 }
 
 // SetEncryptionKey installs AES-256-GCM encryption for message content.
@@ -193,6 +324,7 @@ func GetLogDir() string {
 // SetLogLevel changes the log level at runtime for all emitters:
 // the wrapper's rotating file logger (Flutter + wrapper messages) AND the
 // SDK's internal zap logger (blockchain/proxy-router messages).
+// The preference is persisted so it survives app restarts.
 func SetLogLevel(level string) string {
 	logger.SetLevel(level)
 	if client != nil {
@@ -200,8 +332,35 @@ func SetLogLevel(level string) string {
 			logger.Warn("SDK SetLogLevel(%s) failed: %v", level, err)
 		}
 	}
+	mu.Lock()
+	d := db
+	mu.Unlock()
+	if d != nil {
+		_ = d.SetPreference("log_level", logger.GetLevel())
+	}
 	logger.Info("Log level changed to %s (wrapper + SDK)", logger.GetLevel())
 	return resultJSON(map[string]string{"status": "ok", "level": logger.GetLevel()})
+}
+
+// RestoreSavedLogLevel applies the persisted log level preference.
+// Called after DB is opened so the saved level takes effect before first use.
+func RestoreSavedLogLevel() {
+	mu.Lock()
+	c := client
+	d := db
+	mu.Unlock()
+	if d == nil {
+		return
+	}
+	saved, err := d.GetPreference("log_level")
+	if err != nil || saved == "" {
+		return
+	}
+	logger.SetLevel(saved)
+	if c != nil {
+		_ = c.SetLogLevel(saved)
+	}
+	logger.Info("Restored saved log level: %s", saved)
 }
 
 // GetLogLevel returns the current log level.
@@ -640,6 +799,12 @@ func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string
 		omsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	}
 
+	logger.Debug("INFERENCE request: session=%s conv=%s stream=%v msgs=%d", sessionID, conversationID, stream, len(omsgs))
+	if opts != nil {
+		logger.Debug("INFERENCE tuning: temp=%.2f top_p=%.2f max_tokens=%d freq=%.2f pres=%.2f",
+			opts.Temperature, opts.TopP, opts.MaxTokens, opts.FrequencyPenalty, opts.PresencePenalty)
+	}
+
 	startTime := time.Now()
 	var fullResponse string
 
@@ -651,10 +816,16 @@ func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string
 		return nil
 	})
 	if err != nil {
+		logger.Error("INFERENCE failed after %dms: %v", time.Since(startTime).Milliseconds(), err)
 		return errJSON(err)
 	}
 
 	latencyMs := time.Since(startTime).Milliseconds()
+	respLen := len(fullResponse)
+	logger.Debug("INFERENCE response: %dms, %d chars, raw_meta=%d bytes", latencyMs, respLen, len(rawChunkJSON))
+	if respLen == 0 {
+		logger.Warn("INFERENCE empty response from provider (session=%s, %dms)", sessionID, latencyMs)
+	}
 
 	// Build result: start with any raw provider metadata the SDK captured,
 	// then overlay our own fields so they're always present.
