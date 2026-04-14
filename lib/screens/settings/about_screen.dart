@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../constants/app_brand.dart';
 import '../../services/bridge.dart';
 import '../../theme.dart';
+import '../../widgets/section_card.dart';
 
 class AboutScreen extends StatefulWidget {
   const AboutScreen({super.key});
@@ -146,58 +147,81 @@ class _AboutScreenState extends State<AboutScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Version & Logs')),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          const _SectionLabel(title: 'About'),
-          const SizedBox(height: 16),
-          Center(
-            child: Image.asset(
-              'assets/branding/splash_logo.png',
-              width: 56,
-              height: 56,
+          SectionCard(
+            icon: Icons.info_outline_rounded,
+            title: 'About',
+            status: Text(
+              'v$_appVersion',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w500,
+                color: NeoTheme.platinum.withValues(alpha: 0.4),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Image.asset(
+                      'assets/branding/splash_logo.png',
+                      width: 40,
+                      height: 40,
+                    ),
+                    const SizedBox(width: 14),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          AppBrand.displayName,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          AppBrand.tagline,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.hintColor,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _VersionRow(label: 'App version', value: 'v$_appVersion ($_buildNumber)'),
+                const SizedBox(height: 8),
+                _VersionRow(
+                  label: 'Proxy-router',
+                  value: _isFork
+                      ? '$_upstreamTag + $_forkCommits commits (fork)'
+                      : _prVersion,
+                ),
+                if (_sdkCommit.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _VersionRow(
+                    label: 'SDK commit',
+                    value: _sdkCommit.length > 12 ? _sdkCommit.substring(0, 12) : _sdkCommit,
+                    mono: true,
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(height: 12),
-          Center(
-            child: Text(
-              AppBrand.displayName,
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+          SectionCard(
+            icon: Icons.article_outlined,
+            title: 'Logs',
+            status: StatusPill(
+              active: _logLevel == 'debug',
+              label: _logLevel[0].toUpperCase() + _logLevel.substring(1),
             ),
+            child: _buildLoggingSection(theme),
           ),
-          const SizedBox(height: 4),
-          Center(
-            child: Text(
-              AppBrand.tagline,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          _VersionRow(label: 'App version', value: 'v$_appVersion ($_buildNumber)'),
-          const SizedBox(height: 8),
-          _VersionRow(
-            label: 'Proxy-router',
-            value: _isFork
-                ? '$_upstreamTag + $_forkCommits commits (fork)'
-                : _prVersion,
-          ),
-          if (_sdkCommit.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            _VersionRow(
-              label: 'SDK commit',
-              value: _sdkCommit.length > 12 ? _sdkCommit.substring(0, 12) : _sdkCommit,
-              mono: true,
-            ),
-          ],
-          const SizedBox(height: 32),
-
-          const _SectionLabel(title: 'Logs'),
-          const SizedBox(height: 16),
-          _buildLoggingSection(theme),
-          const SizedBox(height: 24),
         ],
       ),
     );
@@ -243,14 +267,7 @@ class _AboutScreenState extends State<AboutScreen> {
         const SizedBox(height: 12),
 
         if (_logDir.isNotEmpty) ...[
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF374151)),
-            ),
+          InfoBox(
             child: Row(
               children: [
                 Expanded(
@@ -384,40 +401,6 @@ class _AboutScreenState extends State<AboutScreen> {
   }
 }
 
-class _SectionLabel extends StatelessWidget {
-  final String title;
-  const _SectionLabel({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    final screenW = MediaQuery.sizeOf(context).width;
-    return SizedBox(
-      height: 36,
-      child: Transform.translate(
-        offset: const Offset(-20, 0),
-        child: OverflowBox(
-          maxWidth: screenW,
-          maxHeight: 36,
-          alignment: Alignment.centerLeft,
-          child: Container(
-            width: screenW,
-            color: NeoTheme.amber.withValues(alpha: 0.08),
-            alignment: Alignment.center,
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: NeoTheme.amber.withValues(alpha: 0.90),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _VersionRow extends StatelessWidget {
   final String label;

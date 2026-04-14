@@ -8,6 +8,7 @@ import '../../services/bridge.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
 import '../../theme.dart';
+import '../../widgets/section_card.dart';
 
 /// Expert Mode screen: Network RPC + REST API.
 ///
@@ -472,6 +473,8 @@ class _ExpertScreenState extends State<ExpertScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasCustomRpc =
+        _rpcOverridePreview != null && _rpcOverridePreview!.isNotEmpty;
 
     return PopScope(
       canPop: true,
@@ -486,20 +489,41 @@ class _ExpertScreenState extends State<ExpertScreen> {
             ? const Center(
                 child: CircularProgressIndicator(color: NeoTheme.green))
             : ListView(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                 children: [
-                  const _SectionBanner(title: 'Network'),
-                  const SizedBox(height: 16),
-                  _buildNetworkSection(theme),
-                  const SizedBox(height: 32),
-                  const _SectionBanner(title: 'REST API'),
-                  const SizedBox(height: 16),
-                  _buildApiSection(theme),
-                  const SizedBox(height: 32),
-                  const _SectionBanner(title: 'API Gateway'),
-                  const SizedBox(height: 16),
-                  _buildGatewaySection(theme),
-                  const SizedBox(height: 24),
+                  SectionCard(
+                    icon: Icons.link_rounded,
+                    title: 'Blockchain Connection',
+                    status: StatusPill(
+                      active: hasCustomRpc,
+                      label: hasCustomRpc ? 'Custom' : 'Default',
+                    ),
+                    child: _buildNetworkSection(theme),
+                  ),
+                  const SizedBox(height: 12),
+                  SectionCard(
+                    icon: Icons.code_rounded,
+                    title: 'Developer API',
+                    status: StatusPill(
+                      active: _apiRunning,
+                      label: _apiRunning
+                          ? 'Running :${_apiPortCtrl.text}'
+                          : 'Stopped',
+                    ),
+                    child: _buildApiSection(theme),
+                  ),
+                  const SizedBox(height: 12),
+                  SectionCard(
+                    icon: Icons.smart_toy_outlined,
+                    title: 'AI Gateway',
+                    status: StatusPill(
+                      active: _gwRunning,
+                      label: _gwRunning
+                          ? 'Running :${_gwPortCtrl.text}'
+                          : 'Stopped',
+                    ),
+                    child: _buildGatewaySection(theme),
+                  ),
                 ],
               ),
       ),
@@ -513,31 +537,34 @@ class _ExpertScreenState extends State<ExpertScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
+          'Node Neo needs an RPC endpoint to interact with the Base blockchain '
+          '(opening sessions, checking balances, signing transactions). '
+          'We provide a default — only change this if you experience connection issues '
+          'or want to use your own node.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.hintColor, height: 1.35, fontSize: 11),
+        ),
+        const SizedBox(height: 12),
+        Text(
           _rpcOverridePreview != null && _rpcOverridePreview!.isNotEmpty
-              ? 'Using a custom RPC override.'
-              : 'Using built-in public RPC list.',
+              ? 'Currently using a custom RPC.'
+              : hasBuildTimeRpc
+                  ? 'Currently using the bundled default.'
+                  : 'Currently using built-in public endpoints.',
           style: theme.textTheme.labelSmall
               ?.copyWith(color: NeoTheme.green.withValues(alpha: 0.9)),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         TextField(
           controller: _rpcCtrl,
           maxLines: 3,
           style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12),
           decoration: const InputDecoration(
-            labelText: 'Custom Base RPC (optional)',
+            labelText: 'Custom RPC endpoint (optional)',
             hintText: 'https://... or comma-separated',
             alignLabelWithHint: true,
             border: OutlineInputBorder(),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          hasBuildTimeRpc
-              ? 'A bundled dedicated RPC is available (not shown).'
-              : 'Uses your node exclusively when set; otherwise falls back to public endpoints.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.hintColor, fontSize: 11),
         ),
         if (_rpcTestResults != null) ...[
           const SizedBox(height: 12),
@@ -654,7 +681,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Start the full proxy-router HTTP server with Swagger documentation and all REST endpoints.',
+          'Starts a local HTTP server with full Swagger documentation for '
+          'developers and debugging. Exposes blockchain operations, session '
+          'management, and low-level SDK functions.',
           style: theme.textTheme.bodySmall
               ?.copyWith(color: theme.hintColor, height: 1.35),
         ),
@@ -786,14 +815,7 @@ class _ExpertScreenState extends State<ExpertScreen> {
             ),
           ),
         const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E293B),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF374151)),
-          ),
+        InfoBox(
           child: Row(
             children: [
               Expanded(
@@ -845,8 +867,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'OpenAI-compatible API for external tools (Cursor, LangChain, etc.). '
-          'Handles model resolution and session management automatically.',
+          'Connect external AI tools to Morpheus. Works with Cursor, LangChain, '
+          'Claude Desktop, and any app that supports the OpenAI API format. '
+          'Sessions and model selection are handled automatically.',
           style: theme.textTheme.bodySmall
               ?.copyWith(color: theme.hintColor, height: 1.35),
         ),
@@ -925,16 +948,8 @@ class _ExpertScreenState extends State<ExpertScreen> {
             ),
           ),
 
-        // ── Connection info ────────────────────────────
         const SizedBox(height: 16),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E293B),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF374151)),
-          ),
+        InfoBox(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1074,43 +1089,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
   }
 }
 
-// ── Full-width section banner ──────────────────────────────────
-
-class _SectionBanner extends StatelessWidget {
-  final String title;
-
-  const _SectionBanner({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    final screenW = MediaQuery.sizeOf(context).width;
-    return SizedBox(
-      height: 36,
-      child: Transform.translate(
-        offset: const Offset(-20, 0),
-        child: OverflowBox(
-          maxWidth: screenW,
-          maxHeight: 36,
-          alignment: Alignment.centerLeft,
-          child: Container(
-            width: screenW,
-            color: NeoTheme.amber.withValues(alpha: 0.08),
-            alignment: Alignment.center,
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: NeoTheme.amber.withValues(alpha: 0.90),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 // ── Reusable scope option for API section ─────────────────────
 

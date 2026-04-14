@@ -17,24 +17,59 @@ class AppLocalReset {
     }
   }
 
-  /// Local chat / preferences SQLite only (keeps custom RPC and other files).
-  static Future<void> wipeLocalDatabaseFiles(String dataDir) async {
-    for (final name in ['nodeneo.db', 'nodeneo.db-wal', 'nodeneo.db-shm']) {
-      await _tryDelete(dataDir, name);
+  /// Wipe a specific wallet-scoped DB: nodeneo_{fingerprint}.db + WAL/SHM.
+  static Future<void> wipeWalletDatabase(String dataDir, String fingerprint) async {
+    final base = 'nodeneo_$fingerprint.db';
+    for (final suffix in ['', '-wal', '-shm']) {
+      await _tryDelete(dataDir, '$base$suffix');
     }
   }
 
-  /// Factory reset: RPC override, SQLite, macOS fallback vault files.
+  /// Wipe ALL wallet databases (nodeneo_*.db) + legacy nodeneo.db.
+  static Future<void> wipeAllDatabaseFiles(String dataDir) async {
+    // Legacy
+    for (final name in ['nodeneo.db', 'nodeneo.db-wal', 'nodeneo.db-shm']) {
+      await _tryDelete(dataDir, name);
+    }
+    // Scoped wallet DBs
+    final dir = Directory(dataDir);
+    if (await dir.exists()) {
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          final name = entity.uri.pathSegments.last;
+          if (name.startsWith('nodeneo_') && (name.endsWith('.db') || name.endsWith('.db-wal') || name.endsWith('.db-shm'))) {
+            try { await entity.delete(); } catch (_) {}
+          }
+        }
+      }
+    }
+  }
+
+  /// Wipe the logs directory.
+  static Future<void> wipeLogs(String dataDir) async {
+    final logsDir = Directory('$dataDir${Platform.pathSeparator}logs');
+    if (await logsDir.exists()) {
+      try {
+        await logsDir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  /// Full factory reset: ALL wallet DBs, logs, RPC override, vault files.
+  /// Removes the entire Node Neo data footprint except the app binary.
   static Future<void> wipeFactoryLocalFiles(String dataDir) async {
     await RpcSettingsStore.instance.clearOverride();
+    await wipeAllDatabaseFiles(dataDir);
+    await wipeLogs(dataDir);
 
     for (final name in [
-      'nodeneo.db',
-      'nodeneo.db-wal',
-      'nodeneo.db-shm',
       'eth_rpc_override.txt',
       '.mnemonic_vault',
       '.app_lock_vault.json',
+      'chat_streaming_preference.txt',
+      'default_tuning.json',
+      'session_duration_seconds.txt',
+      'keychain_icloud_sync.txt',
     ]) {
       await _tryDelete(dataDir, name);
     }
