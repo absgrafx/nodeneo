@@ -105,6 +105,9 @@ func (s *Store) migrate() error {
 	if err := s.ensureMessageMetadataColumn(); err != nil {
 		return err
 	}
+	if err := s.ensureConversationSystemPromptColumn(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -196,6 +199,42 @@ func (s *Store) ensureMessageMetadataColumn() error {
 		return fmt.Errorf("store: add metadata column: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ensureConversationSystemPromptColumn() error {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversations') WHERE name = 'system_prompt'`).Scan(&n)
+	if err != nil {
+		return fmt.Errorf("store: pragma system_prompt: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE conversations ADD COLUMN system_prompt TEXT`); err != nil {
+		return fmt.Errorf("store: add system_prompt column: %w", err)
+	}
+	return nil
+}
+
+// SetConversationSystemPrompt stores the (encrypted) system prompt for a conversation.
+func (s *Store) SetConversationSystemPrompt(conversationID, prompt string) error {
+	stored := s.encrypt(prompt)
+	_, err := s.db.Exec(`UPDATE conversations SET system_prompt = ?, updated_at = ? WHERE id = ?`,
+		stored, time.Now().Unix(), conversationID)
+	return err
+}
+
+// GetConversationSystemPrompt returns the stored system prompt (empty string if not set).
+func (s *Store) GetConversationSystemPrompt(conversationID string) (string, error) {
+	var raw *string
+	err := s.db.QueryRow(`SELECT system_prompt FROM conversations WHERE id = ?`, conversationID).Scan(&raw)
+	if err != nil {
+		return "", err
+	}
+	if raw == nil || *raw == "" {
+		return "", nil
+	}
+	return s.decrypt(*raw), nil
 }
 
 // SetConversationTuning stores the tuning params JSON blob for a conversation.

@@ -16,6 +16,7 @@ class DefaultTuningStore {
   static const int defaultMaxTokens = 2048;
   static const double defaultFrequencyPenalty = 0.0;
   static const double defaultPresencePenalty = 0.0;
+  static const String defaultSystemPrompt = '';
 
   Future<File> _file() async {
     final d = await getApplicationSupportDirectory();
@@ -36,6 +37,7 @@ class DefaultTuningStore {
         'max_tokens': (json['max_tokens'] as num?)?.toInt() ?? defaultMaxTokens,
         'frequency_penalty': (json['frequency_penalty'] as num?)?.toDouble() ?? defaultFrequencyPenalty,
         'presence_penalty': (json['presence_penalty'] as num?)?.toDouble() ?? defaultPresencePenalty,
+        'system_prompt': json['system_prompt'] as String? ?? defaultSystemPrompt,
       };
     } catch (_) {
       return _hardDefaults;
@@ -48,6 +50,7 @@ class DefaultTuningStore {
     required int maxTokens,
     required double frequencyPenalty,
     required double presencePenalty,
+    String systemPrompt = '',
   }) async {
     final f = await _file();
     await f.writeAsString(
@@ -57,6 +60,7 @@ class DefaultTuningStore {
         'max_tokens': maxTokens,
         'frequency_penalty': frequencyPenalty,
         'presence_penalty': presencePenalty,
+        'system_prompt': systemPrompt,
       }),
       flush: true,
     );
@@ -68,5 +72,6 @@ class DefaultTuningStore {
         'max_tokens': defaultMaxTokens,
         'frequency_penalty': defaultFrequencyPenalty,
         'presence_penalty': defaultPresencePenalty,
+        'system_prompt': defaultSystemPrompt,
       };
 }

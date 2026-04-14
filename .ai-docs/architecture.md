@@ -77,11 +77,11 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │  │             │  │   toggle   │  │    toggle → Go)    │  │
 │  └────────────┘  └────────────┘  └────────────────────┘  │
 │  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │
-│  │  Wallet    │  │  Blockchain│  │  On-chain sessions │  │
-│  │  keys/data │  │  Connection│  │  duration + close  │  │
-│  │  backup    │  │  RPC       │  │                    │  │
-│  │  erase/    │  │            │  │                    │  │
-│  │  factory   │  │            │  │                    │  │
+│  │ Preferences│  │  Wallet    │  │  Backup & Reset    │  │
+│  │ Sys Prompt │  │  Keys      │  │  Export/Import     │  │
+│  │ Tuning     │  │  MOR Scan  │  │  Erase/Factory     │  │
+│  │ Duration   │  │  Sessions  │  │  Reset             │  │
+│  │ Security   │  │            │  │                    │  │
 │  └────────────┘  └────────────┘  └────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │  Expert Mode (accordion sections):                  │  │
@@ -102,6 +102,7 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │  • Delegates chain/session/chat → proxy-router mobile SDK │
 │  • Gateway: StartGateway, StopGateway, GatewayStatus     │
 │  • API Keys: GenerateAPIKey, ListAPIKeys, RevokeAPIKey   │
+│  • MOR Scanner: ScanWalletMOR, WithdrawUserStakes        │
 ├─────────────────────────────────────────────────────────┤
 │          API Gateway (`go/internal/gateway/`)             │
 │                                                           │
@@ -187,10 +188,11 @@ All sections collapsed by default — each screen opens as a clean dashboard of 
 
 | Screen | Sections |
 |--------|----------|
+| Preferences | System Prompt · Default Tuning · Session Duration · Security (app lock, biometrics, iCloud Keychain) |
+| Wallet | Key Management · Where's My MOR (on-chain balance scanner + recover) · Active Sessions |
 | Expert Mode | Blockchain Connection · Developer API · AI Gateway |
+| Backup & Reset | Data Backup (export/import .nnbak) · Danger Zone (erase wallet, factory reset) |
 | Version & Logs | About · Logs |
-| Sessions | Default Duration · Active Sessions |
-| Wallet | Key Management · Data Backup · Danger Zone |
 
 ---
 
@@ -201,7 +203,11 @@ All sections collapsed by default — each screen opens as a clean dashboard of 
 - **Chat** — `SendPrompt(sessionID, conversationID, prompt, stream)`; user + assistant rows persisted to SQLite on each completed prompt.
 - **RPC** — Optional `eth_rpc_override.txt`; multi-endpoint + backoff in SDK eth client.
 
-**Streaming UI:** With **Streaming reply** on (default), Dart uses **`SendPromptWithOptionsAsync`** with `stream: true` and **`NativeCallable.listener`** so provider deltas update the chat bubble in real time (~30fps UI throttle, `jumpTo` scrolling). Non-streaming mode uses **`SendPromptWithOptionsAsync`** with `stream: false`. Both paths support chat tuning parameters (temperature, top_p, max_tokens, frequency/presence penalty) via per-conversation persistence in SQLite.
+**System prompts:** Configurable at two levels: a **default system prompt** (Settings → Preferences → System Prompt) applied to all new conversations, and a **per-conversation override** in the Chat Tuning panel. Stored in the `system_prompt` column on `conversations` (encrypted at rest). Prepended as an OpenAI `system` role message before the chat history when sending prompts to the provider.
+
+**MOR balance scanner:** The Wallet screen includes a "Where's My MOR" section that performs read-only on-chain lookups showing MOR across three buckets: wallet balance, active session stake, and on-hold (early-close timelock). Makes raw JSON-RPC `eth_call` requests to the MOR token contract and Inference Contract (`0x6aBE...030a`) on Base mainnet, using the same RPC endpoint(s) the SDK uses. A "Recover claimable MOR" button sends a `withdrawUserStakes` transaction to reclaim tokens past the timelock period.
+
+**Streaming UI:** With **Streaming reply** on (default), Dart uses **`SendPromptWithOptionsAsync`** with `stream: true` and **`NativeCallable.listener`** so provider deltas update the chat bubble in real time (~30fps UI throttle, `jumpTo` scrolling). Non-streaming mode uses **`SendPromptWithOptionsAsync`** with `stream: false`. Both paths support chat tuning parameters (temperature, top_p, max_tokens, frequency/presence penalty) and system prompts via per-conversation persistence in SQLite.
 
 **Response metadata:** Each assistant message stores the full raw provider response JSON alongside the text. The Response Info sheet shows summary rows (latency, token counts, finish reason, model) and the complete JSON for debugging.
 
@@ -228,6 +234,7 @@ CREATE TABLE conversations (
     is_tee      INTEGER DEFAULT 0,
     source      TEXT DEFAULT 'ui',  -- 'ui' or 'api' (gateway-originated)
     tuning_params TEXT,             -- JSON: per-conversation tuning params
+    system_prompt TEXT,             -- 🔒 encrypted (OpenAI system role message)
     session_id  TEXT,               -- on-chain session for resume UX
     pinned      INTEGER DEFAULT 0,
     created_at  INTEGER NOT NULL,
@@ -279,7 +286,7 @@ CREATE TABLE api_keys (
 ### Data Encryption at Rest
 - **Column-level AES-256-GCM** in SQLite (not full-file SQLCipher)
 - Encryption key: `SHA-256(private_key)` or `SHA-256(mnemonic)` — 32 bytes, set via `SetEncryptionKey` FFI
-- **Encrypted columns**: `messages.content`, `messages.metadata`, `conversations.title`
+- **Encrypted columns**: `messages.content`, `messages.metadata`, `conversations.title`, `conversations.system_prompt`
 - Encrypted blobs prefixed with `enc:v1:` — legacy plaintext passes through transparently
 - **Wallet-scoped databases**: `nodeneo_{first8_of_address}.db` — each wallet isolated; legacy `nodeneo.db` auto-migrates on first use
 - **Erase wallet** keeps the encrypted DB on disk (unreadable without the key); re-importing the same wallet reconnects conversations

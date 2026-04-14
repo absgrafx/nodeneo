@@ -80,6 +80,9 @@ class _ChatScreenState extends State<ChatScreen> {
   double _frequencyPenalty = 0.0;
   double _presencePenalty = 0.0;
 
+  // --- System prompt ---
+  String _systemPrompt = '';
+
   /// On-chain session length for this chat (from [SessionDurationStore] presets).
   int _sessionDurationSeconds = SessionDurationStore.defaultSeconds;
 
@@ -108,12 +111,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadDefaultTuning() async {
     final d = await DefaultTuningStore.instance.read();
     if (!mounted) return;
+    final sp = d['system_prompt'] as String? ?? DefaultTuningStore.defaultSystemPrompt;
+    try { GoBridge().setPreference('_debug_sys_prompt_load', 'len=${sp.length}_empty=${sp.isEmpty}'); } catch (_) {}
     setState(() {
       _temperature = (d['temperature'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTemperature;
       _topP = (d['top_p'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTopP;
       _maxTokens = (d['max_tokens'] as num?)?.toInt() ?? DefaultTuningStore.defaultMaxTokens;
       _frequencyPenalty = (d['frequency_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultFrequencyPenalty;
       _presencePenalty = (d['presence_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultPresencePenalty;
+      _systemPrompt = sp;
     });
   }
 
@@ -312,6 +318,17 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _readyBannerMessage;
 
   void _transitionToReady(String convId, String sessionId) {
+    // Ensure the system prompt is written for every conversation path
+    // (new, draft-with-session, draft-without-session).
+    try { GoBridge().setPreference('_debug_sys_prompt_ready', 'len=${_systemPrompt.length}_empty=${_systemPrompt.isEmpty}_conv=$convId'); } catch (_) {}
+    if (_systemPrompt.isNotEmpty) {
+      try {
+        GoBridge().setConversationSystemPrompt(conversationId: convId, prompt: _systemPrompt);
+      } catch (e) {
+        try { GoBridge().setPreference('_debug_sys_prompt_err', e.toString()); } catch (_) {}
+      }
+    }
+
     final readyMsg = widget.isTEE
         ? 'Secure session ready for ${widget.modelName}'
         : 'Session ready for ${widget.modelName}';
@@ -425,15 +442,20 @@ class _ChatScreenState extends State<ChatScreen> {
   void _loadTuningForConversation(String conversationId) {
     try {
       final raw = GoBridge().getConversationTuning(conversationId);
-      if (raw.isEmpty) return;
-      final json = jsonDecode(raw) as Map<String, dynamic>;
-      setState(() {
-        _temperature = (json['temperature'] as num?)?.toDouble() ?? 1.0;
-        _topP = (json['top_p'] as num?)?.toDouble() ?? 1.0;
-        _maxTokens = (json['max_tokens'] as num?)?.toInt() ?? 2048;
-        _frequencyPenalty = (json['frequency_penalty'] as num?)?.toDouble() ?? 0.0;
-        _presencePenalty = (json['presence_penalty'] as num?)?.toDouble() ?? 0.0;
-      });
+      if (raw.isNotEmpty) {
+        final json = jsonDecode(raw) as Map<String, dynamic>;
+        setState(() {
+          _temperature = (json['temperature'] as num?)?.toDouble() ?? 1.0;
+          _topP = (json['top_p'] as num?)?.toDouble() ?? 1.0;
+          _maxTokens = (json['max_tokens'] as num?)?.toInt() ?? 2048;
+          _frequencyPenalty = (json['frequency_penalty'] as num?)?.toDouble() ?? 0.0;
+          _presencePenalty = (json['presence_penalty'] as num?)?.toDouble() ?? 0.0;
+        });
+      }
+    } catch (_) {}
+    try {
+      final sp = GoBridge().getConversationSystemPrompt(conversationId);
+      if (sp.isNotEmpty) setState(() => _systemPrompt = sp);
     } catch (_) {}
   }
 
@@ -452,13 +474,22 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {}
   }
 
+  void _saveSystemPromptForConversation() {
+    final cid = _conversationId;
+    if (cid == null) return;
+    try {
+      GoBridge().setConversationSystemPrompt(conversationId: cid, prompt: _systemPrompt);
+    } catch (_) {}
+  }
+
   bool get _hasTuningOverrides =>
       _temperature != 1.0 ||
       _topP != 1.0 ||
       _maxTokens != 2048 ||
       _frequencyPenalty != 0.0 ||
       _presencePenalty != 0.0 ||
-      !_preferStreaming;
+      !_preferStreaming ||
+      _systemPrompt.isNotEmpty;
 
   Map<String, dynamic> _buildTuningOptions() {
     final opts = <String, dynamic>{};
@@ -717,6 +748,7 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
+            final spController = TextEditingController(text: _systemPrompt);
             return Padding(
               padding: EdgeInsets.fromLTRB(
                 20,
@@ -724,6 +756,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 20,
                 16 + MediaQuery.of(ctx).viewInsets.bottom,
               ),
+              child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -744,6 +777,52 @@ class _ChatScreenState extends State<ChatScreen> {
                     style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
                   ),
                   const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text('System Prompt', style: TextStyle(fontSize: 13)),
+                      const SizedBox(width: 4),
+                      Tooltip(
+                        message: 'Defines the assistant\'s persona for this chat.\n'
+                            'Start with "You are..." to set the role.\n'
+                            'Example: "You are a concise Solidity auditor."',
+                        preferBelow: false,
+                        triggerMode: TooltipTriggerMode.tap,
+                        showDuration: const Duration(seconds: 5),
+                        child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: spController,
+                    maxLines: 3,
+                    minLines: 2,
+                    style: const TextStyle(fontSize: 12, height: 1.4),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. "You are a concise technical assistant."',
+                      hintStyle: TextStyle(fontSize: 11, color: const Color(0xFF6B7280).withValues(alpha: 0.6)),
+                      filled: true,
+                      fillColor: const Color(0xFF1E293B),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFF374151)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: Color(0xFF374151)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: NeoTheme.green.withValues(alpha: 0.6)),
+                      ),
+                      contentPadding: const EdgeInsets.all(10),
+                    ),
+                    onChanged: (v) {
+                      setState(() => _systemPrompt = v.trim());
+                      _saveSystemPromptForConversation();
+                    },
+                  ),
+                  const Divider(height: 24, color: Color(0xFF374151)),
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
                     title: Row(
@@ -895,6 +974,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               maxTokens: _maxTokens,
                               frequencyPenalty: _frequencyPenalty,
                               presencePenalty: _presencePenalty,
+                              systemPrompt: _systemPrompt,
                             );
                             if (!context.mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -924,12 +1004,15 @@ class _ChatScreenState extends State<ChatScreen> {
                               _maxTokens = DefaultTuningStore.defaultMaxTokens;
                               _frequencyPenalty = DefaultTuningStore.defaultFrequencyPenalty;
                               _presencePenalty = DefaultTuningStore.defaultPresencePenalty;
+                              _systemPrompt = DefaultTuningStore.defaultSystemPrompt;
                             });
+                            spController.text = _systemPrompt;
                             setSheetState(() {});
                             ChatStreamingPreferenceStore.instance.writePreferStreaming(
                               ChatStreamingPreferenceStore.defaultStreaming,
                             );
                             _saveTuningForConversation();
+                            _saveSystemPromptForConversation();
                           },
                           icon: const Icon(Icons.restart_alt, size: 16),
                           label: const Text('Reset to defaults'),
@@ -938,6 +1021,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ],
                   ),
                 ],
+              ),
               ),
             );
           },
