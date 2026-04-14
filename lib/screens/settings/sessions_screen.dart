@@ -1,13 +1,19 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 
-import '../../services/bridge.dart';
+import '../../services/app_lock_service.dart';
+import '../../services/default_tuning_store.dart';
+import '../../services/keychain_sync_store.dart';
 import '../../services/session_duration_store.dart';
+import '../../services/wallet_vault.dart';
 import '../../theme.dart';
-import '../../utils/session_open_errors.dart';
 import '../../widgets/section_card.dart';
-import '../../widgets/session_close_flow.dart';
+import '../security/app_lock_autofill.dart';
+import '../security/app_lock_setup_screen.dart';
 
-/// Combined Sessions screen: default duration picker + active on-chain sessions.
+/// Preferences screen: system prompt, default tuning, session duration, security.
 class SessionsScreen extends StatefulWidget {
   const SessionsScreen({super.key});
 
@@ -20,19 +26,36 @@ class _SessionsScreenState extends State<SessionsScreen> {
   bool _durationLoading = true;
   int _sessionDurationSeconds = SessionDurationStore.defaultSeconds;
 
-  // --- On-chain sessions state ---
-  bool _sessionsLoading = true;
-  String? _sessionsError;
-  List<dynamic> _sessions = [];
-  Map<String, String> _modelNames = {};
-  final Set<String> _closing = {};
-  bool _closingAll = false;
+  // --- Defaults state (system prompt + tuning) ---
+  bool _defaultsLoading = true;
+  final _promptController = TextEditingController();
+  String _savedPrompt = '';
+  double _temperature = DefaultTuningStore.defaultTemperature;
+  double _topP = DefaultTuningStore.defaultTopP;
+  int _maxTokens = DefaultTuningStore.defaultMaxTokens;
+  double _frequencyPenalty = DefaultTuningStore.defaultFrequencyPenalty;
+  double _presencePenalty = DefaultTuningStore.defaultPresencePenalty;
+
+  // --- Security state ---
+  bool _securityLoading = true;
+  bool _lockOn = false;
+  bool _bioOn = false;
+  bool _bioAvailable = false;
+  bool _icloudSync = false;
+  bool _icloudSyncChanging = false;
 
   @override
   void initState() {
     super.initState();
     _loadDuration();
-    _refreshSessions();
+    _loadDefaults();
+    _loadSecurity();
+  }
+
+  @override
+  void dispose() {
+    _promptController.dispose();
+    super.dispose();
   }
 
   // ── Duration ──────────────────────────────────────────────────
@@ -59,167 +82,181 @@ class _SessionsScreenState extends State<SessionsScreen> {
     );
   }
 
-  // ── On-chain sessions ─────────────────────────────────────────
+  // ── Defaults (system prompt + tuning) ───────────────────────────
 
-  String _normId(String? s) {
-    if (s == null) return '';
-    var x = s.toLowerCase().trim();
-    if (x.startsWith('0x')) x = x.substring(2);
-    return x;
-  }
-
-  Future<void> _loadModelNames() async {
-    try {
-      final models = GoBridge().getActiveModels(teeOnly: false);
-      final map = <String, String>{};
-      for (final m in models) {
-        if (m is! Map) continue;
-        final id = _normId(m['id'] as String?);
-        final name = m['name'] as String? ?? id;
-        if (id.isNotEmpty) map[id] = name;
-      }
-      if (mounted) setState(() => _modelNames = map);
-    } catch (_) {}
-  }
-
-  Future<void> _refreshSessions() async {
+  Future<void> _loadDefaults() async {
+    final d = await DefaultTuningStore.instance.read();
+    if (!mounted) return;
+    final prompt = d['system_prompt'] as String? ?? '';
     setState(() {
-      _sessionsLoading = true;
-      _sessionsError = null;
+      _promptController.text = prompt;
+      _savedPrompt = prompt;
+      _temperature = (d['temperature'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTemperature;
+      _topP = (d['top_p'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTopP;
+      _maxTokens = (d['max_tokens'] as num?)?.toInt() ?? DefaultTuningStore.defaultMaxTokens;
+      _frequencyPenalty = (d['frequency_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultFrequencyPenalty;
+      _presencePenalty = (d['presence_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultPresencePenalty;
+      _defaultsLoading = false;
     });
-    await _loadModelNames();
-    try {
-      final list = GoBridge().listUnclosedSessions();
-      if (!mounted) return;
-      setState(() {
-        _sessions = list;
-        _sessionsLoading = false;
-      });
-    } on GoBridgeException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _sessionsError = e.message;
-        _sessionsLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _sessionsError = e.toString();
-        _sessionsLoading = false;
-      });
+  }
+
+  Future<void> _saveDefaults({String? snackMessage}) async {
+    final prompt = _promptController.text.trim();
+    await DefaultTuningStore.instance.write(
+      temperature: _temperature,
+      topP: _topP,
+      maxTokens: _maxTokens,
+      frequencyPenalty: _frequencyPenalty,
+      presencePenalty: _presencePenalty,
+      systemPrompt: prompt,
+    );
+    if (!mounted) return;
+    setState(() => _savedPrompt = prompt);
+    if (snackMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(snackMessage),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
-  String _shortHex(String id) {
-    if (id.length < 18) return id;
-    return '${id.substring(0, 12)}...${id.substring(id.length - 8)}';
+  bool get _hasTuningOverrides =>
+      _temperature != DefaultTuningStore.defaultTemperature ||
+      _topP != DefaultTuningStore.defaultTopP ||
+      _maxTokens != DefaultTuningStore.defaultMaxTokens ||
+      _frequencyPenalty != DefaultTuningStore.defaultFrequencyPenalty ||
+      _presencePenalty != DefaultTuningStore.defaultPresencePenalty;
+
+  // ── Security ─────────────────────────────────────────────────
+
+  Future<void> _loadSecurity() async {
+    final auth = LocalAuthentication();
+    final dev = await auth.isDeviceSupported();
+    final can = dev && await auth.canCheckBiometrics;
+    final lock = await AppLockService.instance.isLockEnabled;
+    final bio = await AppLockService.instance.biometricEnabled;
+    final sync = await KeychainSyncStore.instance.isEnabled();
+    if (!mounted) return;
+    setState(() {
+      _lockOn = lock;
+      _bioOn = bio;
+      _bioAvailable = can;
+      _icloudSync = sync;
+      _securityLoading = false;
+    });
   }
 
-  String _endsSummary(String endsAtUnix) {
-    final sec = int.tryParse(endsAtUnix.trim());
-    if (sec == null || sec <= 0) return '—';
-    final end =
-        DateTime.fromMillisecondsSinceEpoch(sec * 1000, isUtc: true).toLocal();
-    final left = end.difference(DateTime.now());
-    if (left.isNegative) return 'Ended (close to reclaim stake)';
-    if (left.inHours >= 1) {
-      return '${left.inHours}h ${left.inMinutes % 60}m left';
-    }
-    if (left.inMinutes >= 1) return '${left.inMinutes}m left';
-    return '${left.inSeconds}s left';
+  Future<void> _openEnableLock() async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const AppLockSetupScreen(changingPassword: false)),
+    );
+    if (ok == true && mounted) await _loadSecurity();
   }
 
-  Future<void> _confirmClose(Map<String, dynamic> row) async {
-    final sid = row['id'] as String? ?? '';
-    if (sid.isEmpty) return;
-
-    final ok = await confirmCloseOnChainSession(context);
-    if (ok != true || !mounted) return;
-
-    setState(() => _closing.add(sid));
-    try {
-      if (!mounted) return;
-      await runCloseOnChainSessionFlow(context, sid);
-      if (!mounted) return;
-      await _refreshSessions();
-    } on GoBridgeException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(sessionCloseErrorMessage(e.message)),
-          duration: const Duration(seconds: 8),
-        ));
-      }
-    } finally {
-      if (mounted) setState(() => _closing.remove(sid));
-    }
+  Future<void> _openChangePassword() async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const AppLockSetupScreen(changingPassword: true)),
+    );
+    if (ok == true && mounted) await _loadSecurity();
   }
 
-  Future<void> _confirmCloseAll() async {
-    final count = _sessions.length;
-    if (count == 0) return;
-
+  Future<void> _confirmDisableLock() async {
+    final ctrl = TextEditingController();
+    final userCtrl = TextEditingController(text: kAppLockAutofillUsername);
+    final pwFocus = FocusNode();
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Close all sessions?'),
-        content: Text(
-          'This will close $count session${count != 1 ? 's' : ''} one at a time. '
-          'Each close is a separate on-chain transaction (30–90s each). '
-          'Staked MOR is returned per contract rules.\n\n'
-          'Total time: roughly ${count * 30}–${count * 90} seconds.',
+        title: const Text('Turn off app lock?'),
+        content: AutofillGroup(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Enter your app password to confirm.'),
+              const SizedBox(height: 12),
+              AppLockHiddenUsernameForAutofill(controller: userCtrl),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrl,
+                focusNode: pwFocus,
+                autofocus: true,
+                obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                enableIMEPersonalizedLearning: false,
+                smartDashesType: SmartDashesType.disabled,
+                smartQuotesType: SmartQuotesType.disabled,
+                textInputAction: TextInputAction.done,
+                autofillHints: const [AutofillHints.password],
+                keyboardType: TextInputType.visiblePassword,
+                decoration: const InputDecoration(
+                  labelText: 'App password',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-            child: Text('Close All ($count)'),
+            onPressed: () async {
+              final v = await AppLockService.instance.verifyPassword(ctrl.text);
+              if (!ctx.mounted) return;
+              if (v) {
+                Navigator.of(ctx).pop(true);
+              } else {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  const SnackBar(content: Text('Incorrect password.')),
+                );
+              }
+            },
+            child: const Text('Turn off'),
           ),
         ],
       ),
     );
-    if (ok != true || !mounted) return;
+    ctrl.dispose();
+    userCtrl.dispose();
+    pwFocus.dispose();
+    if (ok == true) {
+      await AppLockService.instance.disableLock();
+      if (mounted) await _loadSecurity();
+    }
+  }
 
-    setState(() => _closingAll = true);
-    final sessionsCopy = List<Map<String, dynamic>>.from(
-      _sessions.map((s) => Map<String, dynamic>.from(s as Map)),
-    );
+  Future<void> _setBiometric(bool v) async {
+    if (v && !_bioAvailable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Biometrics are not available on this device.')),
+      );
+      return;
+    }
+    await AppLockService.instance.setBiometricEnabled(v);
+    if (mounted) await _loadSecurity();
+  }
 
-    int closed = 0;
-    final errors = <String>[];
-
-    for (final row in sessionsCopy) {
-      if (!mounted) break;
-      final sid = row['id'] as String? ?? '';
-      if (sid.isEmpty) continue;
-
-      setState(() => _closing.add(sid));
-      try {
-        GoBridge().closeSession(sid);
-        closed++;
-      } on GoBridgeException catch (e) {
-        errors.add('${sid.substring(0, 8)}…: ${sessionCloseErrorMessage(e.message)}');
-      } catch (e) {
-        errors.add('${sid.substring(0, 8)}…: $e');
-      } finally {
-        if (mounted) setState(() => _closing.remove(sid));
+  Future<void> _setICloudSync(bool v) async {
+    setState(() => _icloudSyncChanging = true);
+    await KeychainSyncStore.instance.setEnabled(v);
+    try {
+      await WalletVault.instance.resyncKeychainItems();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Keychain update error: $e')),
+        );
       }
     }
-
     if (mounted) {
-      setState(() => _closingAll = false);
-      await _refreshSessions();
-
-      if (mounted) {
-        final msg = errors.isEmpty
-            ? 'Closed $closed session${closed != 1 ? 's' : ''} successfully.'
-            : 'Closed $closed of ${sessionsCopy.length}. ${errors.length} failed.';
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
-      }
+      setState(() {
+        _icloudSync = v;
+        _icloudSyncChanging = false;
+      });
     }
   }
 
@@ -237,22 +274,33 @@ class _SessionsScreenState extends State<SessionsScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sessions'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed:
-                _sessionsLoading || _closingAll ? null : _refreshSessions,
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Preferences')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           SectionCard(
+            icon: Icons.psychology_outlined,
+            title: 'System Prompt',
+            status: StatusPill(
+              active: _savedPrompt.isNotEmpty,
+              label: _savedPrompt.isNotEmpty ? 'Custom' : 'None',
+            ),
+            child: _buildSystemPromptBody(theme),
+          ),
+          const SizedBox(height: 12),
+          SectionCard(
+            icon: Icons.tune_rounded,
+            title: 'Default Tuning',
+            status: StatusPill(
+              active: _hasTuningOverrides,
+              label: _hasTuningOverrides ? 'Custom' : 'Default',
+            ),
+            child: _buildTuningBody(theme),
+          ),
+          const SizedBox(height: 12),
+          SectionCard(
             icon: Icons.timer_outlined,
-            title: 'Default Duration',
+            title: 'Session Duration',
             status: StatusPill(
               active: true,
               label: _shortDuration(_sessionDurationSeconds),
@@ -261,20 +309,333 @@ class _SessionsScreenState extends State<SessionsScreen> {
           ),
           const SizedBox(height: 12),
           SectionCard(
-            icon: Icons.link_rounded,
-            title: 'Active Sessions',
+            icon: Icons.lock_outline,
+            title: 'Security',
             status: StatusPill(
-              active: _sessions.isNotEmpty,
-              label: _sessionsLoading
-                  ? '...'
-                  : _sessions.isEmpty
-                      ? 'None'
-                      : '${_sessions.length} active',
+              active: _lockOn,
+              label: _lockOn ? 'Locked' : 'Off',
             ),
-            child: _buildSessionsBody(theme),
+            child: _buildSecurityBody(theme),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildSystemPromptBody(ThemeData theme) {
+    if (_defaultsLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(color: NeoTheme.green),
+        ),
+      );
+    }
+    final hasUnsaved = _promptController.text.trim() != _savedPrompt;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Sets the persona and behavior for all new chats. '
+          'You can also override this per-conversation from the chat tuning panel.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            fontSize: 11,
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _promptController,
+          maxLines: 5,
+          minLines: 3,
+          style: const TextStyle(fontSize: 13, height: 1.4),
+          decoration: InputDecoration(
+            hintText: 'e.g. "You are a concise technical assistant. '
+                'Respond in short paragraphs with no filler."',
+            hintStyle: TextStyle(
+              fontSize: 12,
+              color: theme.hintColor.withValues(alpha: 0.5),
+              height: 1.4,
+            ),
+            hintMaxLines: 3,
+            filled: true,
+            fillColor: NeoTheme.mainPanelFill,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: NeoTheme.mainPanelOutline()),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: NeoTheme.mainPanelOutline()),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: NeoTheme.green.withValues(alpha: 0.6)),
+            ),
+            contentPadding: const EdgeInsets.all(12),
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Tooltip(
+              message: 'Tip: Start with "You are..." to define the assistant\'s role,\n'
+                  'then add style rules like "Be concise" or "Use bullet points".',
+              preferBelow: false,
+              triggerMode: TooltipTriggerMode.tap,
+              showDuration: const Duration(seconds: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lightbulb_outline, size: 14, color: NeoTheme.green.withValues(alpha: 0.7)),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Prompt tips',
+                    style: TextStyle(fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.7)),
+                  ),
+                ],
+              ),
+            ),
+            const Spacer(),
+            if (_savedPrompt.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  _promptController.clear();
+                  _saveDefaults(snackMessage: 'System prompt cleared');
+                },
+                child: const Text('Clear', style: TextStyle(fontSize: 12)),
+              ),
+            const SizedBox(width: 4),
+            FilledButton(
+              onPressed: hasUnsaved
+                  ? () => _saveDefaults(
+                      snackMessage: _promptController.text.trim().isEmpty
+                          ? 'System prompt cleared'
+                          : 'Default system prompt saved')
+                  : null,
+              style: FilledButton.styleFrom(
+                backgroundColor: NeoTheme.green,
+                disabledBackgroundColor: NeoTheme.green.withValues(alpha: 0.2),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              ),
+              child: Text(
+                'Save',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: hasUnsaved ? Colors.black : const Color(0xFF6B7280),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTuningBody(ThemeData theme) {
+    if (_defaultsLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(color: NeoTheme.green),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Default generation parameters for new conversations. '
+          'Override per-conversation from the chat tuning panel.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            fontSize: 11,
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildSlider(
+          label: 'Temperature',
+          tooltip: 'Controls randomness. Lower = more focused; higher = more creative.',
+          value: _temperature,
+          min: 0.0,
+          max: 2.0,
+          divisions: 20,
+          format: (v) => v.toStringAsFixed(1),
+          onChanged: (v) {
+            setState(() => _temperature = v);
+            _saveDefaults();
+          },
+        ),
+        const SizedBox(height: 8),
+        _buildSlider(
+          label: 'Top P',
+          tooltip: 'Nucleus sampling. Limits token choices to the top P probability mass.',
+          value: _topP,
+          min: 0.0,
+          max: 1.0,
+          divisions: 20,
+          format: (v) => v.toStringAsFixed(2),
+          onChanged: (v) {
+            setState(() => _topP = v);
+            _saveDefaults();
+          },
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Max Tokens', style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 4),
+                  Tooltip(
+                    message: 'Maximum tokens in the response. Higher = longer replies.',
+                    preferBelow: false,
+                    triggerMode: TooltipTriggerMode.tap,
+                    showDuration: const Duration(seconds: 4),
+                    child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.remove_circle_outline, size: 20),
+              onPressed: _maxTokens > 64
+                  ? () {
+                      setState(() => _maxTokens = (_maxTokens - 256).clamp(64, 16384));
+                      _saveDefaults();
+                    }
+                  : null,
+            ),
+            Text(
+              '$_maxTokens',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'monospace',
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline, size: 20),
+              onPressed: _maxTokens < 16384
+                  ? () {
+                      setState(() => _maxTokens = (_maxTokens + 256).clamp(64, 16384));
+                      _saveDefaults();
+                    }
+                  : null,
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _buildSlider(
+          label: 'Frequency Penalty',
+          tooltip: 'Penalises tokens based on how often they appeared. Reduces repetition.',
+          value: _frequencyPenalty,
+          min: 0.0,
+          max: 2.0,
+          divisions: 20,
+          format: (v) => v.toStringAsFixed(1),
+          onChanged: (v) {
+            setState(() => _frequencyPenalty = v);
+            _saveDefaults();
+          },
+        ),
+        const SizedBox(height: 8),
+        _buildSlider(
+          label: 'Presence Penalty',
+          tooltip: 'Penalises tokens that appeared at all. Encourages new topics.',
+          value: _presencePenalty,
+          min: 0.0,
+          max: 2.0,
+          divisions: 20,
+          format: (v) => v.toStringAsFixed(1),
+          onChanged: (v) {
+            setState(() => _presencePenalty = v);
+            _saveDefaults();
+          },
+        ),
+        if (_hasTuningOverrides) ...[
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _temperature = DefaultTuningStore.defaultTemperature;
+                  _topP = DefaultTuningStore.defaultTopP;
+                  _maxTokens = DefaultTuningStore.defaultMaxTokens;
+                  _frequencyPenalty = DefaultTuningStore.defaultFrequencyPenalty;
+                  _presencePenalty = DefaultTuningStore.defaultPresencePenalty;
+                });
+                _saveDefaults(snackMessage: 'Tuning reset to defaults');
+              },
+              icon: const Icon(Icons.restart_alt, size: 16),
+              label: const Text('Reset to defaults', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSlider({
+    required String label,
+    required String tooltip,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required String Function(double) format,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Text(label, style: const TextStyle(fontSize: 13)),
+            const SizedBox(width: 4),
+            Tooltip(
+              message: tooltip,
+              preferBelow: false,
+              triggerMode: TooltipTriggerMode.tap,
+              showDuration: const Duration(seconds: 4),
+              child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+            ),
+            const Spacer(),
+            Text(
+              format(value),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            activeTrackColor: NeoTheme.green,
+            inactiveTrackColor: const Color(0xFF374151),
+            thumbColor: NeoTheme.green,
+            overlayColor: NeoTheme.green.withValues(alpha: 0.12),
+            trackHeight: 3,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+          ),
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
     );
   }
 
@@ -329,187 +690,117 @@ class _SessionsScreenState extends State<SessionsScreen> {
     );
   }
 
-  Widget _buildSessionsBody(ThemeData theme) {
+  Widget _buildSecurityBody(ThemeData theme) {
+    if (_securityLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(color: NeoTheme.green),
+        ),
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (!_sessionsLoading && _sessions.length >= 2)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: _closingAll
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: NeoTheme.green,
-                      ),
-                    )
-                  : TextButton(
-                      onPressed:
-                          _closing.isNotEmpty ? null : _confirmCloseAll,
-                      child: Text(
-                        'Close All (${_sessions.length})',
-                        style: TextStyle(
-                          color: _closing.isNotEmpty
-                              ? const Color(0xFF6B7280)
-                              : NeoTheme.green,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
+        Text(
+          'Adds a password (and optional biometrics) before using the app. '
+          'This is not your seed phrase — use a unique app password.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            fontSize: 11,
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (!_lockOn)
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _openEnableLock,
+              style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
+              icon: const Icon(Icons.lock_outline, size: 18),
+              label: const Text('Turn on app lock'),
+            ),
+          )
+        else ...[
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _openChangePassword,
+              child: const Text('Change app password'),
             ),
           ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Unlock with biometrics', style: TextStyle(fontSize: 13)),
+            subtitle: Text(
+              _bioAvailable
+                  ? 'Face ID, Touch ID, or fingerprint.'
+                  : 'Not available on this device.',
+              style: TextStyle(fontSize: 11, color: theme.hintColor),
+            ),
+            value: _bioOn,
+            onChanged: (!_bioAvailable && !_bioOn) ? null : (v) => _setBiometric(v),
+            activeThumbColor: NeoTheme.green,
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _confirmDisableLock,
+              child: const Text('Turn off app lock', style: TextStyle(fontSize: 12, color: Color(0xFFF87171))),
+            ),
+          ),
+        ],
 
-        if (_sessionsLoading)
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: CircularProgressIndicator(color: NeoTheme.green),
+        if (Platform.isMacOS || Platform.isIOS) ...[
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Color(0xFF374151)),
+          const SizedBox(height: 12),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('iCloud Keychain sync', style: TextStyle(fontSize: 13)),
+            subtitle: Text(
+              _icloudSync
+                  ? 'Wallet secret syncs across your Apple devices.'
+                  : 'Wallet secret stays on this device only.',
+              style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
-          )
-        else if (_sessionsError != null)
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _sessionsError!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Color(0xFF9CA3AF)),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: _refreshSessions,
-                    child: const Text('Retry'),
-                  ),
-                ],
-              ),
-            ),
-          )
-        else if (_sessions.isEmpty)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: NeoTheme.mainPanelFill,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: NeoTheme.mainPanelOutline()),
-            ),
-            child: Text(
-              'No open on-chain sessions.\nSessions appear here after you start a chat.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
-                height: 1.4,
-              ),
-            ),
-          )
-        else
-          ...List.generate(_sessions.length, (i) {
-            final row = _sessions[i] as Map<String, dynamic>;
-            final sid = row['id'] as String? ?? '';
-            final modelHex = row['model_agent_id'] as String? ?? '';
-            final modelKey = _normId(modelHex);
-            final modelName =
-                _modelNames[modelKey] ?? _shortHex(modelHex);
-            final ends = row['ends_at'] as String? ?? '0';
-            final busy = _closing.contains(sid);
-            final endText = _endsSummary(ends);
-            final isExpired = endText.startsWith('Ended');
-
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+            value: _icloudSync,
+            onChanged: _icloudSyncChanging ? null : (v) => _setICloudSync(v),
+            activeThumbColor: NeoTheme.green,
+          ),
+          if (_icloudSync)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
               child: Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: NeoTheme.mainPanelFill,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: NeoTheme.mainPanelOutline()),
+                  color: NeoTheme.amber.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: NeoTheme.amber.withValues(alpha: 0.25)),
                 ),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isExpired
-                            ? const Color(0xFF6B7280)
-                            : NeoTheme.green,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            modelName,
-                            style: theme.textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            sid.length > 16
-                                ? '${sid.substring(0, 10)}...${sid.substring(sid.length - 6)}'
-                                : sid,
-                            style: const TextStyle(
-                              fontFamily: 'JetBrains Mono',
-                              fontSize: 10,
-                              color: Color(0xFF6B7280),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            endText,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: isExpired
-                                  ? NeoTheme.amber
-                                  : NeoTheme.green.withValues(alpha: 0.9),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    Icon(Icons.warning_amber_rounded, size: 16, color: NeoTheme.amber.withValues(alpha: 0.9)),
                     const SizedBox(width: 8),
-                    TextButton(
-                      onPressed:
-                          busy ? null : () => _confirmClose(row),
-                      style: TextButton.styleFrom(
-                        foregroundColor: NeoTheme.red,
+                    Expanded(
+                      child: Text(
+                        'Anyone with access to your Apple ID can read the synced wallet secret.',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: NeoTheme.amber.withValues(alpha: 0.85),
+                          height: 1.3,
+                        ),
                       ),
-                      child: busy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : const Text('Close'),
                     ),
                   ],
                 ),
               ),
-            );
-          }),
-
-        const SizedBox(height: 4),
-        Text(
-          'Auto-close runs every 15 min in the background.',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.hintColor,
-            fontSize: 11,
-          ),
-        ),
+            ),
+        ],
       ],
     );
   }

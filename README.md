@@ -47,8 +47,9 @@ Under the hood it embeds the **proxy-router mobile SDK** directly via Go FFI. Th
 - **Wallet** — Create a new wallet or import via private key / recovery phrase; balances on Base mainnet
 - **Models** — Browse active models with MAX Privacy (TEE-only) filter
 - **Sessions** — Open, reuse, and close on-chain sessions; configurable duration and stake estimation
-- **Chat** — Streaming inference via MOR-RPC to providers; per-conversation tuning (temperature, top_p, max_tokens)
-- **Encryption** — Chat messages, titles, and metadata encrypted at rest (AES-256-GCM, wallet-derived key)
+- **Chat** — Streaming inference via MOR-RPC to providers; customizable system prompts, per-conversation tuning (temperature, top_p, max_tokens)
+- **MOR Balance Scanner** — Read-only on-chain scan showing MOR across wallet, active sessions, and on-hold timelock; recover claimable tokens with one tap
+- **Encryption** — Chat messages, titles, system prompts, and metadata encrypted at rest (AES-256-GCM, wallet-derived key)
 - **Wallet-scoped data** — Each wallet gets its own encrypted database; re-importing a wallet restores conversations
 - **Backup & restore** — Export/import encrypted backups (.nnbak) for conversations and settings
 - **AI Gateway** — Local OpenAI-compatible HTTP server for external tools (Cursor, LangChain, Claude Desktop)
