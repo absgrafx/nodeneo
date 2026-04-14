@@ -118,14 +118,14 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
         'blockscoutURL': defaultBlockscoutApiV2,
       };
 
-      final result = await compute(_initBridgeSync, initParams).timeout(
-        const Duration(seconds: 45),
-        onTimeout: () => <String, dynamic>{'error': 'SDK init timed out after 45 s — check network/RPC.'},
-      );
+      // No Dart-side timeout — let Go's NewSDK() finish naturally.
+      // The "Connecting to network..." spinner stays visible. If the RPC is
+      // slow (public endpoints can take 60-120s), the SDK still succeeds.
+      // If Go hits a real error, it returns it; we show the error screen then.
+      final result = await compute(_initBridgeSync, initParams);
 
       AppLogger.info('init result: $result');
 
-      // Sync the main-isolate bridge's initialized flag with the background result.
       final bridge = GoBridge();
       final st = result['status'] as String?;
       bridge.initialized = st == 'ok' || st == 'already_initialized';
@@ -201,7 +201,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
 
   /// After RPC settings change: tear down Go, re-init with new URL, restore wallet from vault.
   Future<void> _restartSdkAfterRpcChange() async {
-    GoBridge().shutdown();
+    await _safeShutdown();
     if (!mounted) return;
     setState(() {
       _sdkReady = false;
@@ -214,7 +214,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
   /// The encrypted DB is intentionally kept — if the user re-imports the same
   /// wallet later, conversations auto-reconnect via the fingerprinted DB name.
   Future<void> _handleWalletErased() async {
-    GoBridge().shutdown();
+    await _safeShutdown();
     await AppLockService.instance.clearLockCredentialsOnly();
     if (!mounted) return;
     setState(() {
@@ -224,11 +224,26 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
     await _initSDK();
   }
 
+  /// Shutdown with a timeout — avoids UI freeze if Go mutex is held by a slow Init.
+  static Future<void> _safeShutdown() async {
+    try {
+      await compute((_) { GoBridge().shutdown(); return true; }, null).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          AppLogger.warn('Shutdown timed out (Go mutex likely held by slow Init)');
+          return false;
+        },
+      );
+    } catch (e) {
+      AppLogger.warn('Shutdown error (non-fatal): $e');
+    }
+  }
+
   /// Factory reset: ALL wallets, keys, DBs, logs, settings — nuclear option.
   Future<void> _fullFactoryReset() async {
     await WalletVault.instance.clearMnemonic();
     await AppLockService.instance.clearLockCredentialsOnly();
-    GoBridge().shutdown();
+    await _safeShutdown();
     final dir = await getApplicationSupportDirectory();
     final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
     await AppLocalReset.wipeFactoryLocalFiles(dataDir);

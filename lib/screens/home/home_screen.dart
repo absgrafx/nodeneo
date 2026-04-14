@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' show min;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -210,10 +211,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return eth < _minEthWei || mor < _minMorWei;
   }
 
-  void _loadWallet() {
+  Future<void> _loadWallet() async {
     try {
-      final bridge = GoBridge();
-      final summary = bridge.getWalletSummary();
+      final summary = await compute(
+        (_) => GoBridge().getWalletSummary(),
+        null,
+      );
+      if (!mounted) return;
       final rawEth = summary['eth_balance'] as String? ?? '0';
       final rawMor = summary['mor_balance'] as String? ?? '0';
       setState(() {
