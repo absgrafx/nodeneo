@@ -165,6 +165,30 @@ func SetEncryptionKey(keyHex *C.char) *C.char {
 	return C.CString(mobile.SetEncryptionKey(C.GoString(keyHex)))
 }
 
+//export OpenWalletDatabase
+func OpenWalletDatabase(fingerprint *C.char) *C.char {
+	return safeCall(func() string { return mobile.OpenWalletDatabase(C.GoString(fingerprint)) })
+}
+
+//export ListWalletDatabases
+func ListWalletDatabases() *C.char {
+	return safeCall(func() string { return mobile.ListWalletDatabases() })
+}
+
+//export ExportBackup
+func ExportBackup(outputPath, passphrase, appVersion, walletPrefix *C.char) *C.char {
+	return safeCall(func() string {
+		return mobile.ExportBackup(C.GoString(outputPath), C.GoString(passphrase), C.GoString(appVersion), C.GoString(walletPrefix))
+	})
+}
+
+//export ImportBackup
+func ImportBackup(inputPath, passphrase *C.char) *C.char {
+	return safeCall(func() string {
+		return mobile.ImportBackup(C.GoString(inputPath), C.GoString(passphrase))
+	})
+}
+
 // --- Wallet ---
 
 //export CreateWallet

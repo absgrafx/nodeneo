@@ -63,11 +63,13 @@ String conversationMetaLine(
 class HomeScreen extends StatefulWidget {
   final Future<void> Function()? onWalletErased;
   final Future<void> Function()? onRpcChanged;
+  final Future<void> Function()? onFactoryReset;
 
   const HomeScreen({
     super.key,
     this.onWalletErased,
     this.onRpcChanged,
+    this.onFactoryReset,
   });
 
   @override
@@ -503,6 +505,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         MaterialPageRoute<void>(
           builder: (_) => WalletScreen(
             onWalletErased: widget.onWalletErased,
+            onFactoryReset: widget.onFactoryReset,
           ),
         ),
       );

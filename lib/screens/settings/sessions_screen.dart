@@ -4,6 +4,7 @@ import '../../services/bridge.dart';
 import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../../utils/session_open_errors.dart';
+import '../../widgets/section_card.dart';
 import '../../widgets/session_close_flow.dart';
 
 /// Combined Sessions screen: default duration picker + active on-chain sessions.
@@ -224,6 +225,13 @@ class _SessionsScreenState extends State<SessionsScreen> {
 
   // ── Build ─────────────────────────────────────────────────────
 
+  String _shortDuration(int sec) {
+    if (sec < 3600) return '${sec ~/ 60} min';
+    if (sec == 3600) return '1 hr';
+    if (sec < 86400) return '${sec ~/ 3600} hrs';
+    return '24 hrs';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -240,307 +248,269 @@ class _SessionsScreenState extends State<SessionsScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          // ── Section 1: Default Duration ──
-          const _SectionBanner(title: 'Default Duration'),
-          const SizedBox(height: 16),
-          if (_durationLoading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: CircularProgressIndicator(color: NeoTheme.green),
-              ),
-            )
-          else
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: NeoTheme.mainPanelFill,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: NeoTheme.mainPanelOutline()),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.timer_outlined, size: 20),
-                      const SizedBox(width: 10),
-                      Text(
-                        'Session Length',
-                        style: theme.textTheme.titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final (label, sec)
-                          in SessionDurationStore.presets)
-                        ChoiceChip(
-                          label: Text(label),
-                          selected: _sessionDurationSeconds == sec,
-                          onSelected: (_) => _saveDuration(sec),
-                          selectedColor:
-                              NeoTheme.green.withValues(alpha: 0.18),
-                          side: BorderSide(
-                            color: _sessionDurationSeconds == sec
-                                ? NeoTheme.green.withValues(alpha: 0.5)
-                                : const Color(0xFF374151),
-                          ),
-                          labelStyle: TextStyle(
-                            color: _sessionDurationSeconds == sec
-                                ? NeoTheme.green
-                                : const Color(0xFF9CA3AF),
-                            fontWeight: _sessionDurationSeconds == sec
-                                ? FontWeight.w600
-                                : FontWeight.w400,
-                            fontSize: 13,
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
+          SectionCard(
+            icon: Icons.timer_outlined,
+            title: 'Default Duration',
+            status: StatusPill(
+              active: true,
+              label: _shortDuration(_sessionDurationSeconds),
             ),
-          const SizedBox(height: 6),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text(
-              'How long each on-chain chat session lasts. Affects estimated MOR stake.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
-                fontSize: 11,
-              ),
-            ),
+            child: _buildDurationBody(theme),
           ),
-
-          const SizedBox(height: 32),
-
-          // ── Section 2: Active Sessions ──
-          const _SectionBanner(title: 'Active Sessions'),
-          if (!_sessionsLoading && _sessions.length >= 2)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: _closingAll
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: NeoTheme.green,
-                        ),
-                      )
-                    : TextButton(
-                        onPressed:
-                            _closing.isNotEmpty ? null : _confirmCloseAll,
-                        child: Text(
-                          'Close All (${_sessions.length})',
-                          style: TextStyle(
-                            color: _closing.isNotEmpty
-                                ? const Color(0xFF6B7280)
-                                : NeoTheme.green,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-              ),
-            ),
           const SizedBox(height: 12),
-
-          if (_sessionsLoading)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: CircularProgressIndicator(color: NeoTheme.green),
-              ),
-            )
-          else if (_sessionsError != null)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _sessionsError!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Color(0xFF9CA3AF)),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: _refreshSessions,
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else if (_sessions.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: NeoTheme.mainPanelFill,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: NeoTheme.mainPanelOutline()),
-              ),
-              child: Text(
-                'No open on-chain sessions.\nSessions appear here after you start a chat.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.hintColor,
-                  height: 1.4,
-                ),
-              ),
-            )
-          else
-            ...List.generate(_sessions.length, (i) {
-              final row = _sessions[i] as Map<String, dynamic>;
-              final sid = row['id'] as String? ?? '';
-              final modelHex = row['model_agent_id'] as String? ?? '';
-              final modelKey = _normId(modelHex);
-              final modelName =
-                  _modelNames[modelKey] ?? _shortHex(modelHex);
-              final ends = row['ends_at'] as String? ?? '0';
-              final busy = _closing.contains(sid);
-              final endText = _endsSummary(ends);
-              final isExpired = endText.startsWith('Ended');
-
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: NeoTheme.mainPanelFill,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: NeoTheme.mainPanelOutline()),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isExpired
-                              ? const Color(0xFF6B7280)
-                              : NeoTheme.green,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              modelName,
-                              style: theme.textTheme.titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${sid.length > 16 ? '${sid.substring(0, 10)}...${sid.substring(sid.length - 6)}' : sid}',
-                              style: const TextStyle(
-                                fontFamily: 'JetBrains Mono',
-                                fontSize: 10,
-                                color: Color(0xFF6B7280),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              endText,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: isExpired
-                                    ? NeoTheme.amber
-                                    : NeoTheme.green.withValues(alpha: 0.9),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton(
-                        onPressed:
-                            busy ? null : () => _confirmClose(row),
-                        style: TextButton.styleFrom(
-                          foregroundColor: NeoTheme.red,
-                        ),
-                        child: busy
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('Close'),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
-
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text(
-              'Auto-close runs every 15 min in the background.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.hintColor,
-                fontSize: 11,
-              ),
+          SectionCard(
+            icon: Icons.link_rounded,
+            title: 'Active Sessions',
+            status: StatusPill(
+              active: _sessions.isNotEmpty,
+              label: _sessionsLoading
+                  ? '...'
+                  : _sessions.isEmpty
+                      ? 'None'
+                      : '${_sessions.length} active',
             ),
+            child: _buildSessionsBody(theme),
           ),
         ],
       ),
     );
   }
-}
 
-// ── Full-width section banner ──────────────────────────────────
-
-class _SectionBanner extends StatelessWidget {
-  final String title;
-
-  const _SectionBanner({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    final screenW = MediaQuery.sizeOf(context).width;
-    return SizedBox(
-      height: 36,
-      child: Transform.translate(
-        offset: const Offset(-20, 0),
-        child: OverflowBox(
-          maxWidth: screenW,
-          maxHeight: 36,
-          alignment: Alignment.centerLeft,
-          child: Container(
-            width: screenW,
-            color: NeoTheme.amber.withValues(alpha: 0.08),
-            alignment: Alignment.center,
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: NeoTheme.amber.withValues(alpha: 0.90),
+  Widget _buildDurationBody(ThemeData theme) {
+    if (_durationLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(color: NeoTheme.green),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final (label, sec) in SessionDurationStore.presets)
+              ChoiceChip(
+                label: Text(label),
+                selected: _sessionDurationSeconds == sec,
+                onSelected: (_) => _saveDuration(sec),
+                selectedColor: NeoTheme.green.withValues(alpha: 0.18),
+                side: BorderSide(
+                  color: _sessionDurationSeconds == sec
+                      ? NeoTheme.green.withValues(alpha: 0.5)
+                      : const Color(0xFF374151),
+                ),
+                labelStyle: TextStyle(
+                  color: _sessionDurationSeconds == sec
+                      ? NeoTheme.green
+                      : const Color(0xFF9CA3AF),
+                  fontWeight: _sessionDurationSeconds == sec
+                      ? FontWeight.w600
+                      : FontWeight.w400,
+                  fontSize: 13,
+                ),
               ),
-            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'How long each on-chain chat session lasts. Affects estimated MOR stake.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            fontSize: 11,
           ),
         ),
-      ),
+      ],
+    );
+  }
+
+  Widget _buildSessionsBody(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!_sessionsLoading && _sessions.length >= 2)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: _closingAll
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: NeoTheme.green,
+                      ),
+                    )
+                  : TextButton(
+                      onPressed:
+                          _closing.isNotEmpty ? null : _confirmCloseAll,
+                      child: Text(
+                        'Close All (${_sessions.length})',
+                        style: TextStyle(
+                          color: _closing.isNotEmpty
+                              ? const Color(0xFF6B7280)
+                              : NeoTheme.green,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+
+        if (_sessionsLoading)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: CircularProgressIndicator(color: NeoTheme.green),
+            ),
+          )
+        else if (_sessionsError != null)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _sessionsError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Color(0xFF9CA3AF)),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: _refreshSessions,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else if (_sessions.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: NeoTheme.mainPanelFill,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: NeoTheme.mainPanelOutline()),
+            ),
+            child: Text(
+              'No open on-chain sessions.\nSessions appear here after you start a chat.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+                height: 1.4,
+              ),
+            ),
+          )
+        else
+          ...List.generate(_sessions.length, (i) {
+            final row = _sessions[i] as Map<String, dynamic>;
+            final sid = row['id'] as String? ?? '';
+            final modelHex = row['model_agent_id'] as String? ?? '';
+            final modelKey = _normId(modelHex);
+            final modelName =
+                _modelNames[modelKey] ?? _shortHex(modelHex);
+            final ends = row['ends_at'] as String? ?? '0';
+            final busy = _closing.contains(sid);
+            final endText = _endsSummary(ends);
+            final isExpired = endText.startsWith('Ended');
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: NeoTheme.mainPanelFill,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: NeoTheme.mainPanelOutline()),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isExpired
+                            ? const Color(0xFF6B7280)
+                            : NeoTheme.green,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            modelName,
+                            style: theme.textTheme.titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            sid.length > 16
+                                ? '${sid.substring(0, 10)}...${sid.substring(sid.length - 6)}'
+                                : sid,
+                            style: const TextStyle(
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 10,
+                              color: Color(0xFF6B7280),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            endText,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isExpired
+                                  ? NeoTheme.amber
+                                  : NeoTheme.green.withValues(alpha: 0.9),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed:
+                          busy ? null : () => _confirmClose(row),
+                      style: TextButton.styleFrom(
+                        foregroundColor: NeoTheme.red,
+                      ),
+                      child: busy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Text('Close'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+
+        const SizedBox(height: 4),
+        Text(
+          'Auto-close runs every 15 min in the background.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            fontSize: 11,
+          ),
+        ),
+      ],
     );
   }
 }
