@@ -26,11 +26,15 @@ class _WalletScreenState extends State<WalletScreen> {
   bool _exporting = false;
   bool _importing = false;
 
-  Future<String?> _walletPassphrase() async {
-    final mnemonic = await WalletVault.instance.readMnemonic();
-    if (mnemonic != null && mnemonic.trim().isNotEmpty) return mnemonic.trim();
-    final pk = await WalletVault.instance.readPrivateKey();
-    if (pk != null && pk.trim().isNotEmpty) return pk.trim();
+  /// Always derive the backup passphrase from the Go SDK's live private key.
+  /// This is consistent regardless of whether the wallet was created or imported,
+  /// and avoids 0x-prefix mismatches between keychain storage paths.
+  String? _walletPassphrase() {
+    try {
+      final res = GoBridge().exportPrivateKey();
+      final pk = res['private_key'] as String? ?? '';
+      if (pk.isNotEmpty) return pk;
+    } catch (_) {}
     return null;
   }
 
@@ -46,7 +50,7 @@ class _WalletScreenState extends State<WalletScreen> {
   }
 
   Future<void> _exportBackup() async {
-    final passphrase = await _walletPassphrase();
+    final passphrase = _walletPassphrase();
     if (passphrase == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -90,7 +94,7 @@ class _WalletScreenState extends State<WalletScreen> {
   }
 
   Future<void> _importBackup() async {
-    final passphrase = await _walletPassphrase();
+    final passphrase = _walletPassphrase();
     if (passphrase == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -185,6 +189,9 @@ class _WalletScreenState extends State<WalletScreen> {
       ),
     );
     if (ok != true || !mounted) return;
+    if (mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
     await widget.onFactoryReset?.call();
   }
 

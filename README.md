@@ -32,32 +32,7 @@ Grab the latest **signed & notarized** `.dmg` from [**Releases**](https://github
 
 > More platforms (iOS, Android) coming soon. macOS arm64 is the current target.
 
-### Build from source
-
-Requires **Go 1.26+**, **Flutter 3.x**, **Xcode** (macOS), and **Python 3** with `cairosvg` (`pip install cairosvg`).
-
-You also need a local clone of the [proxy-router fork](https://github.com/absgrafx/Morpheus-Lumerin-Node) (branch `feat-external_embedding`) in a sibling directory.
-
-```bash
-# Clone both repos side-by-side
-git clone git@github.com:absgrafx/Morpheus-Lumerin-Node.git
-cd Morpheus-Lumerin-Node && git checkout feat-external_embedding && cd ..
-
-git clone git@github.com:absgrafx/nodeneo.git
-cd nodeneo
-
-# Full dev build (clean → pub get → brand assets → Go dylib → flutter run)
-make dev-macos
-
-# Day-to-day fast iteration (skip clean + icon/splash regen)
-make go-macos && make run-macos
-```
-
-See the [Makefile](Makefile) for all targets.
-
----
-
-## What is this?
+## Down The Rabbit Hole?
 
 Node Neo is **the Signal of decentralized AI** — a clean, consumer-grade app that makes the [Morpheus](https://mor.org) network accessible to everyone, not just developers. Install it, create a wallet, stake MOR, pick a model, and chat — privately, with no infrastructure to manage.
 
@@ -102,6 +77,33 @@ Full architecture docs: [.ai-docs/architecture.md](.ai-docs/architecture.md)
 | Android | Planned |
 | Linux | Future |
 | Windows | Future |
+
+---
+
+### Build from source
+
+Requires **Go 1.26+**, **Flutter 3.x**, **Xcode** (macOS), and **Python 3** with `cairosvg` (`pip install cairosvg`).
+
+You also need a local clone of the [proxy-router fork](https://github.com/absgrafx/Morpheus-Lumerin-Node) (branch `feat-external_embedding`) in a sibling directory.
+
+```bash
+# Clone both repos side-by-side
+git clone git@github.com:absgrafx/Morpheus-Lumerin-Node.git
+cd Morpheus-Lumerin-Node && git checkout feat-external_embedding && cd ..
+
+git clone git@github.com:absgrafx/nodeneo.git
+cd nodeneo
+
+# Full dev build (clean → pub get → brand assets → Go dylib → flutter run)
+make dev-macos
+
+# Day-to-day fast iteration (skip clean + icon/splash regen)
+make go-macos && make run-macos
+```
+
+See the [Makefile](Makefile) for all targets.
+
+---
 
 ## License
 

@@ -598,8 +598,16 @@ class _ChatScreenState extends State<ChatScreen> {
           _sending = false;
         });
       } else {
-        final res = bridge.sendPrompt(sid, cid, text, stream: false);
+        final res = await bridge.sendPromptWithOptionsAsync(
+          sid,
+          cid,
+          text,
+          stream: false,
+          options: _buildTuningOptions(),
+          onDelta: (_, __) {},
+        );
         final reply = res['response'] as String? ?? '';
+        final meta = _extractMetadata(res);
         if (!mounted) return;
         setState(() {
           if (reply.isEmpty) {
@@ -613,7 +621,7 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ));
           } else {
-            _messages.add(_ChatBubble(role: 'assistant', text: reply));
+            _messages.add(_ChatBubble(role: 'assistant', text: reply, metadata: meta));
           }
           _sending = false;
         });
