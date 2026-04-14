@@ -337,6 +337,7 @@ func (s *Store) SaveMessageWithMetadata(conversationID, role, content, metadata 
 	id := fmt.Sprintf("%s-%d", role, time.Now().UnixNano())
 	now := time.Now().Unix()
 	stored := s.encrypt(content)
+	storedMeta := s.encrypt(metadata)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -345,7 +346,7 @@ func (s *Store) SaveMessageWithMetadata(conversationID, role, content, metadata 
 	if metadata != "" {
 		if _, err := tx.Exec(
 			`INSERT INTO messages (id, conversation_id, role, content, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			id, conversationID, role, stored, metadata, now,
+			id, conversationID, role, stored, storedMeta, now,
 		); err != nil {
 			return err
 		}
@@ -385,7 +386,7 @@ func (s *Store) maybeAutofillConversationTitle(tx *sql.Tx, conversationID, userC
 	if t == "" {
 		return nil
 	}
-	_, err = tx.Exec(`UPDATE conversations SET title = ? WHERE id = ?`, t, conversationID)
+	_, err = tx.Exec(`UPDATE conversations SET title = ? WHERE id = ?`, s.encrypt(t), conversationID)
 	return err
 }
 
@@ -420,6 +421,7 @@ func (s *Store) ListConversations(limit int) ([]Conversation, error) {
 		}
 		c.IsTEE = isTee != 0
 		c.Pinned = pinned != 0
+		c.Title = s.decrypt(c.Title)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -516,7 +518,7 @@ func (s *Store) SetConversationTitle(conversationID, title string) error {
 	now := time.Now().Unix()
 	res, err := s.db.Exec(
 		`UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?`,
-		strings.TrimSpace(title), now, conversationID,
+		s.encrypt(strings.TrimSpace(title)), now, conversationID,
 	)
 	if err != nil {
 		return err
@@ -576,6 +578,7 @@ func (s *Store) GetMessages(conversationID string) ([]Message, error) {
 			return nil, err
 		}
 		m.Content = s.decrypt(m.Content)
+		m.Metadata = s.decrypt(m.Metadata)
 		out = append(out, m)
 	}
 	return out, rows.Err()

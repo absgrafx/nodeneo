@@ -9,9 +9,20 @@
 
 ## Vision
 
-Replace the bloated Electron desktop app and the Swagger-driven developer experience with a **clean, consumer-grade app** that provides a beautiful UI for the Morpheus network — running on phones, tablets, and desktops from a single codebase.
+Node Neo is **the Signal of decentralized AI** — a clean, consumer-grade app that makes the Morpheus network accessible to everyone, not just developers.
 
-A user installs Node Neo, creates (or imports) a wallet, stakes MOR, picks a model, and chats. That's it. No IPFS. No Docker. No Swagger.
+A user installs Node Neo, creates a wallet, stakes MOR, picks a model, and chats. That's it. No IPFS. No Docker. No Swagger. No terminal.
+
+### Audience
+
+**Node Neo is for the general public.** The person who wants private AI inference but has no interest in running infrastructure. The same audience that uses Signal instead of self-hosting a Morpheus consumer node server.
+
+Node Neo is **not** for:
+- **Infrastructure operators** running compute nodes → [mor.org](https://mor.org) / [tech.mor.org](https://tech.mor.org) for C-node setup
+- **Developers building on the Morpheus API** → [api.mor.org](https://api.mor.org) for the hosted Marketplace API
+- **Protocol researchers** → [MorpheusAIs](https://github.com/MorpheusAIs) repos for smart contracts, tokenomics, and protocol specs
+
+These are complementary projects in the Morpheus ecosystem. Node Neo is the **consumer endpoint** — the last mile between the network and a human who just wants to chat privately.
 
 ---
 
@@ -66,14 +77,17 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │  │             │  │   toggle   │  │    toggle → Go)    │  │
 │  └────────────┘  └────────────┘  └────────────────────┘  │
 │  ┌────────────┐  ┌────────────┐  ┌────────────────────┐  │
-│  │  Wallet    │  │  Network   │  │  On-chain sessions │  │
-│  │  send/erase│  │  / RPC     │  │  list + close      │  │
+│  │  Wallet    │  │  Blockchain│  │  On-chain sessions │  │
+│  │  keys/data │  │  Connection│  │  duration + close  │  │
+│  │  backup    │  │  RPC       │  │                    │  │
+│  │  erase/    │  │            │  │                    │  │
+│  │  factory   │  │            │  │                    │  │
 │  └────────────┘  └────────────┘  └────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────┐  │
-│  │  Expert Mode: API Gateway section                   │  │
-│  │  • Start/stop gateway, port config                  │  │
-│  │  • API key generate / list / revoke                 │  │
-│  │  • Connection info card                             │  │
+│  │  Expert Mode (accordion sections):                  │  │
+│  │  • Blockchain Connection — RPC endpoint config      │  │
+│  │  • Developer API — Swagger/REST server              │  │
+│  │  • AI Gateway — OpenAI-compatible + API keys        │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                         │                                 │
 │              dart:ffi → c-shared lib (JSON strings)       │
@@ -82,7 +96,9 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │           Node Neo Go mobile API (`go/mobile/api.go`)      │
 │                                                           │
 │  • Init / Shutdown, wallet FFI wrappers                  │
+│  • OpenWalletDatabase (fingerprinted), SetEncryptionKey  │
 │  • SQLite: CreateConversation, SaveMessage (on SendPrompt)│
+│  • ExportBackup / ImportBackup (encrypted .nnbak)        │
 │  • Delegates chain/session/chat → proxy-router mobile SDK │
 │  • Gateway: StartGateway, StopGateway, GatewayStatus     │
 │  • API Keys: GenerateAPIKey, ListAPIKeys, RevokeAPIKey   │
@@ -108,14 +124,17 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 ├─────────────────────────────────────────────────────────┤
 │                   Store (Go — SQLite)                     │
 │                                                           │
-│  modernc.org/sqlite — conversations, messages, prefs      │
+│  modernc.org/sqlite — wallet-scoped: nodeneo_{fp}.db     │
+│  AES-256-GCM: message content, metadata, conv titles     │
 │  api_keys table — bcrypt-hashed Bearer tokens             │
 │  conversations.source column — "ui" or "api" origin       │
+│  backup.go — export/import encrypted zip archives         │
 ├─────────────────────────────────────────────────────────┤
 │                   Platform Layer                          │
 │                                                           │
-│  Keychain / Keystore (mnemonic), Application Support      │
-│  (RPC override file, chat_streaming_preference.txt, DB)    │
+│  Keychain / Keystore (private key or mnemonic)            │
+│  Application Support (wallet-scoped DBs, RPC override,    │
+│  preferences, logs, .nnbak export files)                  │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
@@ -148,6 +167,33 @@ When running the **full** proxy-router binary, these routes mirror what the embe
 
 ---
 
+## Onboarding & Wallet
+
+**PK-first approach**: New wallets are generated internally (BIP-39 for entropy), but only the derived private key is shown to the user — masked by default (first 4 + last 4 chars visible, rest as bullets), with Reveal and Copy buttons. Framed as "treat it like a password." The mnemonic is discarded; only the PK is saved to keychain.
+
+**Import**: Supports both private key (default tab) and recovery phrase (secondary toggle for crypto-native users migrating from MetaMask, etc.). Mnemonic imports are saved to keychain and derive the encryption key from the mnemonic.
+
+**Cold start**: `app.dart` tries `readMnemonic()` first (backward compat), then `readPrivateKey()`. Both paths derive the encryption key via SHA-256 and open the wallet-scoped DB.
+
+## Settings UI Pattern
+
+All settings screens use a consistent **accordion layout** via the shared `SectionCard` widget (`lib/widgets/section_card.dart`):
+
+- **`SectionCard`** — Collapsible card with icon, title, optional `StatusPill`, animated expand/collapse. Supports `accentColor` (emerald default, amber for keys, red for danger zone).
+- **`StatusPill`** — Compact pill with colored dot + label (e.g., "Running :8083", "Stopped", "10 min", "None").
+- **`InfoBox`** — Dark container with left accent bar for URLs, paths, and config snippets.
+
+All sections collapsed by default — each screen opens as a clean dashboard of status pills.
+
+| Screen | Sections |
+|--------|----------|
+| Expert Mode | Blockchain Connection · Developer API · AI Gateway |
+| Version & Logs | About · Logs |
+| Sessions | Default Duration · Active Sessions |
+| Wallet | Key Management · Data Backup · Danger Zone |
+
+---
+
 ## Consumer smarts (Flutter + `api.go`)
 
 - **Active models** — SDK caches `active_models.json`; home screen applies **MAX Privacy** (TEE-only filter).
@@ -159,19 +205,31 @@ When running the **full** proxy-router binary, these routes mirror what the embe
 
 **Response metadata:** Each assistant message stores the full raw provider response JSON alongside the text. The Response Info sheet shows summary rows (latency, token counts, finish reason, model) and the complete JSON for debugging.
 
+**Empty responses:** When a provider returns 200 with empty content, the chat shows "No response received — the provider may be busy." as a soft error with a "Tap to retry" button (re-sends the same prompt) and a "Dismiss" option.
+
+**Inference logging:** At DEBUG level, the Go mobile layer logs request details (session, conversation, stream flag, message count, tuning params), response summary (latency, char count, metadata size), and errors. Empty responses are logged at WARN level. Enable DEBUG in Settings → Version & Logs.
+
+**Log level persistence:** The log level setting is saved to SQLite preferences and restored on app restart (applied after the wallet-scoped DB opens). Both the nodeneo wrapper logger and the SDK's internal zap logger are updated atomically.
+
 ---
 
 ## Data Model — Local SQLite
 
+Database file: `nodeneo_{fingerprint}.db` where fingerprint = first 8 hex chars of wallet address.
+
 ```sql
+-- 🔒 = column encrypted with AES-256-GCM (enc:v1: prefix), legacy plaintext transparent
+
 CREATE TABLE conversations (
     id          TEXT PRIMARY KEY,
     model_id    TEXT NOT NULL,
     model_name  TEXT,
-    title       TEXT,
+    title       TEXT,               -- 🔒 encrypted
     is_tee      INTEGER DEFAULT 0,
-    source      TEXT DEFAULT 'ui',    -- 'ui' or 'api' (gateway-originated)
-    tuning      TEXT,                  -- JSON: per-conversation tuning params
+    source      TEXT DEFAULT 'ui',  -- 'ui' or 'api' (gateway-originated)
+    tuning_params TEXT,             -- JSON: per-conversation tuning params
+    session_id  TEXT,               -- on-chain session for resume UX
+    pinned      INTEGER DEFAULT 0,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
@@ -180,8 +238,8 @@ CREATE TABLE messages (
     id              TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversations(id),
     role            TEXT NOT NULL,
-    content         TEXT NOT NULL,
-    metadata        TEXT,              -- full provider response JSON (assistant msgs)
+    content         TEXT NOT NULL,   -- 🔒 encrypted
+    metadata        TEXT,            -- 🔒 encrypted (provider response JSON)
     created_at      INTEGER NOT NULL
 );
 
@@ -200,12 +258,11 @@ CREATE TABLE preferences (
 
 CREATE TABLE api_keys (
     id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
+    name        TEXT DEFAULT '',
     key_hash    TEXT NOT NULL,       -- bcrypt hash of the full sk-... key
     key_prefix  TEXT NOT NULL,       -- first 12 chars for display
     created_at  INTEGER NOT NULL,
-    last_used   INTEGER DEFAULT 0,
-    revoked     INTEGER DEFAULT 0
+    last_used   INTEGER DEFAULT 0
 );
 ```
 
@@ -214,10 +271,25 @@ CREATE TABLE api_keys (
 ## Security Model
 
 ### Key Storage
-- **Platform secure enclave** for private key material
-- BIP-39 mnemonic generated on first launch or imported
-- Private key derived using the same path as proxy-router (`m/44'/60'/0'/0/0`)
-- Key stored in iOS Keychain / Android Keystore / macOS Keychain
+- **PK-first approach**: New wallets generate internally, show the private key (masked) for backup — treated like a password
+- Private key stored in iOS Keychain / Android Keystore / macOS Keychain via `flutter_secure_storage`
+- Legacy mnemonic import supported (recovery phrase toggle on import screen)
+- For mnemonic imports: key derived via BIP-44 path `m/44'/60'/0'/0/0`
+
+### Data Encryption at Rest
+- **Column-level AES-256-GCM** in SQLite (not full-file SQLCipher)
+- Encryption key: `SHA-256(private_key)` or `SHA-256(mnemonic)` — 32 bytes, set via `SetEncryptionKey` FFI
+- **Encrypted columns**: `messages.content`, `messages.metadata`, `conversations.title`
+- Encrypted blobs prefixed with `enc:v1:` — legacy plaintext passes through transparently
+- **Wallet-scoped databases**: `nodeneo_{first8_of_address}.db` — each wallet isolated; legacy `nodeneo.db` auto-migrates on first use
+- **Erase wallet** keeps the encrypted DB on disk (unreadable without the key); re-importing the same wallet reconnects conversations
+- **Full Factory Reset** deletes ALL databases, keys, logs, and preferences
+
+### Backup & Restore
+- **Export**: JSON zip (conversations + messages + preferences) → AES-256-GCM encrypted with `SHA-256(private_key)` → `.nnbak` file
+- **Import**: Decrypt, validate manifest, destructive replace (DELETE + INSERT in transaction)
+- Manifest includes: version, app version, export date, wallet prefix, conversation/message counts
+- API keys excluded from backup (device-scoped, bcrypt-hashed only)
 
 ### Authentication
 - **Biometric first**: Face ID, Touch ID, fingerprint
@@ -240,9 +312,11 @@ CREATE TABLE api_keys (
 | UI | Flutter 3.x (Dart) | Single codebase: iOS, Android, macOS. Native compilation. |
 | Go bridge | **c-shared** + dart:ffi | `//export` C API; `FreeString` + JSON payloads. |
 | Chain + inference | **proxy-router/mobile** SDK | Same logic as full node, in-process. |
-| Wallet | SDK + secure store | Go wallet in memory; mnemonic in Keychain / Keystore. |
-| Local DB | SQLite (modernc.org/sqlite) | Conversations + messages + preferences. |
+| Wallet | SDK + secure store | Go wallet in memory; PK (or mnemonic) in Keychain / Keystore. |
+| Local DB | SQLite (modernc.org/sqlite) | Wallet-scoped DBs, AES-256-GCM column encryption. |
+| Backup | archive/zip + AES-GCM | Encrypted `.nnbak` export/import for conversations + settings. |
 | Keychain | flutter_secure_storage | Platform-native keychain abstraction. |
+| File picker | file_picker | Native save/open dialogs for backup files. |
 | Biometrics | local_auth (planned polish) | Face ID / Touch ID / fingerprint. |
 
 ---
@@ -315,6 +389,14 @@ A lightweight TypeScript process using `@modelcontextprotocol/sdk` that bridges 
 ```
 AI Agent (Cursor/Claude) ←stdio→ MCP Server ←HTTP localhost→ Gateway ←SDK→ Morpheus Network
 ```
+
+---
+
+## Cursor Integration — Trust Model
+
+The MCP server is the recommended path for Cursor integration. Cursor's "Override OpenAI Base URL" proxies requests through their own servers (SSRF protection blocks `127.0.0.1`), placing Cursor in the trust path for prompt content. The MCP server runs as a local stdio process — prompts never leave the machine, preserving the privacy guarantee.
+
+A Cloudflare Tunnel (`cloudflared`) quick tunnel was validated end-to-end but is **not shipped** — it fixes reachability but does not restore confidentiality from Cursor on the hairpin path.
 
 ---
 
