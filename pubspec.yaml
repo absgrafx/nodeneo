@@ -40,7 +40,7 @@ dependencies:
   url_launcher: ^6.2.5
   crypto: ^3.0.6
   local_auth: ^2.3.0
-  flutter_markdown: ^0.7.7+1
+  flutter_markdown_plus: ^1.0.7
   flutter_slidable: ^3.1.2
   markdown: ^7.3.0
   google_fonts: ^6.2.1

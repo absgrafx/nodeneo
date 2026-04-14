@@ -17,9 +17,9 @@ import '../../utils/token_amount.dart';
 import '../../widgets/crypto_token_icons.dart';
 import '../chat/chat_screen.dart';
 import '../chat/conversation_transcript_screen.dart';
-import '../security/security_settings_screen.dart';
 import '../settings/about_screen.dart';
 import '../settings/expert_screen.dart';
+import '../settings/backup_reset_screen.dart';
 import '../settings/sessions_screen.dart';
 import '../settings/wallet_screen.dart';
 import '../../widgets/session_close_flow.dart';
@@ -380,7 +380,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         content: const Text(
           'Removes this thread from this device and submits an on-chain close if a session is still open '
           '(same as close — stake returns per contract rules). If the network refuses the close, the thread '
-          'is still removed locally and you can retry from Settings > Sessions.',
+          'is still removed locally and you can retry from Settings > Wallet.',
         ),
         actions: [
           TextButton(
@@ -404,7 +404,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Conversation removed locally. On-chain close failed — check Sessions in Settings or retry.\n$warn',
+              'Conversation removed locally. On-chain close failed — check Wallet in Settings or retry.\n$warn',
             ),
           ),
         );
@@ -504,19 +504,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   Future<void> _onSettingsTap(BuildContext context, String key) async {
     Navigator.of(context).pop(); // close the drawer first
-    if (key == 'wallet') {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => WalletScreen(
-            onWalletErased: widget.onWalletErased,
-            onFactoryReset: widget.onFactoryReset,
-          ),
-        ),
-      );
-    } else if (key == 'sessions') {
+    if (key == 'sessions') {
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
           builder: (_) => const SessionsScreen(),
+        ),
+      );
+    } else if (key == 'wallet') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const WalletScreen(),
         ),
       );
     } else if (key == 'expert') {
@@ -528,10 +525,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (rpcChanged == true) {
         await widget.onRpcChanged?.call();
       }
-    } else if (key == 'security') {
+    } else if (key == 'backup') {
       await Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
-          builder: (_) => const SecuritySettingsScreen(),
+          builder: (_) => BackupResetScreen(
+            onWalletErased: widget.onWalletErased,
+            onFactoryReset: widget.onFactoryReset,
+          ),
         ),
       );
     } else if (key == 'about') {
@@ -1963,7 +1963,7 @@ class _SettingsDrawer extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Manage your wallet, sessions, network, and preferences.',
+                    'Manage your preferences, wallet, network, and data.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.hintColor,
                     ),
@@ -1973,33 +1973,33 @@ class _SettingsDrawer extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             _SettingsDrawerItem(
-              icon: Icons.account_balance_wallet_outlined,
-              title: 'Wallet',
-              subtitle: 'Export key · manage',
-              onTap: () => onTap('wallet'),
+              icon: Icons.tune_rounded,
+              title: 'Preferences',
+              subtitle: 'Prompt · Tuning · Security',
+              onTap: () => onTap('sessions'),
             ),
             _SettingsDrawerItem(
-              icon: Icons.timer_outlined,
-              title: 'Sessions',
-              subtitle: 'Duration · active sessions',
-              onTap: () => onTap('sessions'),
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Wallet',
+              subtitle: 'Keys · Sessions · Staked MOR',
+              onTap: () => onTap('wallet'),
             ),
             _SettingsDrawerItem(
               icon: Icons.terminal,
               title: 'Expert Mode',
-              subtitle: 'Network · REST API',
+              subtitle: 'Network · API · Gateway',
               onTap: () => onTap('expert'),
             ),
             _SettingsDrawerItem(
-              icon: Icons.lock_outline,
-              title: 'Security',
-              subtitle: 'App lock · biometrics',
-              onTap: () => onTap('security'),
+              icon: Icons.backup_outlined,
+              title: 'Backup & Reset',
+              subtitle: 'Backup · Restore · Reset',
+              onTap: () => onTap('backup'),
             ),
             _SettingsDrawerItem(
               icon: Icons.info_outline,
               title: 'Version & Logs',
-              subtitle: 'About · log viewer',
+              subtitle: 'About · Log viewer',
               onTap: () => onTap('about'),
             ),
           ],

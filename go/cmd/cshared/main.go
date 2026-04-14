@@ -216,6 +216,16 @@ func GetWalletSummary() *C.char {
 	return C.CString(mobile.GetWalletSummary())
 }
 
+//export ScanWalletMOR
+func ScanWalletMOR() *C.char {
+	return C.CString(mobile.ScanWalletMOR())
+}
+
+//export WithdrawUserStakes
+func WithdrawUserStakes(iterations C.int) *C.char {
+	return C.CString(mobile.WithdrawUserStakes(int(iterations)))
+}
+
 //export VerifyRecoveryMnemonic
 func VerifyRecoveryMnemonic(mnemonic *C.char) *C.char {
 	return C.CString(mobile.VerifyRecoveryMnemonic(C.GoString(mnemonic)))
@@ -414,6 +424,20 @@ func SendPromptStreamAsync(sessionID, conversationID, prompt *C.char, stream C.i
 	}
 
 	mobile.SendPromptWithStreamCallbackAsync(sid, cid, p, s, chunk, done)
+}
+
+// --- Conversation System Prompt ---
+
+//export SetConversationSystemPrompt
+func SetConversationSystemPrompt(conversationID, prompt *C.char) *C.char {
+	return safeCall(func() string {
+		return mobile.SetConversationSystemPrompt(C.GoString(conversationID), C.GoString(prompt))
+	})
+}
+
+//export GetConversationSystemPrompt
+func GetConversationSystemPrompt(conversationID *C.char) *C.char {
+	return C.CString(mobile.GetConversationSystemPrompt(C.GoString(conversationID)))
 }
 
 // --- Conversation Tuning ---
