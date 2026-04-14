@@ -97,7 +97,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		return errJSON(err)
 	}
 	logger.Info("DB opened at %s/nodeneo.db", dataDir)
-	RestoreSavedLogLevel()
+	restoreSavedLogLevelLocked()
 
 	return resultJSON(map[string]string{"status": "ok"})
 }
@@ -185,7 +185,7 @@ func OpenWalletDatabase(fingerprint string) string {
 		return errJSON(err)
 	}
 	logger.Info("Wallet DB opened: %s", scopedPath)
-	RestoreSavedLogLevel()
+	restoreSavedLogLevelLocked()
 	return resultJSON(map[string]string{"status": "ok", "path": scopedPath})
 }
 
@@ -342,23 +342,19 @@ func SetLogLevel(level string) string {
 	return resultJSON(map[string]string{"status": "ok", "level": logger.GetLevel()})
 }
 
-// RestoreSavedLogLevel applies the persisted log level preference.
-// Called after DB is opened so the saved level takes effect before first use.
-func RestoreSavedLogLevel() {
-	mu.Lock()
-	c := client
-	d := db
-	mu.Unlock()
-	if d == nil {
+// restoreSavedLogLevelLocked applies the persisted log level preference.
+// Must be called while mu is already held (from Init or OpenWalletDatabase).
+func restoreSavedLogLevelLocked() {
+	if db == nil {
 		return
 	}
-	saved, err := d.GetPreference("log_level")
+	saved, err := db.GetPreference("log_level")
 	if err != nil || saved == "" {
 		return
 	}
 	logger.SetLevel(saved)
-	if c != nil {
-		_ = c.SetLogLevel(saved)
+	if client != nil {
+		_ = client.SetLogLevel(saved)
 	}
 	logger.Info("Restored saved log level: %s", saved)
 }
