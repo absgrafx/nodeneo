@@ -25,6 +25,7 @@ var (
 	db       *store.Store
 	initErr  error
 	savedDir string // dataDir from Init, used by OpenWalletDatabase
+	savedRPC string // ethNodeURL from Init, used by MOR scanner
 )
 
 func fileExists(path string) bool {
@@ -64,6 +65,7 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 		return errJSON(fmt.Errorf("logger init: %w", err))
 	}
 	savedDir = dataDir
+	savedRPC = ethNodeURL
 	logger.Info("SDK init: dataDir=%s chainID=%d", dataDir, chainID)
 
 	activeModelsURL := "https://active.mor.org/active_models.json"
@@ -638,13 +640,20 @@ func GetUnclosedUserSessions() string {
 // maxChatHistoryMessages caps how many prior SQLite turns we attach (user+assistant); avoids huge prompts.
 const maxChatHistoryMessages = 80
 
-func openAIMessagesFromSQLiteHistory(msgs []store.Message, newUserPrompt string) []openai.ChatCompletionMessage {
+func openAIMessagesFromSQLiteHistory(msgs []store.Message, newUserPrompt string, systemPrompt string) []openai.ChatCompletionMessage {
 	n := len(msgs)
 	start := 0
 	if n > maxChatHistoryMessages {
 		start = n - maxChatHistoryMessages
 	}
-	out := make([]openai.ChatCompletionMessage, 0, n-start+1)
+	capacity := n - start + 1
+	if systemPrompt != "" {
+		capacity++
+	}
+	out := make([]openai.ChatCompletionMessage, 0, capacity)
+	if systemPrompt != "" {
+		out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
+	}
 	for _, m := range msgs[start:] {
 		role := m.Role
 		if role != "user" && role != "assistant" {
@@ -697,13 +706,15 @@ func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt
 		return errJSON(errNotInit)
 	}
 
+	var systemPrompt string
 	var omsgs []openai.ChatCompletionMessage
 	if d != nil {
+		systemPrompt, _ = d.GetConversationSystemPrompt(conversationID)
 		prev, err := d.GetMessages(conversationID)
 		if err != nil {
 			return errJSON(err)
 		}
-		omsgs = openAIMessagesFromSQLiteHistory(prev, prompt)
+		omsgs = openAIMessagesFromSQLiteHistory(prev, prompt, systemPrompt)
 	} else {
 		omsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	}
@@ -784,21 +795,31 @@ func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string
 		}
 	}
 
+	var systemPrompt string
 	var omsgs []openai.ChatCompletionMessage
 	if d != nil {
+		systemPrompt, _ = d.GetConversationSystemPrompt(conversationID)
 		prev, err := d.GetMessages(conversationID)
 		if err != nil {
 			return errJSON(err)
 		}
-		omsgs = openAIMessagesFromSQLiteHistory(prev, prompt)
+		omsgs = openAIMessagesFromSQLiteHistory(prev, prompt, systemPrompt)
 	} else {
 		omsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	}
 
+	if systemPrompt != "" {
+		logger.Info("INFERENCE system_prompt: len=%d first50=%q", len(systemPrompt), truncate(systemPrompt, 50))
+	} else {
+		logger.Info("INFERENCE system_prompt: (none)")
+	}
 	logger.Debug("INFERENCE request: session=%s conv=%s stream=%v msgs=%d", sessionID, conversationID, stream, len(omsgs))
 	if opts != nil {
 		logger.Debug("INFERENCE tuning: temp=%.2f top_p=%.2f max_tokens=%d freq=%.2f pres=%.2f",
 			opts.Temperature, opts.TopP, opts.MaxTokens, opts.FrequencyPenalty, opts.PresencePenalty)
+	}
+	for i, m := range omsgs {
+		logger.Debug("INFERENCE msg[%d]: role=%s len=%d", i, m.Role, len(m.Content))
 	}
 
 	startTime := time.Now()
@@ -896,6 +917,34 @@ func SetConversationPinned(conversationID string, pinned bool) string {
 		return errJSON(err)
 	}
 	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// SetConversationSystemPrompt stores the system prompt for a conversation (encrypted at rest).
+func SetConversationSystemPrompt(conversationID, prompt string) string {
+	logger.Info("SetConversationSystemPrompt: conv=%s len=%d", conversationID, len(prompt))
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	if err := db.SetConversationSystemPrompt(conversationID, prompt); err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]string{"status": "ok"})
+}
+
+// GetConversationSystemPrompt returns the stored system prompt for a conversation.
+func GetConversationSystemPrompt(conversationID string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	raw, err := db.GetConversationSystemPrompt(conversationID)
+	if err != nil {
+		return errJSON(err)
+	}
+	return resultJSON(map[string]interface{}{"system_prompt": raw})
 }
 
 // SetConversationTuning stores tuning params (JSON blob) for a conversation.
@@ -1125,6 +1174,9 @@ func GetMessages(conversationID string) string {
 // --- Preferences (local SQLite) ---
 
 func SetPreference(key string, value string) string {
+	if strings.HasPrefix(key, "_debug_") {
+		logger.Info("DART_DEBUG %s = %s", key, value)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if db == nil {
@@ -1341,6 +1393,13 @@ var errNotInit = &initError{}
 type initError struct{}
 
 func (e *initError) Error() string { return "not initialized — call Init() first" }
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
 
 func filterTEE(models []sdk.Model) []sdk.Model {
 	out := make([]sdk.Model, 0)

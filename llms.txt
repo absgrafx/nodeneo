@@ -57,28 +57,35 @@ Tap a model to start a conversation. Node Neo automatically:
 
 From the home screen wallet section, tap **Send MOR** or **Send ETH** to transfer tokens to any Base address. The app shows a preview of the amount in both token units and wei before confirming.
 
-### 5. Wallet management
+### 5. Wallet & sessions
 
-Settings → Wallet has three sections (accordion-style):
+Settings → Wallet shows on-chain state:
 
-**Key Management:**
-- **Export Private Key** — Shows the key masked with Reveal/Copy buttons (same password-style UX as onboarding)
+**Key Management:** Export Private Key (masked with Reveal/Copy buttons).
 
-**Data Backup:**
-- **Export Backup** — Saves all conversations, messages, and settings to an AES-256-GCM encrypted `.nnbak` file. Uses native file save dialog.
-- **Import Backup** — Restores from a `.nnbak` file, destructively replacing current data (with confirmation warning).
+**Where's My MOR:** Read-only on-chain scan showing MOR across three buckets — in wallet (spendable), active in Inference Contract (staked in open sessions), and on hold (early-close timelock). "Recover claimable MOR" button to withdraw past-timelock tokens. Links to [session staking explainer](https://tech.mor.org/session.html).
+
+**Active Sessions:** Lists unclosed on-chain sessions; close individually or all at once. Auto-close runs every 15 minutes.
+
+### 6. Backup & Reset
+
+Settings → Backup & Reset manages app data lifecycle:
+
+**Data Backup:** Export/import encrypted `.nnbak` files (AES-256-GCM, wallet-derived key).
 
 **Danger Zone:**
-- **Erase Wallet** — Removes the private key from secure storage. Encrypted conversations remain on disk — if the same wallet is re-imported later, they auto-reconnect via the fingerprinted DB name. On-chain funds are unaffected.
-- **Full Factory Reset** — Erases ALL wallet keys, databases (all wallets), logs, settings, and preferences. Removes the entire Node Neo data footprint except the app binary.
+- **Erase Wallet** — Removes the private key from secure storage. Encrypted DB kept for potential re-import.
+- **Full Factory Reset** — Erases ALL wallet keys, databases, logs, settings, and preferences.
 
 ## Chat Features
 
+- **System prompts** — Set a default persona for all new chats (Settings → Preferences → System Prompt), or override per-conversation from the Chat Tuning panel. Prepended as an OpenAI `system` message. Encrypted at rest.
 - **Streaming replies** — On by default. Provider deltas update the chat bubble in real time (~30fps UI throttle).
-- **Per-conversation tuning** — Temperature, top_p, max_tokens, frequency penalty, presence penalty. Persisted in SQLite per conversation.
+- **Per-conversation tuning** — Temperature, top_p, max_tokens, frequency penalty, presence penalty, and system prompt. Persisted in SQLite per conversation.
 - **Response metadata** — Each assistant message stores the full raw provider response JSON. A Response Info sheet shows latency, token counts, finish reason, model, and the complete JSON.
 - **Session reuse** — Active sessions are reused across conversations with the same model. Sessions have a configurable duration (default 10 minutes).
-- **On-chain sessions** — Settings → Sessions lists all unclosed on-chain sessions for the wallet with the ability to close them individually or all at once (reclaiming stake). Auto-close runs every 15 minutes in the background.
+- **On-chain sessions** — Settings → Wallet lists all unclosed on-chain sessions for the wallet with the ability to close them individually or all at once (reclaiming stake). Auto-close runs every 15 minutes in the background.
+- **MOR balance scanner** — Settings → Wallet → "Where's My MOR" performs read-only on-chain lookups showing MOR across three buckets (wallet, active sessions, on-hold timelock). Includes a "Recover claimable MOR" action to withdraw tokens past the timelock period via `withdrawUserStakes`.
 
 ## API Gateway
 
@@ -199,7 +206,7 @@ Node Neo encrypts chat message content and metadata at rest using AES-256-GCM:
 
 - On wallet creation or import, the private key (or mnemonic for legacy imports) is SHA-256 hashed to derive a 32-byte encryption key.
 - The key is passed to the Go store via `SetEncryptionKey`.
-- **Encrypted columns**: message `content`, message `metadata` (provider response JSON), conversation `title` — all stored as `enc:v1:<base64(nonce+ciphertext)>`.
+- **Encrypted columns**: message `content`, message `metadata` (provider response JSON), conversation `title`, conversation `system_prompt` — all stored as `enc:v1:<base64(nonce+ciphertext)>`.
 - Legacy plaintext (from before encryption was enabled) is returned as-is (transparent migration).
 - If the encryption key is unavailable (e.g. wrong wallet), encrypted data cannot be read.
 
@@ -232,7 +239,7 @@ All local data lives under the platform's Application Support directory:
 | `eth_rpc_override.txt` | Custom RPC URL override (if set) |
 | `chat_streaming_preference.txt` | Streaming on/off preference |
 | `session_duration_preference.txt` | Session duration preference |
-| `default_tuning.json` | Default chat tuning parameters |
+| `default_tuning.json` | Default chat tuning parameters + system prompt |
 | `keychain_sync.txt` | Keychain sync state |
 | `logs/nodeneo.log` | Rotating log file (10 MB × 5 rotated files) |
 | `logs/nodeneo.log.1` ... `.5` | Rotated log archives |
@@ -248,12 +255,12 @@ All local data lives under the platform's Application Support directory:
 
 ### Erase vs Factory Reset
 
-**Erase Wallet** (Settings → Wallet → Danger Zone):
+**Erase Wallet** (Settings → Backup & Reset → Danger Zone):
 - Removes private key from platform secure storage
 - Encrypted DB is kept on disk (auto-reconnects if same wallet is re-imported)
 - App returns to onboarding
 
-**Full Factory Reset** (Settings → Wallet → Danger Zone):
+**Full Factory Reset** (Settings → Backup & Reset → Danger Zone):
 - Removes ALL wallet keys from secure storage
 - Deletes ALL wallet databases (all fingerprints + legacy)
 - Deletes logs directory
@@ -298,10 +305,11 @@ lib/                    Flutter UI (Dart) — screens, widgets, services
     home/               Home screen — wallet balance, model list, chat entry
     chat/               Chat screen — streaming, tuning, response metadata
     settings/
+      sessions_screen   Preferences — system prompt, default tuning, session duration, security (app lock/biometrics/iCloud)
+      wallet_screen     Wallet — key management, MOR balance scanner (Where's My MOR), active on-chain sessions
       expert_screen     Expert Mode — Blockchain Connection, Developer API, AI Gateway, API keys
-      wallet_screen     Key management, data backup (export/import), danger zone (erase/factory reset)
-      sessions_screen   Default duration config, on-chain session list + close
-      about_screen      Version info, proxy-router version, logging
+      backup_reset_screen  Backup & Reset — data backup (export/import .nnbak), danger zone (erase/factory reset)
+      about_screen      Version & Logs — version info, proxy-router version, log viewer
   services/
     bridge.dart         dart:ffi bindings to libnodeneo
     wallet_vault.dart   Platform Keychain read/write for mnemonic
@@ -312,7 +320,7 @@ lib/                    Flutter UI (Dart) — screens, widgets, services
     send_token_sheet    Send MOR / ETH bottom sheet
 go/                     Go backend — mobile API, FFI exports, gateway, store
   cmd/cshared/          c-shared entry point (libnodeneo.dylib)
-  mobile/               api.go — FFI surface wrapping the SDK
+  mobile/               api.go — FFI surface wrapping the SDK; mor_scanner.go — on-chain MOR balance queries
   internal/gateway/     OpenAI-compatible local HTTP server
   internal/store/       SQLite store with AES-256-GCM encryption
   internal/logger/      Rotating file logger (10 MB × 5)

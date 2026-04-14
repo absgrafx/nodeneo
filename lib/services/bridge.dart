@@ -154,6 +154,14 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetWalletSummary');
 
+  late final _scanWalletMOR = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ScanWalletMOR');
+
+  late final _withdrawUserStakes = _lib.lookupFunction<
+      Pointer<Utf8> Function(Int32),
+      Pointer<Utf8> Function(int)>('WithdrawUserStakes');
+
   late final _verifyRecoveryMnemonic = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('VerifyRecoveryMnemonic');
@@ -305,6 +313,16 @@ class GoBridge {
   late final _getPreference = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('GetPreference');
+
+  // --- Conversation System Prompt ---
+
+  late final _setConversationSystemPrompt = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SetConversationSystemPrompt');
+
+  late final _getConversationSystemPrompt = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('GetConversationSystemPrompt');
 
   // --- Conversation Tuning ---
 
@@ -605,6 +623,26 @@ class GoBridge {
 
   Map<String, dynamic> getWalletSummary() {
     return _callJSON(_getWalletSummary);
+  }
+
+  /// Scans on-chain state to show where the user's MOR lives (wallet, active sessions, on-hold).
+  Map<String, dynamic> scanWalletMOR() {
+    final ptr = _scanWalletMOR();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Sends a transaction to recover claimable on-hold MOR from the Inference Contract.
+  Map<String, dynamic> withdrawUserStakes({int iterations = 20}) {
+    final ptr = _withdrawUserStakes(iterations);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
   }
 
   /// True if the recovery phrase matches the loaded wallet (read-only; does not re-import).
@@ -1115,6 +1153,33 @@ class GoBridge {
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
     return json['value'] as String? ?? '';
+  }
+
+  // --- Conversation System Prompt ---
+
+  /// Store the system prompt for a conversation (encrypted at rest).
+  void setConversationSystemPrompt({required String conversationId, required String prompt}) {
+    final cid = conversationId.toNativeUtf8();
+    final p = prompt.toNativeUtf8();
+    final ptr = _setConversationSystemPrompt(cid, p);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    calloc.free(p);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns the stored system prompt (empty string if not set).
+  String getConversationSystemPrompt(String conversationId) {
+    final cid = conversationId.toNativeUtf8();
+    final ptr = _getConversationSystemPrompt(cid);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json['system_prompt'] as String? ?? '';
   }
 
   // --- Conversation Tuning ---
