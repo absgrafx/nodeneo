@@ -118,10 +118,6 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
         'blockscoutURL': defaultBlockscoutApiV2,
       };
 
-      // No Dart-side timeout — let Go's NewSDK() finish naturally.
-      // The "Connecting to network..." spinner stays visible. If the RPC is
-      // slow (public endpoints can take 60-120s), the SDK still succeeds.
-      // If Go hits a real error, it returns it; we show the error screen then.
       final result = await compute(_initBridgeSync, initParams);
 
       AppLogger.info('init result: $result');

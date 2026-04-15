@@ -7,6 +7,7 @@ import '../../constants/app_brand.dart';
 import '../../theme.dart';
 import '../../widgets/app_lock_recovery_sheet.dart';
 import '../../widgets/morpheus_logo.dart';
+import '../wallet/wallet_security_actions.dart';
 import 'app_lock_autofill.dart';
 
 /// Full-screen unlock.
@@ -61,25 +62,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
   Future<void> _confirmFullFactoryReset() async {
     final go = widget.onFullFactoryReset;
     if (go == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Factory reset?'),
-        content: const Text(
-          'This removes the app lock, saved wallet, custom RPC URL, and all local chat history on this device. '
-          'You will return to setup and must restore with your recovery phrase or private key.\n\n'
-          'Your funds stay on-chain — nothing is moved. Only proceed if you have a backup.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: NeoTheme.red),
-            child: const Text('Erase everything'),
-          ),
-        ],
-      ),
-    );
+    final ok = await showFactoryResetFlow(context, onFactoryReset: null);
     if (ok != true || !mounted) return;
     setState(() {
       _busy = true;

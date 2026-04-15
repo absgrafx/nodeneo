@@ -10,6 +10,7 @@ import '../../constants/app_brand.dart';
 import '../../constants/network_tokens.dart';
 import '../../services/bridge.dart';
 import '../../services/model_status_api.dart';
+import '../../services/platform_caps.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
 import '../../theme.dart';
@@ -577,6 +578,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             const SizedBox(height: 2),
             Text(
               AppBrand.tagline,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
               style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.w500,
@@ -587,15 +590,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh, size: 22),
-            onPressed: () {
-              _loadWallet();
-              _loadModels();
-              _loadConversations();
-            },
-          ),
+          if (PlatformCaps.isDesktop)
+            IconButton(
+              tooltip: 'Refresh',
+              icon: const Icon(Icons.refresh, size: 22),
+              onPressed: () {
+                _loadWallet();
+                _loadModels();
+                _loadConversations();
+              },
+            ),
           Builder(
             builder: (ctx) => IconButton(
               tooltip: 'Settings',
@@ -606,261 +610,287 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('WALLET', style: theme.textTheme.labelSmall),
-              const SizedBox(height: 8),
-              _WalletCard(
-                fullAddress: _address,
-                ethBalance: _ethBalance,
-                morBalance: _morBalance,
-                rpcChecking: _rpcChecking,
-                rpcReachable: _rpcReachable,
-                onOpenExpert: () async {
-                  final rpcChanged = await Navigator.of(context).push<bool>(
-                    MaterialPageRoute<bool>(
-                      builder: (_) => const ExpertScreen(),
-                    ),
-                  );
-                  if (rpcChanged == true) {
-                    await widget.onRpcChanged?.call();
-                  }
-                },
-                onSendMor: () {
-                  showSendTokenSheet(
-                    context,
-                    sendMor: true,
-                    onSent: () {
-                      if (mounted) _loadWallet();
-                    },
-                  );
-                },
-                onSendEth: () {
-                  showSendTokenSheet(
-                    context,
-                    sendMor: false,
-                    onSent: () {
-                      if (mounted) _loadWallet();
-                    },
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-
-              if (_walletUnfunded) ...[
-                Expanded(child: _FundWalletOverlay(address: _address)),
-              ] else ...[
-                _PrivacyToggle(
-                  enabled: _maxPrivacy,
-                  onChanged: (val) {
-                    setState(() => _maxPrivacy = val);
-                    _loadModels();
-                  },
-                ),
-                if (_activeResumeChats.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  Row(
+        child: RefreshIndicator(
+          color: NeoTheme.green,
+          onRefresh: () async {
+            _loadWallet();
+            _loadModels();
+            _loadConversations();
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.forum_outlined,
-                        size: 16,
-                        color: NeoTheme.green.withValues(alpha: 0.9),
+                      Text('WALLET', style: theme.textTheme.labelSmall),
+                      const SizedBox(height: 8),
+                      _WalletCard(
+                        fullAddress: _address,
+                        ethBalance: _ethBalance,
+                        morBalance: _morBalance,
+                        rpcChecking: _rpcChecking,
+                        rpcReachable: _rpcReachable,
+                        onOpenExpert: () async {
+                          final rpcChanged = await Navigator.of(context).push<bool>(
+                            MaterialPageRoute<bool>(
+                              builder: (_) => const ExpertScreen(),
+                            ),
+                          );
+                          if (rpcChanged == true) {
+                            await widget.onRpcChanged?.call();
+                          }
+                        },
+                        onSendMor: () {
+                          showSendTokenSheet(
+                            context,
+                            sendMor: true,
+                            onSent: () {
+                              if (mounted) _loadWallet();
+                            },
+                          );
+                        },
+                        onSendEth: () {
+                          showSendTokenSheet(
+                            context,
+                            sendMor: false,
+                            onSent: () {
+                              if (mounted) _loadWallet();
+                            },
+                          );
+                        },
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'CONTINUE CHATTING',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: NeoTheme.green.withValues(alpha: 0.85),
-                          letterSpacing: 0.6,
-                        ),
-                      ),
+                      const SizedBox(height: 16),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.hintColor,
-                      fontSize: 11,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _activeResumeChats.length,
-                    separatorBuilder: (context, i) => const SizedBox(height: 8),
-                    itemBuilder: (ctx, i) {
-                      final c = _activeResumeChats[i];
-                      final name = conversationHeadline(c);
-                      final tee = c['is_tee'] == true;
-                      return Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
-                          onTap: () => _openResumeChat(context, c),
-                          child: Ink(
-                            decoration: BoxDecoration(
-                              color: NeoTheme.mainPanelFill,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: NeoTheme.mainPanelOutline(),
+                ),
+
+              if (_walletUnfunded) ...[
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _FundWalletOverlay(address: _address),
+                ),
+              ] else ...[
+                SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _PrivacyToggle(
+                        enabled: _maxPrivacy,
+                        onChanged: (val) {
+                          setState(() => _maxPrivacy = val);
+                          _loadModels();
+                        },
+                      ),
+                      if (_activeResumeChats.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.forum_outlined,
+                              size: 16,
+                              color: NeoTheme.green.withValues(alpha: 0.9),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'CONTINUE CHATTING',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: NeoTheme.green.withValues(alpha: 0.85),
+                                letterSpacing: 0.6,
                               ),
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 6,
-                              ),
-                              child: Row(
-                                children: [
-                                  IconButton(
-                                    tooltip: 'Close on-chain session',
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 36,
-                                      minHeight: 36,
-                                    ),
-                                    icon: Icon(
-                                      Icons.close_rounded,
-                                      size: 22,
-                                      color: Colors.red.shade400,
-                                    ),
-                                    onPressed: () =>
-                                        _closeOnChainSessionForConversation(
-                                          context,
-                                          c,
-                                        ),
-                                  ),
-                                  Container(
-                                    width: 36,
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      color: tee
-                                          ? NeoTheme.green.withValues(alpha: 0.18)
-                                          : NeoTheme.mainPanelFill,
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: tee
-                                            ? NeoTheme.green.withValues(alpha: 0.35)
-                                            : const Color(0xFF374151),
-                                      ),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        tee ? '🛡️' : '💬',
-                                        style: const TextStyle(fontSize: 16),
-                                      ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.hintColor,
+                            fontSize: 11,
+                            height: 1.3,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ListView.separated(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: _activeResumeChats.length,
+                          separatorBuilder: (context, i) => const SizedBox(height: 8),
+                          itemBuilder: (ctx, i) {
+                            final c = _activeResumeChats[i];
+                            final name = conversationHeadline(c);
+                            final tee = c['is_tee'] == true;
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => _openResumeChat(context, c),
+                                child: Ink(
+                                  decoration: BoxDecoration(
+                                    color: NeoTheme.mainPanelFill,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: NeoTheme.mainPanelOutline(),
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 6,
+                                    ),
+                                    child: Row(
                                       children: [
-                                        Text(
-                                          name,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: theme.textTheme.titleSmall
-                                              ?.copyWith(
-                                                fontWeight: FontWeight.w600,
+                                        IconButton(
+                                          tooltip: 'Close on-chain session',
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 36,
+                                            minHeight: 36,
+                                          ),
+                                          icon: Icon(
+                                            Icons.close_rounded,
+                                            size: 22,
+                                            color: Colors.red.shade400,
+                                          ),
+                                          onPressed: () =>
+                                              _closeOnChainSessionForConversation(
+                                                context,
+                                                c,
                                               ),
                                         ),
-                                        Text(
-                                          conversationMetaLine(
-                                            c,
-                                            _relativeUpdated,
+                                        Container(
+                                          width: 36,
+                                          height: 36,
+                                          decoration: BoxDecoration(
+                                            color: tee
+                                                ? NeoTheme.green.withValues(alpha: 0.18)
+                                                : NeoTheme.mainPanelFill,
+                                            borderRadius: BorderRadius.circular(8),
+                                            border: Border.all(
+                                              color: tee
+                                                  ? NeoTheme.green.withValues(alpha: 0.35)
+                                                  : const Color(0xFF374151),
+                                            ),
                                           ),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: theme.textTheme.bodySmall
-                                              ?.copyWith(
-                                                color: const Color(0xFF6B7280),
-                                                fontSize: 10,
-                                                height: 1.25,
+                                          child: Center(
+                                            child: Text(
+                                              tee ? '🛡️' : '💬',
+                                              style: const TextStyle(fontSize: 16),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                name,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: theme.textTheme.titleSmall
+                                                    ?.copyWith(
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
                                               ),
+                                              Text(
+                                                conversationMetaLine(
+                                                  c,
+                                                  _relativeUpdated,
+                                                ),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: theme.textTheme.bodySmall
+                                                    ?.copyWith(
+                                                      color: const Color(0xFF6B7280),
+                                                      fontSize: 10,
+                                                      height: 1.25,
+                                                    ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Icon(
+                                          Icons.chevron_right,
+                                          color: theme.hintColor,
+                                          size: 22,
                                         ),
                                       ],
                                     ),
                                   ),
-                                  Icon(
-                                    Icons.chevron_right,
-                                    color: theme.hintColor,
-                                    size: 22,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('MODELS', style: theme.textTheme.labelSmall),
+                          Text(
+                            _loadingModels
+                                ? 'loading...'
+                                : _statusApi != null
+                                    ? '${_models.length} across ${_statusApi!.activeProviders} providers'
+                                    : '${_models.length} available',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.chat_bubble_outline,
+                            size: 16,
+                            color: NeoTheme.green.withValues(alpha: 0.9),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'START A NEW CHAT by selecting a model',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: NeoTheme.green.withValues(alpha: 0.85),
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                          if (_statusApi != null)
+                            Tooltip(
+                              message: 'Border color shows 6-hour availability:\nGreen ≥ 99%  ·  Yellow ≥ 85%  ·  Red < 85%',
+                              preferBelow: false,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.monitor_heart_outlined, size: 12, color: theme.hintColor),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Availability',
+                                    style: TextStyle(fontSize: 10, color: theme.hintColor, fontWeight: FontWeight.w500),
                                   ),
                                 ],
                               ),
                             ),
-                          ),
-                        ),
-                      );
-                    },
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                   ),
-                ],
-                const SizedBox(height: 20),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('MODELS', style: theme.textTheme.labelSmall),
-                    Text(
-                      _loadingModels
-                          ? 'loading...'
-                          : _statusApi != null
-                              ? '${_models.length} across ${_statusApi!.activeProviders} providers'
-                              : '${_models.length} available',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ],
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.chat_bubble_outline,
-                      size: 16,
-                      color: NeoTheme.green.withValues(alpha: 0.9),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'START A NEW CHAT by selecting a model',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: NeoTheme.green.withValues(alpha: 0.85),
-                          letterSpacing: 0.6,
-                        ),
-                      ),
-                    ),
-                    if (_statusApi != null)
-                      Tooltip(
-                        message: 'Border color shows 6-hour availability:\nGreen ≥ 99%  ·  Yellow ≥ 85%  ·  Red < 85%',
-                        preferBelow: false,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.monitor_heart_outlined, size: 12, color: theme.hintColor),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Availability',
-                              style: TextStyle(fontSize: 10, color: theme.hintColor, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
+                SliverFillRemaining(
+                  hasScrollBody: true,
+                  child: _buildModelList(),
                 ),
-                const SizedBox(height: 12),
-
-                Expanded(child: _buildModelList()),
               ],
             ],
           ),
+        ),
         ),
       ),
     );
@@ -1985,9 +2015,11 @@ class _SettingsDrawer extends StatelessWidget {
               onTap: () => onTap('wallet'),
             ),
             _SettingsDrawerItem(
-              icon: Icons.terminal,
-              title: 'Expert Mode',
-              subtitle: 'Network · API · Gateway',
+              icon: PlatformCaps.isMobile ? Icons.link_rounded : Icons.terminal,
+              title: PlatformCaps.isMobile ? 'Network' : 'Expert Mode',
+              subtitle: PlatformCaps.isMobile
+                  ? 'Blockchain RPC'
+                  : 'Network · API · Gateway',
               onTap: () => onTap('expert'),
             ),
             _SettingsDrawerItem(
