@@ -140,11 +140,11 @@ func (s *Store) ImportBackup(inputPath, passphrase string) (*BackupManifest, err
 
 	for _, c := range convos {
 		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO conversations (id, model_id, model_name, provider, title, is_tee, pinned, source, tuning_params, session_id, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT OR REPLACE INTO conversations (id, model_id, model_name, provider, title, is_tee, pinned, source, tuning_params, system_prompt, session_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			c["id"], c["model_id"], c["model_name"], c["provider"], c["title"],
 			intVal(c["is_tee"]), intVal(c["pinned"]), strVal(c["source"]),
-			strVal(c["tuning_params"]), strVal(c["session_id"]),
+			strVal(c["tuning_params"]), strVal(c["system_prompt"]), strVal(c["session_id"]),
 			intVal(c["created_at"]), intVal(c["updated_at"]),
 		); err != nil {
 			return nil, fmt.Errorf("import conversation: %w", err)
@@ -242,7 +242,7 @@ func (s *Store) exportAllConversations() ([]map[string]interface{}, error) {
 	rows, err := s.db.Query(
 		`SELECT id, model_id, COALESCE(model_name,''), COALESCE(provider,''), COALESCE(title,''),
 		        is_tee, COALESCE(pinned,0), COALESCE(source,'ui'), COALESCE(tuning_params,''),
-		        COALESCE(session_id,''), created_at, updated_at
+		        COALESCE(system_prompt,''), COALESCE(session_id,''), created_at, updated_at
 		 FROM conversations ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
@@ -251,18 +251,19 @@ func (s *Store) exportAllConversations() ([]map[string]interface{}, error) {
 
 	var out []map[string]interface{}
 	for rows.Next() {
-		var id, modelID, modelName, provider, title, source, tuning, sessionID string
+		var id, modelID, modelName, provider, title, source, tuning, systemPrompt, sessionID string
 		var isTee, pinned int
 		var createdAt, updatedAt int64
 		if err := rows.Scan(&id, &modelID, &modelName, &provider, &title,
-			&isTee, &pinned, &source, &tuning, &sessionID, &createdAt, &updatedAt); err != nil {
+			&isTee, &pinned, &source, &tuning, &systemPrompt, &sessionID, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, map[string]interface{}{
 			"id": id, "model_id": modelID, "model_name": modelName,
 			"provider": provider, "title": title, "is_tee": isTee,
 			"pinned": pinned, "source": source, "tuning_params": tuning,
-			"session_id": sessionID, "created_at": createdAt, "updated_at": updatedAt,
+			"system_prompt": systemPrompt, "session_id": sessionID,
+			"created_at": createdAt, "updated_at": updatedAt,
 		})
 	}
 	return out, rows.Err()

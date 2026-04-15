@@ -193,38 +193,4 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### 6. Expert Mode API Authentication
-
-**Priority:** High (security / usability)
-
-#### Problem
-The embedded proxy-router HTTP server (Expert Mode / Swagger API) currently starts with `HTTPAuthConfig{WhitelistDefault: true}` but **never populates `AuthEntries`**. This means:
-- `CheckAuth` middleware runs on all protected routes (blockchain, wallet, proxy, system endpoints)
-- `ValidatePassword` always fails — zero users exist
-- Every authenticated Swagger route returns **401 Unauthorized**
-- Only unauthenticated routes work: `/swagger/*`, `/healthcheck`
-
-In the standalone daemon, this is handled by `COOKIE_CONTENT` env var or auto-generated random password written to a `.cookie` file. The embedded SDK path (`mobile/httpserver.go`) skips all of this.
-
-#### Requirements
-- When the user starts Expert Mode, prompt for an admin password (or auto-generate and display one)
-- Pass credentials into `SDK.StartHTTPServer` so it populates `AuthEntries` with an `admin` user
-- Store the password (encrypted) in SQLite `preferences` so it persists across restarts
-- Include in backup/restore alongside other encrypted user data
-- Show credentials in the Expert screen UI (username: `admin`, password with reveal toggle)
-- Allow password reset from Expert screen
-
-#### Changes Needed
-1. **proxy-router `mobile/httpserver.go`** — accept username + password, call `AddUser` on the `HTTPAuthConfig` before wiring routes
-2. **nodeneo `go/mobile/api.go`** — `StartExpertAPI` accepts optional credentials; falls back to stored preference
-3. **nodeneo `go/internal/store`** — store/retrieve encrypted admin password
-4. **Flutter Expert screen** — password prompt on first start, reveal/reset UI
-
-#### Open Questions
-- Should it be a user-chosen password or auto-generated (like the standalone daemon)?
-- Should we support multiple users with different permission tiers, or just `admin` with full access?
-- If auto-generated, where do we show it? Notification? Clipboard? Expert screen always visible?
-
----
-
-*Last updated: 2026-04-14*
+*Last updated: 2026-04-15*

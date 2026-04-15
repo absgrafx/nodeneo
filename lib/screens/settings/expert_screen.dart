@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/chain_config.dart';
 import '../../services/bridge.dart';
@@ -38,6 +39,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
   final _apiPortCtrl = TextEditingController(text: '8082');
   final _apiBaseUrlCtrl = TextEditingController();
   String _detectedIp = '';
+  String _apiCredUser = '';
+  String _apiCredPass = '';
+  bool _apiCredRevealed = false;
 
   // ── Gateway state ─────────────────────────────────────────
   bool _gwRunning = false;
@@ -53,6 +57,7 @@ class _ExpertScreenState extends State<ExpertScreen> {
     _loadRpc();
     _detectLocalIp();
     _refreshApiStatus();
+    _loadApiCredentials();
     _refreshGatewayStatus();
     _loadApiKeys();
   }
@@ -222,6 +227,38 @@ class _ExpertScreenState extends State<ExpertScreen> {
     if (mounted) setState(() {});
   }
 
+  void _loadApiCredentials() {
+    try {
+      final creds = GoBridge().getExpertAPICredentials();
+      setState(() {
+        _apiCredUser = creds['username'] as String? ?? '';
+        _apiCredPass = creds['password'] as String? ?? '';
+      });
+    } catch (_) {}
+  }
+
+  void _resetApiPassword() {
+    try {
+      final creds = GoBridge().resetExpertAPIPassword();
+      setState(() {
+        _apiCredUser = creds['username'] as String? ?? '';
+        _apiCredPass = creds['password'] as String? ?? '';
+        _apiCredRevealed = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Password reset. Takes effect on next API start.'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Reset failed: $e')),
+      );
+    }
+  }
+
   void _refreshApiStatus() {
     try {
       final status = GoBridge().expertAPIStatus();
@@ -256,6 +293,7 @@ class _ExpertScreenState extends State<ExpertScreen> {
           .showSnackBar(SnackBar(content: Text('Error: $e')));
     }
     _refreshApiStatus();
+    _loadApiCredentials();
   }
 
   void _stopApi() {
@@ -819,14 +857,19 @@ class _ExpertScreenState extends State<ExpertScreen> {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  swaggerUrl,
-                  style: const TextStyle(
-                    fontFamily: 'JetBrains Mono',
-                    fontSize: 10,
-                    color: Color(0xFFD1D5DB),
+                child: InkWell(
+                  onTap: () => launchUrl(Uri.parse(swaggerUrl), mode: LaunchMode.externalApplication),
+                  child: Text(
+                    swaggerUrl,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: 10,
+                      color: Color(0xFFD1D5DB),
+                      decoration: TextDecoration.underline,
+                      decorationColor: Color(0xFF6B7280),
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               IconButton(
@@ -850,7 +893,108 @@ class _ExpertScreenState extends State<ExpertScreen> {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        if (_apiCredPass.isNotEmpty) ...[
+          Text(
+            'HTTP Basic Auth',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.hintColor),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF374151)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const SizedBox(width: 4),
+                    const Text('Username', style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
+                    const Spacer(),
+                    Text(
+                      _apiCredUser,
+                      style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, color: Color(0xFFD1D5DB)),
+                    ),
+                    const SizedBox(width: 8),
+                    _copyIcon(context, _apiCredUser, 'Username copied'),
+                  ],
+                ),
+                const Divider(height: 16, color: Color(0xFF374151)),
+                Row(
+                  children: [
+                    const SizedBox(width: 4),
+                    const Text('Password', style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
+                    const Spacer(),
+                    Text(
+                      _apiCredRevealed ? _apiCredPass : '•' * _apiCredPass.length,
+                      style: TextStyle(
+                        fontFamily: 'JetBrains Mono',
+                        fontSize: 12,
+                        color: _apiCredRevealed ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280),
+                        letterSpacing: _apiCredRevealed ? 0 : 1,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: _apiCredRevealed ? 'Hide' : 'Reveal',
+                      icon: Icon(
+                        _apiCredRevealed ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                        size: 16,
+                      ),
+                      style: IconButton.styleFrom(minimumSize: const Size(28, 28), padding: EdgeInsets.zero),
+                      onPressed: () => setState(() => _apiCredRevealed = !_apiCredRevealed),
+                    ),
+                    _copyIcon(context, _apiCredPass, 'Password copied'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Click Authorize in Swagger to enter these credentials.',
+                  style: TextStyle(fontSize: 10, color: theme.hintColor),
+                ),
+              ),
+              TextButton(
+                onPressed: _resetApiPassword,
+                child: const Text('Reset password', style: TextStyle(fontSize: 11)),
+              ),
+            ],
+          ),
+        ] else ...[
+          const SizedBox(height: 4),
+          Text(
+            'Credentials will be generated when you start the API.',
+            style: TextStyle(fontSize: 11, color: theme.hintColor),
+          ),
+        ],
       ],
+    );
+  }
+
+  Widget _copyIcon(BuildContext context, String text, String snackMessage) {
+    return IconButton(
+      tooltip: 'Copy',
+      icon: const Icon(Icons.copy_rounded, size: 14),
+      style: IconButton.styleFrom(minimumSize: const Size(28, 28), padding: EdgeInsets.zero),
+      onPressed: () {
+        Clipboard.setData(ClipboardData(text: text));
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(
+            content: Text(snackMessage),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ));
+      },
     );
   }
 

@@ -3,13 +3,16 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-/// Persists user-chosen default tuning parameters so new conversations
-/// start with these values instead of the hard-coded defaults.
+import 'bridge.dart';
+
+/// Persists user-chosen default tuning parameters and system prompt.
+/// Stored in SQLite preferences (backed up with conversations).
 class DefaultTuningStore {
   DefaultTuningStore._();
   static final DefaultTuningStore instance = DefaultTuningStore._();
 
-  static const _fileName = 'default_tuning.json';
+  static const _prefKey = 'default_tuning_json';
+  static const _legacyFileName = 'default_tuning.json';
 
   static const double defaultTemperature = 1.0;
   static const double defaultTopP = 1.0;
@@ -18,18 +21,13 @@ class DefaultTuningStore {
   static const double defaultPresencePenalty = 0.0;
   static const String defaultSystemPrompt = '';
 
-  Future<File> _file() async {
-    final d = await getApplicationSupportDirectory();
-    final dir = Directory('${d.path}${Platform.pathSeparator}nodeneo');
-    await dir.create(recursive: true);
-    return File('${dir.path}${Platform.pathSeparator}$_fileName');
-  }
+  bool _migrated = false;
 
   Future<Map<String, dynamic>> read() async {
     try {
-      final f = await _file();
-      if (!await f.exists()) return _hardDefaults;
-      final raw = await f.readAsString();
+      await _migrateFromFileIfNeeded();
+      final raw = GoBridge().getPreference(_prefKey);
+      if (raw.isEmpty) return _hardDefaults;
       final json = jsonDecode(raw) as Map<String, dynamic>;
       return {
         'temperature': (json['temperature'] as num?)?.toDouble() ?? defaultTemperature,
@@ -52,18 +50,34 @@ class DefaultTuningStore {
     required double presencePenalty,
     String systemPrompt = '',
   }) async {
-    final f = await _file();
-    await f.writeAsString(
-      jsonEncode({
-        'temperature': temperature,
-        'top_p': topP,
-        'max_tokens': maxTokens,
-        'frequency_penalty': frequencyPenalty,
-        'presence_penalty': presencePenalty,
-        'system_prompt': systemPrompt,
-      }),
-      flush: true,
-    );
+    final json = jsonEncode({
+      'temperature': temperature,
+      'top_p': topP,
+      'max_tokens': maxTokens,
+      'frequency_penalty': frequencyPenalty,
+      'presence_penalty': presencePenalty,
+      'system_prompt': systemPrompt,
+    });
+    try {
+      GoBridge().setPreference(_prefKey, json);
+    } catch (_) {}
+  }
+
+  /// One-time migration: if the old file exists, read it, write to DB, delete file.
+  Future<void> _migrateFromFileIfNeeded() async {
+    if (_migrated) return;
+    _migrated = true;
+    try {
+      final d = await getApplicationSupportDirectory();
+      final f = File('${d.path}${Platform.pathSeparator}nodeneo${Platform.pathSeparator}$_legacyFileName');
+      if (!await f.exists()) return;
+      final raw = await f.readAsString();
+      final existing = GoBridge().getPreference(_prefKey);
+      if (existing.isEmpty) {
+        GoBridge().setPreference(_prefKey, raw.trim());
+      }
+      await f.delete();
+    } catch (_) {}
   }
 
   static Map<String, dynamic> get _hardDefaults => {

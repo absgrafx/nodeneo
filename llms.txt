@@ -73,7 +73,7 @@ Settings → Backup & Reset manages app data lifecycle:
 
 **Data Backup:** Export/import encrypted `.nnbak` files (AES-256-GCM, wallet-derived key).
 
-**Danger Zone:**
+**Danger Zone** (both require private key confirmation before proceeding):
 - **Erase Wallet** — Removes the private key from secure storage. Encrypted DB kept for potential re-import.
 - **Full Factory Reset** — Erases ALL wallet keys, databases, logs, settings, and preferences.
 
@@ -176,7 +176,7 @@ AI Agent (Cursor/Claude) ←stdio→ MCP Server ←HTTP localhost→ Gateway ←
 
 ## Developer API (Expert Mode)
 
-In addition to the AI Gateway, Node Neo can run the **full proxy-router HTTP server** with Swagger documentation and all REST endpoints. This is primarily for developers and debugging.
+Node Neo can run the proxy-router HTTP server with Swagger documentation. Uses **selective route registration** — only routes with satisfied dependencies are exposed (blockchain, wallet, proxy chat/models/agents/audio, healthcheck). System config, IPFS, chat history, auth agent management, and Docker routes are excluded.
 
 ### Enabling the Developer API
 
@@ -185,7 +185,11 @@ In addition to the AI Gateway, Node Neo can run the **full proxy-router HTTP ser
 3. Set the port (default: **8082**)
 4. Tap **Start API Server**
 
-Swagger docs are available at `http://<host>:<port>/swagger/index.html`.
+Swagger docs are available at `http://<host>:<port>/swagger/index.html` (clickable from the Expert screen).
+
+### Authentication
+
+HTTP Basic Auth is auto-configured on first start. A 16-character random password is generated, stored encrypted in SQLite preferences, and displayed masked in the Expert screen with Reveal/Copy buttons. Username is always `admin`. Reset password button regenerates (takes effect on next API start). Credentials are included in backup/restore.
 
 ## Blockchain Connection (RPC Configuration)
 
@@ -237,9 +241,6 @@ All local data lives under the platform's Application Support directory:
 | `nodeneo_<fingerprint>.db-wal` | SQLite WAL journal |
 | `nodeneo_<fingerprint>.db-shm` | SQLite shared memory |
 | `eth_rpc_override.txt` | Custom RPC URL override (if set) |
-| `chat_streaming_preference.txt` | Streaming on/off preference |
-| `session_duration_preference.txt` | Session duration preference |
-| `default_tuning.json` | Default chat tuning parameters + system prompt |
 | `keychain_sync.txt` | Keychain sync state |
 | `logs/nodeneo.log` | Rotating log file (10 MB × 5 rotated files) |
 | `logs/nodeneo.log.1` ... `.5` | Rotated log archives |

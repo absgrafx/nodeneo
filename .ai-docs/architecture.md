@@ -49,6 +49,9 @@ Node Neo embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-ro
 - **Chat tuning parameters** (temperature, top_p, max_tokens, frequency/presence penalty) are passed through the FFI as JSON, converted to `ChatParams` in Go, and forwarded to the SDK
 - **Response metadata**: SDK returns the full provider response as `json.RawMessage`; Go mobile layer stores it in SQLite alongside the assistant message; Dart UI renders summary rows and raw JSON
 
+### Expert Mode HTTP API (embedded Swagger)
+Node Neo can optionally start the proxy-router's Swagger HTTP API for developers and debugging. The embedded version uses **selective route registration** — only routes with satisfied dependencies are exposed (blockchain, wallet, proxy chat/models/agents/audio, healthcheck). System config, IPFS, chat history, auth agent management, and Docker routes are excluded to prevent nil-pointer crashes. Authentication uses auto-generated HTTP Basic Auth credentials (16-char random password, displayed in Expert screen with masked reveal/copy).
+
 ### Reference: standalone proxy-router HTTP API
 A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/chat/completions`, `/blockchain/sessions/...`). That surface is useful for **documentation and parity** with [Morpheus-Marketplace-API](https://github.com/MorpheusAIs/Morpheus-Marketplace-API); Node Neo does **not** require it at runtime.
 
@@ -102,6 +105,7 @@ A full **proxy-router** binary exposes the same semantics over REST (e.g. `/v1/c
 │  • Delegates chain/session/chat → proxy-router mobile SDK │
 │  • Gateway: StartGateway, StopGateway, GatewayStatus     │
 │  • API Keys: GenerateAPIKey, ListAPIKeys, RevokeAPIKey   │
+│  • Expert API: auto-gen admin creds, GetCredentials, Reset│
 │  • MOR Scanner: ScanWalletMOR, WithdrawUserStakes        │
 ├─────────────────────────────────────────────────────────┤
 │          API Gateway (`go/internal/gateway/`)             │
@@ -292,9 +296,16 @@ CREATE TABLE api_keys (
 - **Erase wallet** keeps the encrypted DB on disk (unreadable without the key); re-importing the same wallet reconnects conversations
 - **Full Factory Reset** deletes ALL databases, keys, logs, and preferences
 
+### Preferences — all in SQLite
+All user preferences (default tuning, system prompt, session duration, streaming, Expert API password, log level) are stored in the SQLite `preferences` table — no more file-based settings. File-based stores (`default_tuning.json`, `session_duration_seconds.txt`, `chat_streaming_preference.txt`) auto-migrate to SQLite on first read and delete the legacy file. This means all settings are:
+- Encrypted at rest (wallet-scoped DB)
+- Included in backup/restore automatically
+- Wiped on factory reset with the DB
+
 ### Backup & Restore
 - **Export**: JSON zip (conversations + messages + preferences) → AES-256-GCM encrypted with `SHA-256(private_key)` → `.nnbak` file
 - **Import**: Decrypt, validate manifest, destructive replace (DELETE + INSERT in transaction)
+- Includes: conversations (with `system_prompt`, `tuning_params`), messages (with metadata), all preferences (tuning defaults, session duration, streaming, Expert API password)
 - Manifest includes: version, app version, export date, wallet prefix, conversation/message counts
 - API keys excluded from backup (device-scoped, bcrypt-hashed only)
 

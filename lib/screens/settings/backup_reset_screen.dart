@@ -156,38 +156,10 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
   }
 
   Future<void> _confirmFactoryReset() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Full Factory Reset?'),
-        content: const Text(
-          'This will permanently delete:\n\n'
-          '• All wallet private keys\n'
-          '• All conversation history\n'
-          '• All API keys and settings\n'
-          '• All log files\n\n'
-          'On-chain funds are unaffected, but you must have your '
-          'private key to recover any wallet.\n\n'
-          'This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: NeoTheme.red),
-            child: const Text('Erase Everything'),
-          ),
-        ],
-      ),
+    await showFactoryResetFlow(
+      context,
+      onFactoryReset: widget.onFactoryReset,
     );
-    if (ok != true || !mounted) return;
-    if (mounted) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-    }
-    await widget.onFactoryReset?.call();
   }
 
   @override
