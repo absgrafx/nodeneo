@@ -2,37 +2,52 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'bridge.dart';
+
 /// Persists whether chat completions should request provider streaming (SSE).
-/// Applies to all models and sessions until changed.
+/// Stored in SQLite preferences (backed up with conversations).
 class ChatStreamingPreferenceStore {
   ChatStreamingPreferenceStore._();
   static final ChatStreamingPreferenceStore instance = ChatStreamingPreferenceStore._();
 
-  static const _fileName = 'chat_streaming_preference.txt';
+  static const _prefKey = 'chat_streaming_preference';
+  static const _legacyFileName = 'chat_streaming_preference.txt';
 
-  /// Default: streaming on (matches typical marketplace / proxy-router usage).
   static const bool defaultStreaming = true;
 
-  Future<File> _file() async {
-    final d = await getApplicationSupportDirectory();
-    final dir = Directory('${d.path}${Platform.pathSeparator}nodeneo');
-    await dir.create(recursive: true);
-    return File('${dir.path}${Platform.pathSeparator}$_fileName');
-  }
+  bool _migrated = false;
 
-  /// `true` = request streaming from provider; `false` = one-shot completion.
   Future<bool> readPreferStreaming() async {
-    final f = await _file();
-    if (!await f.exists()) return defaultStreaming;
-    final s = (await f.readAsString()).trim().toLowerCase();
-    if (s == '0' || s == 'false' || s == 'off' || s == 'no') {
-      return false;
+    try {
+      await _migrateFromFileIfNeeded();
+      final raw = GoBridge().getPreference(_prefKey);
+      if (raw.isEmpty) return defaultStreaming;
+      return raw != '0' && raw != 'false';
+    } catch (_) {
+      return defaultStreaming;
     }
-    return true;
   }
 
   Future<void> writePreferStreaming(bool value) async {
-    final f = await _file();
-    await f.writeAsString(value ? '1' : '0', flush: true);
+    try {
+      GoBridge().setPreference(_prefKey, value ? '1' : '0');
+    } catch (_) {}
+  }
+
+  Future<void> _migrateFromFileIfNeeded() async {
+    if (_migrated) return;
+    _migrated = true;
+    try {
+      final d = await getApplicationSupportDirectory();
+      final f = File('${d.path}${Platform.pathSeparator}nodeneo${Platform.pathSeparator}$_legacyFileName');
+      if (!await f.exists()) return;
+      final raw = (await f.readAsString()).trim().toLowerCase();
+      final existing = GoBridge().getPreference(_prefKey);
+      if (existing.isEmpty && raw.isNotEmpty) {
+        final val = (raw == '0' || raw == 'false' || raw == 'off' || raw == 'no') ? '0' : '1';
+        GoBridge().setPreference(_prefKey, val);
+      }
+      await f.delete();
+    } catch (_) {}
   }
 }

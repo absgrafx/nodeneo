@@ -62,12 +62,15 @@ class AppLocalReset {
     await wipeAllDatabaseFiles(dataDir);
     await wipeLogs(dataDir);
 
+    // Legacy files (migrated to SQLite preferences but may still exist
+    // on devices that haven't triggered migration yet).
     for (final name in [
       'eth_rpc_override.txt',
       '.mnemonic_vault',
       '.app_lock_vault.json',
       'chat_streaming_preference.txt',
       'default_tuning.json',
+      'default_session_duration_seconds.txt',
       'session_duration_seconds.txt',
       'keychain_icloud_sync.txt',
     ]) {
