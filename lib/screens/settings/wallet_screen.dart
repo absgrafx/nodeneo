@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -7,6 +8,8 @@ import '../../utils/session_open_errors.dart';
 import '../../widgets/section_card.dart';
 import '../../widgets/session_close_flow.dart';
 import '../wallet/wallet_security_actions.dart';
+
+Map<String, dynamic> _scanWalletMorSync(void _) => GoBridge().scanWalletMOR();
 
 /// Wallet screen: key management + active on-chain sessions.
 class WalletScreen extends StatefulWidget {
@@ -42,12 +45,13 @@ class _WalletScreenState extends State<WalletScreen> {
   Future<void> _runScan() async {
     setState(() { _scanning = true; _scanError = null; });
     try {
-      final result = await Future(() => GoBridge().scanWalletMOR());
+      final result = await compute(_scanWalletMorSync, null);
       if (!mounted) return;
-      setState(() { _scanResult = result; _scanning = false; });
-    } on GoBridgeException catch (e) {
-      if (!mounted) return;
-      setState(() { _scanError = e.message; _scanning = false; });
+      if (result['error'] != null) {
+        setState(() { _scanError = result['error'] as String; _scanning = false; });
+      } else {
+        setState(() { _scanResult = result; _scanning = false; });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() { _scanError = e.toString(); _scanning = false; });
@@ -340,6 +344,7 @@ class _WalletScreenState extends State<WalletScreen> {
             status: _scanResult != null
                 ? StatusPill(active: true, label: '${_scanResult!['total']} MOR')
                 : const StatusPill(active: false, label: 'Tap to scan'),
+            onExpand: _scanResult == null && !_scanning ? _runScan : null,
             child: _buildMorScannerBody(theme),
           ),
           const SizedBox(height: 12),
@@ -363,15 +368,24 @@ class _WalletScreenState extends State<WalletScreen> {
 
   Widget _buildMorScannerBody(ThemeData theme) {
     if (_scanning) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(color: NeoTheme.green),
-              SizedBox(height: 12),
-              Text('Scanning on-chain…', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+              const CircularProgressIndicator(color: NeoTheme.green, strokeWidth: 2.5),
+              const SizedBox(height: 14),
+              const Text(
+                'Scanning on-chain sessions…',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFFD1D5DB)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Checking balances, active stakes, and on-hold positions',
+                style: TextStyle(fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.6)),
+                textAlign: TextAlign.center,
+              ),
             ],
           ),
         ),

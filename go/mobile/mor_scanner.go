@@ -206,53 +206,57 @@ func ScanWalletMOR() string {
 		totalSessions = int(totalBig.Int64())
 	}
 
-	// Scan up to 20 newest sessions for open ones
-	const maxScan = 20
+	// Scan all sessions from newest to oldest to find open (unclosed) ones.
+	const batchSize = 50
 	openStakeWei := big.NewInt(0)
 	openCount := 0
 	expiredUnclosedCount := 0
+	scannedCount := 0
 
-	if totalSessions > 0 {
-		limit := totalSessions
-		if limit > maxScan {
-			limit = maxScan
+	remaining := totalSessions
+	for remaining > 0 {
+		limit := remaining
+		if limit > batchSize {
+			limit = batchSize
 		}
-		offset := totalSessions - limit
+		offset := remaining - limit
 		if offset < 0 {
 			offset = 0
 		}
 
-		// Fetch session IDs
 		sessData := "0xeb7764bb" + addrPadded + abiEncodeUint256(big.NewInt(int64(offset))) + abiEncodeUint256(big.NewInt(int64(limit)))
 		sessResult, err := ethCall(inferenceContract, sessData)
-		if err == nil {
-			sessHex := strings.TrimPrefix(sessResult, "0x")
-			// ABI: offset(32) + total(32) + array_length(32) + ids...
-			if len(sessHex) >= 192 {
-				arrLen := decodeBigInt("0x" + sessHex[128:192])
-				idCount := int(arrLen.Int64())
-				for i := 0; i < idCount && i < maxScan; i++ {
-					start := 192 + i*64
-					end := start + 64
-					if end > len(sessHex) {
-						break
-					}
-					sessionID := "0x" + sessHex[start:end]
-					sess, serr := getSessionData(sessionID)
-					if serr != nil {
-						continue
-					}
-					if sess.closedAt.Sign() == 0 {
-						openCount++
-						openStakeWei.Add(openStakeWei, sess.stake)
-						now := time.Now().Unix()
-						if sess.endsAt.Int64() <= now {
-							expiredUnclosedCount++
-						}
-					}
+		if err != nil {
+			break
+		}
+		sessHex := strings.TrimPrefix(sessResult, "0x")
+		if len(sessHex) < 192 {
+			break
+		}
+		arrLen := decodeBigInt("0x" + sessHex[128:192])
+		idCount := int(arrLen.Int64())
+		for i := 0; i < idCount; i++ {
+			start := 192 + i*64
+			end := start + 64
+			if end > len(sessHex) {
+				break
+			}
+			sessionID := "0x" + sessHex[start:end]
+			sess, serr := getSessionData(sessionID)
+			if serr != nil {
+				continue
+			}
+			scannedCount++
+			if sess.closedAt.Sign() == 0 {
+				openCount++
+				openStakeWei.Add(openStakeWei, sess.stake)
+				now := time.Now().Unix()
+				if sess.endsAt.Int64() <= now {
+					expiredUnclosedCount++
 				}
 			}
 		}
+		remaining -= limit
 	}
 
 	onHoldTotal := new(big.Int).Add(availableWei, holdWei)
@@ -275,8 +279,8 @@ func ScanWalletMOR() string {
 		"open_sessions":          openCount,
 		"expired_unclosed":       expiredUnclosedCount,
 		"total_sessions":         totalSessions,
-		"scanned":                min(totalSessions, maxScan),
-		"incomplete":             totalSessions > maxScan,
+		"scanned":                scannedCount,
+		"incomplete":             scannedCount < totalSessions,
 	})
 }
 
@@ -304,24 +308,27 @@ func getSessionData(sessionID string) (*sessionData, error) {
 		return nil, err
 	}
 	resultHex := strings.TrimPrefix(result, "0x")
-	// Return tuple layout (each 32 bytes):
-	// [0] user (address)
-	// [1] bidId (bytes32)
-	// [2] stake (uint256)
-	// [3] offset to closeoutReceipt (dynamic bytes)
-	// [4] closeoutType (uint256)
-	// [5] providerWithdrawnAmount (uint256)
-	// [6] openedAt (uint128, but padded to 32)
-	// [7] endsAt (uint128)
-	// [8] closedAt (uint128)
-	// [9] isActive (bool)
-	// [10] isDirectPaymentFromUser (bool)
-	if len(resultHex) < 64*9 {
+	// The return is ABI-encoded as a dynamic tuple (contains `bytes`).
+	// Word 0 is the offset to the tuple head (0x20), so actual fields
+	// start at word 1. Raw word indices in resultHex:
+	//   [0] offset (0x20)
+	//   [1] user (address)
+	//   [2] bidId (bytes32)
+	//   [3] stake (uint256)
+	//   [4] offset to closeoutReceipt (dynamic bytes)
+	//   [5] closeoutType (uint256)
+	//   [6] providerWithdrawnAmount (uint256)
+	//   [7] openedAt (uint128)
+	//   [8] endsAt (uint128)
+	//   [9] closedAt (uint128)
+	//   [10] isActive (bool)
+	//   [11] isDirectPaymentFromUser (bool)
+	if len(resultHex) < 64*10 {
 		return nil, fmt.Errorf("getSession response too short")
 	}
-	stake := decodeBigInt("0x" + resultHex[2*64:3*64])
-	endsAt := decodeBigInt("0x" + resultHex[7*64:8*64])
-	closedAt := decodeBigInt("0x" + resultHex[8*64:9*64])
+	stake := decodeBigInt("0x" + resultHex[3*64:4*64])
+	endsAt := decodeBigInt("0x" + resultHex[8*64:9*64])
+	closedAt := decodeBigInt("0x" + resultHex[9*64:10*64])
 	return &sessionData{stake: stake, endsAt: endsAt, closedAt: closedAt}, nil
 }
 
@@ -497,11 +504,4 @@ func rpcCall(method, paramsJSON string) (string, error) {
 		return string(rpcResp.Result), nil
 	}
 	return "", fmt.Errorf("all RPC endpoints failed: %v", lastErr)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

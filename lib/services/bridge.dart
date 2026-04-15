@@ -6,14 +6,14 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 /// Native signature for the synchronous `SendPromptStream` chunk callback.
-typedef NeoStreamDeltaNative = Void Function(Pointer<Utf8> text, Int32 isLast);
+typedef NeoStreamDeltaNative = Void Function(Pointer<Utf8> text, Int32 isThinking, Int32 isLast);
 
 /// Native signature for the synchronous `SendPromptStream` completion callback.
 typedef NeoCompletionNative = Void Function(Pointer<Utf8> resultJSON);
 
 /// Async callback: Go passes only an int64 delta ID (not a string pointer).
 /// Dart retrieves the text via the synchronous ReadStreamDelta FFI call.
-typedef NeoAsyncSignalNative = Void Function(Int64 deltaId, Int32 isLast);
+typedef NeoAsyncSignalNative = Void Function(Int64 deltaId, Int32 isThinking, Int32 isLast);
 
 /// Async completion callback: same pattern, passes a result ID.
 typedef NeoAsyncDoneNative = Void Function(Int64 resultId);
@@ -73,6 +73,10 @@ class GoBridge {
   late final _shutdown = _lib.lookupFunction<
       Void Function(),
       void Function()>('Shutdown');
+
+  late final _cancelPrompt = _lib.lookupFunction<
+      Void Function(),
+      void Function()>('CancelPrompt');
 
   late final _isReady = _lib.lookupFunction<
       Int32 Function(),
@@ -422,6 +426,14 @@ class GoBridge {
     final st = json['status'] as String?;
     initialized = st == 'ok' || st == 'already_initialized';
     return json;
+  }
+
+  /// Cancel the in-flight streaming prompt. The partial response accumulated
+  /// so far is kept and the result will include `"cancelled": true`.
+  void cancelPrompt() {
+    try {
+      _cancelPrompt();
+    } catch (_) {}
   }
 
   /// Tear down native state. Safe to call after a failed [init]: if we never
@@ -961,16 +973,16 @@ class GoBridge {
     String conversationID,
     String prompt, {
     bool stream = true,
-    required void Function(String delta, bool isLast) onDelta,
+    required void Function(String delta, bool isThinking, bool isLast) onDelta,
   }) {
     final sid = sessionID.toNativeUtf8();
     final cid = conversationID.toNativeUtf8();
     final p = prompt.toNativeUtf8();
 
     final callable = NativeCallable<NeoStreamDeltaNative>.listener(
-      (Pointer<Utf8> text, int isLast) {
+      (Pointer<Utf8> text, int isThinking, int isLast) {
         final piece = text.toDartString();
-        onDelta(piece, isLast != 0);
+        onDelta(piece, isThinking != 0, isLast != 0);
       },
     );
 
@@ -1018,7 +1030,7 @@ class GoBridge {
     String conversationID,
     String prompt, {
     bool stream = true,
-    required void Function(String delta, bool isLast) onDelta,
+    required void Function(String delta, bool isThinking, bool isLast) onDelta,
   }) {
     final completer = Completer<Map<String, dynamic>>();
 
@@ -1030,9 +1042,9 @@ class GoBridge {
     late final NativeCallable<NeoAsyncDoneNative> completionCallable;
 
     deltaCallable = NativeCallable<NeoAsyncSignalNative>.listener(
-      (int deltaId, int isLast) {
+      (int deltaId, int isThinking, int isLast) {
         final piece = _fetchDelta(deltaId);
-        onDelta(piece, isLast != 0);
+        onDelta(piece, isThinking != 0, isLast != 0);
       },
     );
 
@@ -1079,7 +1091,7 @@ class GoBridge {
     String prompt, {
     bool stream = true,
     Map<String, dynamic>? options,
-    required void Function(String delta, bool isLast) onDelta,
+    required void Function(String delta, bool isThinking, bool isLast) onDelta,
   }) {
     final completer = Completer<Map<String, dynamic>>();
 
@@ -1092,9 +1104,9 @@ class GoBridge {
     late final NativeCallable<NeoAsyncDoneNative> completionCallable;
 
     deltaCallable = NativeCallable<NeoAsyncSignalNative>.listener(
-      (int deltaId, int isLast) {
+      (int deltaId, int isThinking, int isLast) {
         final piece = _fetchDelta(deltaId);
-        onDelta(piece, isLast != 0);
+        onDelta(piece, isThinking != 0, isLast != 0);
       },
     );
 

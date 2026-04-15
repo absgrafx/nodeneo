@@ -27,7 +27,7 @@ class _AppLockRecoveryBody extends StatefulWidget {
 class _AppLockRecoveryBodyState extends State<_AppLockRecoveryBody> {
   final _phrase = TextEditingController();
   final _key = TextEditingController();
-  bool _phraseMode = true;
+  bool _phraseMode = false;
   bool _busy = false;
   bool _obscureKey = true;
   String? _error;

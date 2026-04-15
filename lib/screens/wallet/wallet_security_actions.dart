@@ -51,14 +51,14 @@ Future<void> showEraseWalletFlow(
   await onWalletErased?.call();
 }
 
-/// Factory reset — requires private key confirmation before proceeding.
+/// Factory reset — requires typing a confirmation phrase (no private key needed).
 Future<bool?> showFactoryResetFlow(
   BuildContext context, {
   Future<void> Function()? onFactoryReset,
 }) async {
   final confirmed = await showDialog<bool>(
     context: context,
-    builder: (ctx) => _PrivateKeyConfirmDialog(
+    builder: (ctx) => _PhraseConfirmDialog(
       title: 'Full Factory Reset?',
       description:
           'This will permanently delete:\n\n'
@@ -69,6 +69,7 @@ Future<bool?> showFactoryResetFlow(
           'On-chain funds are unaffected, but you must have your '
           'private key to recover any wallet.\n\n'
           'This action cannot be undone.',
+      phrase: 'DELETE ALL',
       confirmLabel: 'Erase Everything',
     ),
   );
@@ -225,6 +226,114 @@ class _PrivateKeyConfirmDialogState extends State<_PrivateKeyConfirmDialog> {
                     color: _inputValid ? Colors.white : const Color(0xFF6B7280),
                   ),
                 ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phrase confirmation dialog (factory reset)
+// ---------------------------------------------------------------------------
+
+class _PhraseConfirmDialog extends StatefulWidget {
+  final String title;
+  final String description;
+  final String phrase;
+  final String confirmLabel;
+
+  const _PhraseConfirmDialog({
+    required this.title,
+    required this.description,
+    required this.phrase,
+    required this.confirmLabel,
+  });
+
+  @override
+  State<_PhraseConfirmDialog> createState() => _PhraseConfirmDialogState();
+}
+
+class _PhraseConfirmDialogState extends State<_PhraseConfirmDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  bool get _matches =>
+      _ctrl.text.trim().toUpperCase() == widget.phrase.toUpperCase();
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.description,
+                style: const TextStyle(fontSize: 13, height: 1.4)),
+            const SizedBox(height: 16),
+            RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: NeoTheme.amber.withValues(alpha: 0.9),
+                ),
+                children: [
+                  const TextSpan(text: 'Type '),
+                  TextSpan(
+                    text: widget.phrase,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const TextSpan(text: ' to confirm:'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _ctrl,
+              autocorrect: false,
+              enableSuggestions: false,
+              textCapitalization: TextCapitalization.characters,
+              style: const TextStyle(
+                  fontFamily: 'JetBrains Mono', fontSize: 14, letterSpacing: 1),
+              decoration: InputDecoration(
+                hintText: widget.phrase,
+                hintStyle:
+                    const TextStyle(fontSize: 14, color: Color(0xFF4B5563)),
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _matches ? () => Navigator.pop(context, true) : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: NeoTheme.red,
+            disabledBackgroundColor: NeoTheme.red.withValues(alpha: 0.2),
+          ),
+          child: Text(
+            widget.confirmLabel,
+            style: TextStyle(
+              color: _matches ? Colors.white : const Color(0xFF6B7280),
+            ),
+          ),
         ),
       ],
     );

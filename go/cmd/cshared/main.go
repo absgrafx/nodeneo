@@ -4,17 +4,17 @@ package main
 #include <stdlib.h>
 #include <stdint.h>
 
-typedef void (*neo_stream_cb)(const char* text, int is_last);
+typedef void (*neo_stream_cb)(const char* text, int is_thinking, int is_last);
 typedef void (*neo_completion_cb)(const char* result_json);
 
 // Async variants pass an int64 delta ID instead of a string pointer.
 // Dart retrieves the actual text via the synchronous ReadStreamDelta export.
-typedef void (*neo_async_signal_cb)(int64_t delta_id, int is_last);
+typedef void (*neo_async_signal_cb)(int64_t delta_id, int is_thinking, int is_last);
 typedef void (*neo_async_done_cb)(int64_t result_id);
 
-static inline void neo_invoke_stream_cb(neo_stream_cb cb, const char* t, int is_last) {
+static inline void neo_invoke_stream_cb(neo_stream_cb cb, const char* t, int is_thinking, int is_last) {
 	if (cb != NULL) {
-		cb(t, is_last);
+		cb(t, is_thinking, is_last);
 	}
 }
 
@@ -24,9 +24,9 @@ static inline void neo_invoke_completion_cb(neo_completion_cb cb, const char* r)
 	}
 }
 
-static inline void neo_invoke_async_signal(neo_async_signal_cb cb, int64_t id, int is_last) {
+static inline void neo_invoke_async_signal(neo_async_signal_cb cb, int64_t id, int is_thinking, int is_last) {
 	if (cb != NULL) {
-		cb(id, is_last);
+		cb(id, is_thinking, is_last);
 	}
 }
 
@@ -116,6 +116,11 @@ func Init(dataDir, ethNodeURL *C.char, chainID C.longlong, diamondAddr, morToken
 //export Shutdown
 func Shutdown() {
 	mobile.Shutdown()
+}
+
+//export CancelPrompt
+func CancelPrompt() {
+	mobile.CancelPrompt()
 }
 
 //export IsReady
@@ -308,16 +313,19 @@ func SendPrompt(sessionID, conversationID, prompt *C.char, stream C.int) *C.char
 //
 //export SendPromptStream
 func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, cb C.neo_stream_cb) *C.char {
-	chunk := func(text string, last bool) error {
+	chunk := func(text string, isThinking bool, last bool) error {
 		if cb == nil {
 			return nil
 		}
 		ct := C.CString(text)
-		var lastInt C.int
+		var thinkInt, lastInt C.int
+		if isThinking {
+			thinkInt = 1
+		}
 		if last {
 			lastInt = 1
 		}
-		C.neo_invoke_stream_cb(cb, ct, lastInt)
+		C.neo_invoke_stream_cb(cb, ct, thinkInt, lastInt)
 		C.free(unsafe.Pointer(ct))
 		return nil
 	}
@@ -336,16 +344,19 @@ func SendPromptStream(sessionID, conversationID, prompt *C.char, stream C.int, c
 //
 //export SendPromptWithOptions
 func SendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON *C.char, stream C.int, cb C.neo_stream_cb) *C.char {
-	chunk := func(text string, last bool) error {
+	chunk := func(text string, isThinking bool, last bool) error {
 		if cb == nil {
 			return nil
 		}
 		ct := C.CString(text)
-		var lastInt C.int
+		var thinkInt, lastInt C.int
+		if isThinking {
+			thinkInt = 1
+		}
 		if last {
 			lastInt = 1
 		}
-		C.neo_invoke_stream_cb(cb, ct, lastInt)
+		C.neo_invoke_stream_cb(cb, ct, thinkInt, lastInt)
 		C.free(unsafe.Pointer(ct))
 		return nil
 	}
@@ -374,16 +385,19 @@ func SendPromptWithOptionsAsync(sessionID, conversationID, prompt, optionsJSON *
 	o := C.GoString(optionsJSON)
 	s := stream != 0
 
-	chunk := func(text string, last bool) error {
+	chunk := func(text string, isThinking bool, last bool) error {
 		if cb == nil {
 			return nil
 		}
 		id := storeDelta(text)
-		var lastInt C.int
+		var thinkInt, lastInt C.int
+		if isThinking {
+			thinkInt = 1
+		}
 		if last {
 			lastInt = 1
 		}
-		C.neo_invoke_async_signal(cb, C.int64_t(id), lastInt)
+		C.neo_invoke_async_signal(cb, C.int64_t(id), thinkInt, lastInt)
 		return nil
 	}
 
@@ -405,16 +419,19 @@ func SendPromptStreamAsync(sessionID, conversationID, prompt *C.char, stream C.i
 	p := C.GoString(prompt)
 	s := stream != 0
 
-	chunk := func(text string, last bool) error {
+	chunk := func(text string, isThinking bool, last bool) error {
 		if cb == nil {
 			return nil
 		}
 		id := storeDelta(text)
-		var lastInt C.int
+		var thinkInt, lastInt C.int
+		if isThinking {
+			thinkInt = 1
+		}
 		if last {
 			lastInt = 1
 		}
-		C.neo_invoke_async_signal(cb, C.int64_t(id), lastInt)
+		C.neo_invoke_async_signal(cb, C.int64_t(id), thinkInt, lastInt)
 		return nil
 	}
 
