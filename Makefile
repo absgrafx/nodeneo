@@ -1,5 +1,5 @@
-.PHONY: go-test go-macos go-ios go-android flutter-macos flutter-ios flutter-android \
-	run-macos run-ios clean brand-assets check-brand-tools dev-macos
+.PHONY: go-test go-macos go-ios go-ios-sim go-android flutter-macos flutter-ios flutter-android \
+	run-macos run-ios run-ios-sim clean brand-assets check-brand-tools dev-macos
 
 # ── Go builds ──
 
@@ -26,12 +26,25 @@ go-ios:
 	cd go && \
 	  GOOS=ios GOARCH=arm64 CGO_ENABLED=1 \
 	  CC="$$(xcrun --sdk iphoneos -f clang)" \
-	  CGO_CFLAGS="-isysroot $$(xcrun --sdk iphoneos --show-sdk-path) -arch arm64 -miphoneos-version-min=13.0" \
-	  CGO_LDFLAGS="-isysroot $$(xcrun --sdk iphoneos --show-sdk-path) -arch arm64 -miphoneos-version-min=13.0" \
+	  CGO_CFLAGS="-isysroot $$(xcrun --sdk iphoneos --show-sdk-path) -arch arm64 -miphoneos-version-min=16.0" \
+	  CGO_LDFLAGS="-isysroot $$(xcrun --sdk iphoneos --show-sdk-path) -arch arm64 -miphoneos-version-min=16.0" \
 	  GOROOT="$$(/opt/homebrew/bin/go env GOROOT)" \
 	  PATH="$$(/opt/homebrew/bin/go env GOROOT)/bin:/opt/homebrew/bin:$$PATH" \
 	  go build -buildmode=c-archive -ldflags="$(GO_LDFLAGS)" -o ../build/go/ios/libnodeneo.a ./cmd/cshared/
 	@echo "==> iOS static library: build/go/ios/libnodeneo.a"
+
+go-ios-sim:
+	@echo "==> Building libnodeneo.a for iOS Simulator arm64 (c-archive)..."
+	@mkdir -p build/go/ios-sim
+	cd go && \
+	  GOOS=ios GOARCH=arm64 CGO_ENABLED=1 \
+	  CC="$$(xcrun --sdk iphonesimulator -f clang)" \
+	  CGO_CFLAGS="-isysroot $$(xcrun --sdk iphonesimulator --show-sdk-path) -arch arm64 -miphonesimulator-version-min=16.0" \
+	  CGO_LDFLAGS="-isysroot $$(xcrun --sdk iphonesimulator --show-sdk-path) -arch arm64 -miphonesimulator-version-min=16.0" \
+	  GOROOT="$$(/opt/homebrew/bin/go env GOROOT)" \
+	  PATH="$$(/opt/homebrew/bin/go env GOROOT)/bin:/opt/homebrew/bin:$$PATH" \
+	  go build -buildmode=c-archive -tags ios -ldflags="$(GO_LDFLAGS)" -o ../build/go/ios-sim/libnodeneo.a ./cmd/cshared/
+	@echo "==> iOS Simulator static library: build/go/ios-sim/libnodeneo.a"
 
 go-android:
 	cd go && gomobile bind -target=android -o ../build/nodeneo.aar ./mobile/
@@ -79,6 +92,13 @@ _copy-dylib-macos:
 
 run-ios: go-ios
 	flutter run -d Phlame
+
+SIM_DEVICE ?= iPhone 16 Pro
+run-ios-sim: go-ios-sim
+	@echo "==> Symlinking simulator lib for Xcode..."
+	@mkdir -p build/go/ios
+	@cp build/go/ios-sim/libnodeneo.a build/go/ios/libnodeneo.a
+	flutter run -d "$(SIM_DEVICE)"
 
 clean:
 	rm -rf build/

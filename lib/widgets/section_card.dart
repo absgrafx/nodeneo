@@ -11,6 +11,7 @@ class SectionCard extends StatefulWidget {
   final Widget child;
   final bool initiallyExpanded;
   final Color accentColor;
+  final VoidCallback? onExpand;
 
   const SectionCard({
     super.key,
@@ -20,6 +21,7 @@ class SectionCard extends StatefulWidget {
     required this.child,
     this.initiallyExpanded = false,
     this.accentColor = NeoTheme.emerald,
+    this.onExpand,
   });
 
   @override
@@ -60,6 +62,7 @@ class _SectionCardState extends State<SectionCard>
       _expanded = !_expanded;
       _expanded ? _ctrl.forward() : _ctrl.reverse();
     });
+    if (_expanded) widget.onExpand?.call();
   }
 
   @override

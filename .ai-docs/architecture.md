@@ -213,6 +213,8 @@ All sections collapsed by default — each screen opens as a clean dashboard of 
 
 **Streaming UI:** With **Streaming reply** on (default), Dart uses **`SendPromptWithOptionsAsync`** with `stream: true` and **`NativeCallable.listener`** so provider deltas update the chat bubble in real time (~30fps UI throttle, `jumpTo` scrolling). Non-streaming mode uses **`SendPromptWithOptionsAsync`** with `stream: false`. Both paths support chat tuning parameters (temperature, top_p, max_tokens, frequency/presence penalty) and system prompts via per-conversation persistence in SQLite.
 
+**Known limitation — reasoning models:** The streaming pipeline only reads `choices[0].delta.content`. Reasoning/thinking models (GLM-4.7, DeepSeek-R1, Qwen-3 Thinking) that emit chain-of-thought in `delta.reasoning_content` or `<think>` tags have their reasoning tokens either dropped or mixed into the visible response. No stop/cancel mechanism exists for in-flight requests. See backlog items #6 and #7.
+
 **Response metadata:** Each assistant message stores the full raw provider response JSON alongside the text. The Response Info sheet shows summary rows (latency, token counts, finish reason, model) and the complete JSON for debugging.
 
 **Empty responses:** When a provider returns 200 with empty content, the chat shows "No response received — the provider may be busy." as a soft error with a "Tap to retry" button (re-sends the same prompt) and a "Dismiss" option.

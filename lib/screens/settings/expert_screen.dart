@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/chain_config.dart';
 import '../../services/bridge.dart';
+import '../../services/platform_caps.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
 import '../../theme.dart';
@@ -55,11 +56,15 @@ class _ExpertScreenState extends State<ExpertScreen> {
   void initState() {
     super.initState();
     _loadRpc();
-    _detectLocalIp();
-    _refreshApiStatus();
-    _loadApiCredentials();
-    _refreshGatewayStatus();
-    _loadApiKeys();
+    if (PlatformCaps.supportsDeveloperApi) {
+      _detectLocalIp();
+      _refreshApiStatus();
+      _loadApiCredentials();
+    }
+    if (PlatformCaps.supportsGateway) {
+      _refreshGatewayStatus();
+      _loadApiKeys();
+    }
   }
 
   @override
@@ -522,7 +527,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
         }
       },
       child: Scaffold(
-        appBar: AppBar(title: const Text('Expert Mode')),
+        appBar: AppBar(
+          title: Text(PlatformCaps.isMobile ? 'Network' : 'Expert Mode'),
+        ),
         body: _rpcLoading
             ? const Center(
                 child: CircularProgressIndicator(color: NeoTheme.green))
@@ -538,30 +545,34 @@ class _ExpertScreenState extends State<ExpertScreen> {
                     ),
                     child: _buildNetworkSection(theme),
                   ),
-                  const SizedBox(height: 12),
-                  SectionCard(
-                    icon: Icons.code_rounded,
-                    title: 'Developer API',
-                    status: StatusPill(
-                      active: _apiRunning,
-                      label: _apiRunning
-                          ? 'Running :${_apiPortCtrl.text}'
-                          : 'Stopped',
+                  if (PlatformCaps.supportsDeveloperApi) ...[
+                    const SizedBox(height: 12),
+                    SectionCard(
+                      icon: Icons.code_rounded,
+                      title: 'Developer API',
+                      status: StatusPill(
+                        active: _apiRunning,
+                        label: _apiRunning
+                            ? 'Running :${_apiPortCtrl.text}'
+                            : 'Stopped',
+                      ),
+                      child: _buildApiSection(theme),
                     ),
-                    child: _buildApiSection(theme),
-                  ),
-                  const SizedBox(height: 12),
-                  SectionCard(
-                    icon: Icons.smart_toy_outlined,
-                    title: 'AI Gateway',
-                    status: StatusPill(
-                      active: _gwRunning,
-                      label: _gwRunning
-                          ? 'Running :${_gwPortCtrl.text}'
-                          : 'Stopped',
+                  ],
+                  if (PlatformCaps.supportsGateway) ...[
+                    const SizedBox(height: 12),
+                    SectionCard(
+                      icon: Icons.smart_toy_outlined,
+                      title: 'AI Gateway',
+                      status: StatusPill(
+                        active: _gwRunning,
+                        label: _gwRunning
+                            ? 'Running :${_gwPortCtrl.text}'
+                            : 'Stopped',
+                      ),
+                      child: _buildGatewaySection(theme),
                     ),
-                    child: _buildGatewaySection(theme),
-                  ),
+                  ],
                 ],
               ),
       ),
