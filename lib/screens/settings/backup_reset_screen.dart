@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../services/bridge.dart';
+import '../../services/platform_caps.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
 import '../wallet/wallet_security_actions.dart';
@@ -56,25 +58,40 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
       return;
     }
 
-    final dir = Platform.isMacOS || Platform.isLinux || Platform.isWindows
-        ? await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory()
-        : await getApplicationDocumentsDirectory();
     final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
-
-    final outputPath = await FilePicker.saveFile(
-      dialogTitle: 'Save backup',
-      fileName: 'nodeneo-backup-$ts.nnbak',
-      initialDirectory: dir.path,
-    );
-    if (outputPath == null) return;
+    final fileName = 'nodeneo-backup-$ts.nnbak';
 
     setState(() => _exporting = true);
     try {
       final info = await PackageInfo.fromPlatform();
-      GoBridge().exportBackup(outputPath, passphrase, info.version, _walletPrefix());
+
+      if (PlatformCaps.isMobile) {
+        // iOS/Android: export to temp file, read bytes, pass to save dialog.
+        final tmpDir = await getTemporaryDirectory();
+        final tmpPath = '${tmpDir.path}/$fileName';
+        GoBridge().exportBackup(tmpPath, passphrase, info.version, _walletPrefix());
+        final bytes = await File(tmpPath).readAsBytes();
+        final outputPath = await FilePicker.saveFile(
+          dialogTitle: 'Save backup',
+          fileName: fileName,
+          bytes: Uint8List.fromList(bytes),
+        );
+        await File(tmpPath).delete().catchError((_) => File(tmpPath));
+        if (outputPath == null) return;
+      } else {
+        final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+        final outputPath = await FilePicker.saveFile(
+          dialogTitle: 'Save backup',
+          fileName: fileName,
+          initialDirectory: dir.path,
+        );
+        if (outputPath == null) return;
+        GoBridge().exportBackup(outputPath, passphrase, info.version, _walletPrefix());
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Backup saved to ${outputPath.split('/').last}')),
+          SnackBar(content: Text('Backup saved to $fileName')),
         );
       }
     } on GoBridgeException catch (e) {

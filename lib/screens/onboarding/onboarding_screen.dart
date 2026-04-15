@@ -424,9 +424,9 @@ class _KeyBackupScreenState extends State<_KeyBackupScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const SizedBox(height: 48),
-                  const NeoLogo(size: 120),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
+                  const NeoLogo(size: 80),
+                  const SizedBox(height: 12),
                   Icon(
                     Icons.check_circle_outline_rounded,
                     size: 40,
@@ -532,7 +532,7 @@ class _KeyBackupScreenState extends State<_KeyBackupScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 20),
 
                   SizedBox(
                     width: double.infinity,
