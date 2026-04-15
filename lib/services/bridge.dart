@@ -134,6 +134,14 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('ExpertAPIStatus');
 
+  late final _getExpertAPICredentials = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('GetExpertAPICredentials');
+
+  late final _resetExpertAPIPassword = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ResetExpertAPIPassword');
+
   late final _createWallet = _lib.lookupFunction<
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('CreateWallet');
@@ -591,6 +599,26 @@ class GoBridge {
     final result = ptr.toDartString();
     _freeString(ptr);
     return jsonDecode(result) as Map<String, dynamic>;
+  }
+
+  /// Returns {"username": "admin", "password": "..."} for the Expert API.
+  Map<String, dynamic> getExpertAPICredentials() {
+    final ptr = _getExpertAPICredentials();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Generates a new random password, stores it, and returns {"username", "password"}.
+  Map<String, dynamic> resetExpertAPIPassword() {
+    final ptr = _resetExpertAPIPassword();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
   }
 
   Map<String, dynamic> importWalletMnemonic(String mnemonic) {

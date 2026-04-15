@@ -51,8 +51,9 @@ Under the hood it embeds the **proxy-router mobile SDK** directly via Go FFI. Th
 - **MOR Balance Scanner** — Read-only on-chain scan showing MOR across wallet, active sessions, and on-hold timelock; recover claimable tokens with one tap
 - **Encryption** — Chat messages, titles, system prompts, and metadata encrypted at rest (AES-256-GCM, wallet-derived key)
 - **Wallet-scoped data** — Each wallet gets its own encrypted database; re-importing a wallet restores conversations
-- **Backup & restore** — Export/import encrypted backups (.nnbak) for conversations and settings
+- **Backup & restore** — Export/import encrypted backups (.nnbak) for conversations, settings, and preferences
 - **AI Gateway** — Local OpenAI-compatible HTTP server for external tools (Cursor, LangChain, Claude Desktop)
+- **Developer API** — Embedded Swagger with auto-generated HTTP Basic Auth credentials; selective route registration for safe embedded operation
 - **MCP Server** — Stdio bridge so Cursor / Claude Desktop can chat through Morpheus without leaving the IDE
 
 ## Architecture

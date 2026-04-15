@@ -2,20 +2,21 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-/// Default on-chain session length for new chats (seconds). Persisted locally.
+import 'bridge.dart';
+
+/// Default on-chain session length for new chats (seconds).
+/// Stored in SQLite preferences (backed up with conversations).
 class SessionDurationStore {
   SessionDurationStore._();
   static final SessionDurationStore instance = SessionDurationStore._();
 
-  static const _fileName = 'default_session_duration_seconds.txt';
+  static const _prefKey = 'session_duration_seconds';
+  static const _legacyFileName = 'default_session_duration_seconds.txt';
 
   static const int defaultSeconds = 3600;
-  /// On-chain sessions use stake math; very short requests can revert with SessionTooShort()
-  /// even when the contract’s nominal min is 5m — 10m+ is a safer floor for the UI.
   static const int minSeconds = 600;
   static const int maxSeconds = 86400;
 
-  /// Presets shown in UI (label, seconds).
   static const List<(String label, int seconds)> presets = <(String, int)>[
     ('10 minutes', 600),
     ('15 minutes', 900),
@@ -27,16 +28,10 @@ class SessionDurationStore {
     ('24 hours', 86400),
   ];
 
-  Future<File> _file() async {
-    final d = await getApplicationSupportDirectory();
-    final dir = Directory('${d.path}${Platform.pathSeparator}nodeneo');
-    await dir.create(recursive: true);
-    return File('${dir.path}${Platform.pathSeparator}$_fileName');
-  }
+  bool _migrated = false;
 
   static int clampSeconds(int s) => s.clamp(minSeconds, maxSeconds).toInt();
 
-  /// If stored value is not a preset, snap to nearest preset so dropdowns stay consistent.
   static int snapToNearestPreset(int s) {
     s = clampSeconds(s);
     var best = defaultSeconds;
@@ -52,17 +47,39 @@ class SessionDurationStore {
   }
 
   Future<int> readSeconds() async {
-    final f = await _file();
-    if (!await f.exists()) return defaultSeconds;
-    final v = int.tryParse((await f.readAsString()).trim());
-    if (v == null) return defaultSeconds;
-    return snapToNearestPreset(v);
+    try {
+      await _migrateFromFileIfNeeded();
+      final raw = GoBridge().getPreference(_prefKey);
+      if (raw.isEmpty) return defaultSeconds;
+      final v = int.tryParse(raw);
+      if (v == null) return defaultSeconds;
+      return snapToNearestPreset(v);
+    } catch (_) {
+      return defaultSeconds;
+    }
   }
 
   Future<void> writeSeconds(int seconds) async {
     final s = snapToNearestPreset(seconds);
-    final f = await _file();
-    await f.writeAsString('$s', flush: true);
+    try {
+      GoBridge().setPreference(_prefKey, '$s');
+    } catch (_) {}
+  }
+
+  Future<void> _migrateFromFileIfNeeded() async {
+    if (_migrated) return;
+    _migrated = true;
+    try {
+      final d = await getApplicationSupportDirectory();
+      final f = File('${d.path}${Platform.pathSeparator}nodeneo${Platform.pathSeparator}$_legacyFileName');
+      if (!await f.exists()) return;
+      final raw = (await f.readAsString()).trim();
+      final existing = GoBridge().getPreference(_prefKey);
+      if (existing.isEmpty && raw.isNotEmpty) {
+        GoBridge().setPreference(_prefKey, raw);
+      }
+      await f.delete();
+    } catch (_) {}
   }
 
   static String formatDurationLabel(int seconds) {
