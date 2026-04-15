@@ -420,11 +420,11 @@ func sendTransaction(key *ecdsa.PrivateKey, to common.Address, data []byte) (str
 		return "", fmt.Errorf("sign tx: %w", err)
 	}
 
-	var buf bytes.Buffer
-	if err := signedTx.EncodeRLP(&buf); err != nil {
+	rawBytes, err := signedTx.MarshalBinary()
+	if err != nil {
 		return "", fmt.Errorf("encode tx: %w", err)
 	}
-	rawHex := "0x" + hex.EncodeToString(buf.Bytes())
+	rawHex := "0x" + hex.EncodeToString(rawBytes)
 
 	txHashHex, err := rpcCall("eth_sendRawTransaction", fmt.Sprintf(`["%s"]`, rawHex))
 	if err != nil {
