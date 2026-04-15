@@ -26,6 +26,22 @@ const (
 	scanTimeout       = 30 * time.Second
 )
 
+// sanitizeRPCURL returns only the hostname from an RPC URL for safe error messages.
+func sanitizeRPCURL(raw string) string {
+	u := strings.TrimSpace(raw)
+	if idx := strings.Index(u, "://"); idx >= 0 {
+		host := u[idx+3:]
+		if slash := strings.Index(host, "/"); slash >= 0 {
+			host = host[:slash]
+		}
+		if qmark := strings.Index(host, "?"); qmark >= 0 {
+			host = host[:qmark]
+		}
+		return host
+	}
+	return "unknown-rpc"
+}
+
 // rpcURLs returns the saved RPC URLs (split on commas) or the default.
 func rpcURLs() []string {
 	src := savedRPC
@@ -64,14 +80,14 @@ func ethCall(to, data string) (string, error) {
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			cancel()
-			lastErr = fmt.Errorf("%s: %w", rpc, err)
+			lastErr = fmt.Errorf("RPC connection failed (%s)", sanitizeRPCURL(rpc))
 			continue
 		}
 		raw, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
 		if err != nil {
-			lastErr = err
+			lastErr = fmt.Errorf("RPC read failed (%s)", sanitizeRPCURL(rpc))
 			continue
 		}
 		var rpcResp struct {
@@ -81,16 +97,16 @@ func ethCall(to, data string) (string, error) {
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(raw, &rpcResp); err != nil {
-			lastErr = fmt.Errorf("bad RPC response from %s: %w", rpc, err)
+			lastErr = fmt.Errorf("bad RPC response (%s)", sanitizeRPCURL(rpc))
 			continue
 		}
 		if rpcResp.Error != nil {
-			lastErr = fmt.Errorf("RPC error from %s: %s", rpc, rpcResp.Error.Message)
+			lastErr = fmt.Errorf("RPC error (%s): %s", sanitizeRPCURL(rpc), rpcResp.Error.Message)
 			continue
 		}
 		return rpcResp.Result, nil
 	}
-	return "", fmt.Errorf("all RPC endpoints failed: %w", lastErr)
+	return "", fmt.Errorf("all RPC endpoints failed: %v", lastErr)
 }
 
 // abiEncodeAddress pads an address to 32 bytes for ABI encoding.
@@ -450,14 +466,14 @@ func rpcCall(method, paramsJSON string) (string, error) {
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			cancel()
-			lastErr = fmt.Errorf("%s: %w", rpc, err)
+			lastErr = fmt.Errorf("RPC connection failed (%s)", sanitizeRPCURL(rpc))
 			continue
 		}
 		raw, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
 		if err != nil {
-			lastErr = err
+			lastErr = fmt.Errorf("RPC read failed (%s)", sanitizeRPCURL(rpc))
 			continue
 		}
 		var rpcResp struct {
@@ -467,11 +483,11 @@ func rpcCall(method, paramsJSON string) (string, error) {
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(raw, &rpcResp); err != nil {
-			lastErr = fmt.Errorf("bad RPC response from %s: %w", rpc, err)
+			lastErr = fmt.Errorf("bad RPC response (%s)", sanitizeRPCURL(rpc))
 			continue
 		}
 		if rpcResp.Error != nil {
-			lastErr = fmt.Errorf("RPC error from %s: %s", rpc, rpcResp.Error.Message)
+			lastErr = fmt.Errorf("RPC error (%s): %s", sanitizeRPCURL(rpc), rpcResp.Error.Message)
 			continue
 		}
 		var s string
@@ -480,7 +496,7 @@ func rpcCall(method, paramsJSON string) (string, error) {
 		}
 		return string(rpcResp.Result), nil
 	}
-	return "", fmt.Errorf("all RPC endpoints failed: %w", lastErr)
+	return "", fmt.Errorf("all RPC endpoints failed: %v", lastErr)
 }
 
 func min(a, b int) int {

@@ -6,27 +6,8 @@ import '../../services/bridge.dart';
 import '../../services/wallet_vault.dart';
 import '../../theme.dart';
 
-/// Export private key — same flow as legacy Wallet screen; callable from ⋮ menu.
+/// Export private key — single dialog with warning + masked key + reveal/copy.
 Future<void> showExportPrivateKeyFlow(BuildContext context) async {
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Export private key?'),
-      content: const Text(
-        'Anyone with this key controls your wallet on every chain. '
-        'Use it to import into MetaMask or another app — never share it or screenshot it in insecure places.',
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: Text('Show key', style: TextStyle(color: NeoTheme.amber)),
-        ),
-      ],
-    ),
-  );
-  if (ok != true || !context.mounted) return;
-
   try {
     final res = GoBridge().exportPrivateKey();
     final pk = res['private_key'] as String? ?? '';
@@ -42,33 +23,26 @@ Future<void> showExportPrivateKeyFlow(BuildContext context) async {
   }
 }
 
-/// Erase local wallet — callable from ⋮ menu. [onWalletErased] typically resets app root.
+/// Erase local wallet — requires private key confirmation before proceeding.
 Future<void> showEraseWalletFlow(
   BuildContext context, {
   Future<void> Function()? onWalletErased,
 }) async {
-  final ok = await showDialog<bool>(
+  final confirmed = await showDialog<bool>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Erase wallet on this device?'),
-      content: Text(
-        'Removes the private key from secure storage. '
-        'Your on-chain funds are unchanged — you must have your '
-        'private key to recover this wallet.\n\n'
-        'Your encrypted conversations will remain on this device. '
-        'If you re-import this wallet later, they\'ll be restored automatically.\n\n'
-        'Network: ${NetworkTokens.networkMainnetLabel}.',
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: Text('Erase', style: TextStyle(color: NeoTheme.red)),
-        ),
-      ],
+    builder: (ctx) => _PrivateKeyConfirmDialog(
+      title: 'Erase wallet on this device?',
+      description:
+          'Removes the private key from secure storage. '
+          'Your on-chain funds are unchanged — you must have your '
+          'private key to recover this wallet.\n\n'
+          'Your encrypted conversations will remain on this device. '
+          'If you re-import this wallet later, they\'ll be restored automatically.\n\n'
+          'Network: ${NetworkTokens.networkMainnetLabel}.',
+      confirmLabel: 'Erase Wallet',
     ),
   );
-  if (ok != true || !context.mounted) return;
+  if (confirmed != true || !context.mounted) return;
 
   await WalletVault.instance.clearMnemonic();
   if (context.mounted) {
@@ -76,6 +50,190 @@ Future<void> showEraseWalletFlow(
   }
   await onWalletErased?.call();
 }
+
+/// Factory reset — requires private key confirmation before proceeding.
+Future<bool?> showFactoryResetFlow(
+  BuildContext context, {
+  Future<void> Function()? onFactoryReset,
+}) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => _PrivateKeyConfirmDialog(
+      title: 'Full Factory Reset?',
+      description:
+          'This will permanently delete:\n\n'
+          '• All wallet private keys\n'
+          '• All conversation history\n'
+          '• All API keys and settings\n'
+          '• All log files\n\n'
+          'On-chain funds are unaffected, but you must have your '
+          'private key to recover any wallet.\n\n'
+          'This action cannot be undone.',
+      confirmLabel: 'Erase Everything',
+    ),
+  );
+  if (confirmed != true || !context.mounted) return false;
+
+  if (context.mounted) {
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+  await onFactoryReset?.call();
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Private key confirmation dialog (shared by erase + factory reset)
+// ---------------------------------------------------------------------------
+
+class _PrivateKeyConfirmDialog extends StatefulWidget {
+  final String title;
+  final String description;
+  final String confirmLabel;
+
+  const _PrivateKeyConfirmDialog({
+    required this.title,
+    required this.description,
+    required this.confirmLabel,
+  });
+
+  @override
+  State<_PrivateKeyConfirmDialog> createState() => _PrivateKeyConfirmDialogState();
+}
+
+class _PrivateKeyConfirmDialogState extends State<_PrivateKeyConfirmDialog> {
+  final _ctrl = TextEditingController();
+  String? _error;
+  bool _verifying = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  String? _validateFormat(String input) {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return null;
+    final hex = trimmed.startsWith('0x') ? trimmed.substring(2) : trimmed;
+    if (hex.length != 64) return 'Private key must be 64 hex characters (with or without 0x prefix)';
+    if (!RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) return 'Invalid hex characters';
+    return null;
+  }
+
+  bool get _inputValid {
+    final trimmed = _ctrl.text.trim();
+    if (trimmed.isEmpty) return false;
+    return _validateFormat(trimmed) == null;
+  }
+
+  Future<void> _confirm() async {
+    final input = _ctrl.text.trim();
+    final formatErr = _validateFormat(input);
+    if (formatErr != null) {
+      setState(() => _error = formatErr);
+      return;
+    }
+
+    setState(() { _verifying = true; _error = null; });
+
+    try {
+      final ok = GoBridge().verifyRecoveryPrivateKey(input);
+      if (!mounted) return;
+      if (ok) {
+        Navigator.of(context).pop(true);
+      } else {
+        setState(() {
+          _error = 'Private key does not match the loaded wallet';
+          _verifying = false;
+        });
+      }
+    } on GoBridgeException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _verifying = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Verification failed: $e';
+        _verifying = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.description, style: const TextStyle(fontSize: 13, height: 1.4)),
+            const SizedBox(height: 16),
+            Text(
+              'Enter your private key to confirm:',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: NeoTheme.amber.withValues(alpha: 0.9),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _ctrl,
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              enableIMEPersonalizedLearning: false,
+              smartDashesType: SmartDashesType.disabled,
+              smartQuotesType: SmartQuotesType.disabled,
+              style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12),
+              decoration: InputDecoration(
+                hintText: '0x...',
+                hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                border: const OutlineInputBorder(),
+                errorText: _error,
+                errorMaxLines: 3,
+              ),
+              onChanged: (_) => setState(() => _error = null),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _inputValid && !_verifying ? _confirm : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: NeoTheme.red,
+            disabledBackgroundColor: NeoTheme.red.withValues(alpha: 0.2),
+          ),
+          child: _verifying
+              ? const SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : Text(
+                  widget.confirmLabel,
+                  style: TextStyle(
+                    color: _inputValid ? Colors.white : const Color(0xFF6B7280),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Masked key display dialog (for export)
+// ---------------------------------------------------------------------------
 
 class _MaskedKeyDialog extends StatefulWidget {
   final String privateKey;
@@ -109,6 +267,12 @@ class _MaskedKeyDialogState extends State<_MaskedKeyDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(
+            'Anyone with this key controls your wallet on every chain. '
+            'Use it to import into MetaMask or another app — never share it or screenshot it in insecure places.',
+            style: TextStyle(fontSize: 12, color: const Color(0xFF9CA3AF), height: 1.4),
+          ),
+          const SizedBox(height: 14),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(14),
