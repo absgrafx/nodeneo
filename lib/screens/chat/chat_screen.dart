@@ -501,6 +501,10 @@ class _ChatScreenState extends State<ChatScreen> {
     return opts;
   }
 
+  void _stopGeneration() {
+    GoBridge().cancelPrompt();
+  }
+
   Future<void> _send() async {
     final text = _input.text.trim();
     final cid = _conversationId;
@@ -569,6 +573,8 @@ class _ChatScreenState extends State<ChatScreen> {
       final bridge = GoBridge();
       if (_preferStreaming) {
         var accumulated = '';
+        var thinkingAccumulated = '';
+        var thinkingStartTime = DateTime.now();
         int streamBubbleIdx = -1;
         if (mounted) {
           setState(() {
@@ -585,15 +591,29 @@ class _ChatScreenState extends State<ChatScreen> {
           text,
           stream: true,
           options: _buildTuningOptions(),
-          onDelta: (delta, isLast) {
-            accumulated += delta;
+          onDelta: (delta, isThinking, isLast) {
+            if (isThinking) {
+              if (thinkingAccumulated.isEmpty) {
+                thinkingStartTime = DateTime.now();
+              }
+              thinkingAccumulated += delta;
+            } else {
+              accumulated += delta;
+            }
             if (!mounted || streamBubbleIdx < 0) return;
             final now = DateTime.now();
             if (isLast || now.difference(lastUiUpdate) >= uiThrottle) {
               lastUiUpdate = now;
               setState(() {
-                _messages[streamBubbleIdx] =
-                    _ChatBubble(role: 'assistant', text: accumulated);
+                _messages[streamBubbleIdx] = _ChatBubble(
+                  role: 'assistant',
+                  text: accumulated,
+                  thinkingText: thinkingAccumulated.isNotEmpty ? thinkingAccumulated : null,
+                  thinkingDuration: thinkingAccumulated.isNotEmpty
+                      ? DateTime.now().difference(thinkingStartTime)
+                      : null,
+                  isThinkingLive: isThinking && !isLast,
+                );
               });
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (_scroll.hasClients) {
@@ -604,11 +624,12 @@ class _ChatScreenState extends State<ChatScreen> {
           },
         );
         final reply = res['response'] as String? ?? accumulated;
+        final wasCancelled = res['cancelled'] == true;
         final meta = _extractMetadata(res);
         if (!mounted) return;
         setState(() {
           if (streamBubbleIdx >= 0 && streamBubbleIdx < _messages.length) {
-            if (reply.isEmpty) {
+            if (reply.isEmpty && !wasCancelled) {
               _messages[streamBubbleIdx] = _ChatBubble(
                 role: 'assistant',
                 text: 'No response received — the provider may be busy.',
@@ -623,6 +644,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 role: 'assistant',
                 text: reply,
                 metadata: meta,
+                isStopped: wasCancelled,
+                thinkingText: thinkingAccumulated.isNotEmpty ? thinkingAccumulated : null,
+                thinkingDuration: thinkingAccumulated.isNotEmpty
+                    ? DateTime.now().difference(thinkingStartTime)
+                    : null,
               );
             }
           }
@@ -635,7 +661,7 @@ class _ChatScreenState extends State<ChatScreen> {
           text,
           stream: false,
           options: _buildTuningOptions(),
-          onDelta: (_, __) {},
+          onDelta: (_, __, ___) {},
         );
         final reply = res['response'] as String? ?? '';
         final meta = _extractMetadata(res);
@@ -1497,12 +1523,30 @@ class _ChatScreenState extends State<ChatScreen> {
                                   ),
                                 ],
                               ),
+                            if (b.thinkingText != null && b.thinkingText!.isNotEmpty)
+                              _ThinkingZone(
+                                text: b.thinkingText!,
+                                duration: b.thinkingDuration,
+                                isLive: b.isThinkingLive,
+                              ),
                             buildChatMessageBody(
                               theme,
                               role: b.role,
                               text: b.text,
                               isError: b.isError,
                             ),
+                            if (b.isStopped)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Text(
+                                  '⏹ Generation stopped',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontStyle: FontStyle.italic,
+                                    color: NeoTheme.amber.withValues(alpha: 0.7),
+                                  ),
+                                ),
+                              ),
                             if (b.isError && b.onReconnect != null) ...[
                               const SizedBox(height: 10),
                               Row(
@@ -1598,15 +1642,23 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          IconButton.filled(
-                            onPressed: _sending ? null : _send,
-                            style: IconButton.styleFrom(
-                              backgroundColor: NeoTheme.green,
-                              foregroundColor: Colors.white,
-                              disabledBackgroundColor: const Color(0xFF374151),
-                            ),
-                            icon: const Icon(Icons.send_rounded, size: 22),
-                          ),
+                          _sending
+                              ? IconButton.filled(
+                                  onPressed: _stopGeneration,
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: NeoTheme.amber,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.stop_rounded, size: 22),
+                                )
+                              : IconButton.filled(
+                                  onPressed: _send,
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: NeoTheme.green,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.send_rounded, size: 22),
+                                ),
                         ],
                       ),
                     ],
@@ -1956,11 +2008,26 @@ class _ChatBubble {
   final String role;
   final String text;
   final bool isError;
+  final bool isStopped;
+  final String? thinkingText;
+  final Duration? thinkingDuration;
+  final bool isThinkingLive;
   final Future<void> Function()? onReconnect;
   final Future<void> Function()? onRetry;
   final Map<String, dynamic>? metadata;
 
-  _ChatBubble({required this.role, required this.text, this.isError = false, this.onReconnect, this.onRetry, this.metadata});
+  _ChatBubble({
+    required this.role,
+    required this.text,
+    this.isError = false,
+    this.isStopped = false,
+    this.thinkingText,
+    this.thinkingDuration,
+    this.isThinkingLive = false,
+    this.onReconnect,
+    this.onRetry,
+    this.metadata,
+  });
 }
 
 class _MetadataRow extends StatelessWidget {
@@ -2063,6 +2130,103 @@ class _TuningSlider extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ThinkingZone extends StatefulWidget {
+  final String text;
+  final Duration? duration;
+  final bool isLive;
+
+  const _ThinkingZone({
+    required this.text,
+    this.duration,
+    this.isLive = false,
+  });
+
+  @override
+  State<_ThinkingZone> createState() => _ThinkingZoneState();
+}
+
+class _ThinkingZoneState extends State<_ThinkingZone> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final durationLabel = widget.duration != null
+        ? '${widget.duration!.inSeconds}s'
+        : '';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Row(
+              children: [
+                if (widget.isLive)
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: Color(0xFF8B5CF6),
+                    ),
+                  )
+                else
+                  const Icon(Icons.psychology_rounded, size: 14, color: Color(0xFF8B5CF6)),
+                const SizedBox(width: 6),
+                Text(
+                  widget.isLive
+                      ? 'Thinking…'
+                      : 'Thought for $durationLabel',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF8B5CF6),
+                  ),
+                ),
+                if (!widget.isLive) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 14,
+                    color: const Color(0xFF6B7280),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (widget.isLive || _expanded)
+            Container(
+              margin: const EdgeInsets.only(top: 6),
+              constraints: BoxConstraints(
+                maxHeight: widget.isLive ? 80 : 300,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1B2E),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF8B5CF6).withValues(alpha: 0.2)),
+              ),
+              child: SingleChildScrollView(
+                reverse: widget.isLive,
+                padding: const EdgeInsets.all(10),
+                child: SelectableText(
+                  widget.text,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontStyle: FontStyle.italic,
+                    color: const Color(0xFF9CA3AF).withValues(alpha: 0.7),
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
