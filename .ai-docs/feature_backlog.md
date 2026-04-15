@@ -100,7 +100,7 @@ When multimodal/generative models become available on the Morpheus network, the 
 | # | Platform | Status | Notes |
 |---|----------|--------|-------|
 | 1 | **macOS** (desktop) | Done — refining | Signed, notarized, DMG distribution via GitHub Releases |
-| 2 | **iOS — iPhone** | **In progress** | Running on device + simulator. PlatformCaps gating, pull-to-refresh, safe area fixes done. Needs UI polish pass + TestFlight. |
+| 2 | **iOS — iPhone** | **In progress** | Running on device + simulator. PlatformCaps gating, pull-to-refresh, collapsible wallet, compact privacy toggle, safe area fixes done. Needs TestFlight + App Store submission. |
 | 3 | **iOS — iPad** | Planned | Adaptive layout (split-view chat + sidebar). Leverage iPad multitasking APIs. |
 | 4 | **App Store publishing** | Planned | First-time submission. Requires App Store Connect setup, review guidelines compliance, privacy nutrition labels, and in-app purchase considerations (if any). |
 | 5 | **Linux** | Planned | Flutter Linux desktop runner. CI cross-compile for x86_64 (AppImage or .deb). Go CGO cross-compile or pre-built .so. |
@@ -289,20 +289,9 @@ There is no way to stop a response once it starts generating. The send button (`
 
 ---
 
-### 8. Collapsible Wallet Card on Home Screen
+### 8. ~~Collapsible Wallet Card on Home Screen~~ DONE
 
-**Priority:** Medium (mobile UX)
-
-#### Problem
-The wallet card on the home screen (address, CONNECTED badge, MOR balance, ETH balance, helper text) takes significant vertical space — especially on smaller iPhones where it pushes the model list below the fold. On desktop, the extra space is fine; on mobile, every pixel counts.
-
-#### Requirements
-- Make the wallet card collapsible (like the SectionCard accordion pattern used in Settings/Wallet screens)
-- **Collapsed state**: single row showing abbreviated address + MOR and ETH balances inline (e.g. `0xFe70…2Ce9 · 105.6 MOR · 0.011 ETH`)
-- **Expanded state**: current full layout with address, CONNECTED badge, balance cards with tap-to-send, helper text
-- Persist collapse state across sessions (SharedPreferences or similar)
-- Default: collapsed on mobile, expanded on desktop
-- Tap the card header or a chevron to toggle
+Collapsed by default on all platforms. Compact inline row with address + MOR/ETH balances. Privacy toggle slimmed to single row with TEE explainer link.
 
 ---
 
@@ -326,7 +315,7 @@ The lock screen shows a password field and an "Use biometrics" button. On iOS wi
 
 ---
 
-### 10. Bug: MOR Scanner Doesn't Reflect Active Session Stakes
+### 10. ~~Bug: MOR Scanner Doesn't Reflect Active Session Stakes~~ FIXED
 
 **Priority:** Medium (accounting accuracy)
 
@@ -365,4 +354,4 @@ Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Andr
 
 ---
 
-*Last updated: 2026-04-15*
+*Last updated: 2026-04-16*
