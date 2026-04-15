@@ -118,14 +118,14 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
         'blockscoutURL': defaultBlockscoutApiV2,
       };
 
-      final result = await compute(_initBridgeSync, initParams).timeout(
-        const Duration(seconds: 45),
-        onTimeout: () => <String, dynamic>{'error': 'SDK init timed out after 45 s — check network/RPC.'},
-      );
+      // No Dart-side timeout — let Go's NewSDK() finish naturally.
+      // The "Connecting to network..." spinner stays visible. If the RPC is
+      // slow (public endpoints can take 60-120s), the SDK still succeeds.
+      // If Go hits a real error, it returns it; we show the error screen then.
+      final result = await compute(_initBridgeSync, initParams);
 
       AppLogger.info('init result: $result');
 
-      // Sync the main-isolate bridge's initialized flag with the background result.
       final bridge = GoBridge();
       final st = result['status'] as String?;
       bridge.initialized = st == 'ok' || st == 'already_initialized';
@@ -133,18 +133,29 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
       if (bridge.initialized) {
         var restored = false;
         try {
+          String? walletSecret;
+          String? walletAddress;
           final saved = await WalletVault.instance.readMnemonic();
           if (saved != null && saved.trim().isNotEmpty) {
-            bridge.importWalletMnemonic(saved.trim());
-            // Derive encryption key from mnemonic for chat DB content encryption.
-            final keyBytes = sha256.convert(utf8.encode(saved.trim())).bytes;
-            final keyHex = keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-            try {
-              bridge.setEncryptionKey(keyHex);
-            } catch (e) {
-              AppLogger.warn('setEncryptionKey failed (non-fatal): $e');
-            }
+            final result = bridge.importWalletMnemonic(saved.trim());
+            walletAddress = result['address'] as String?;
+            walletSecret = saved.trim();
             restored = true;
+          } else {
+            final pk = await WalletVault.instance.readPrivateKey();
+            if (pk != null && pk.trim().isNotEmpty) {
+              final result = bridge.importWalletPrivateKey(pk.trim());
+              walletAddress = result['address'] as String?;
+              walletSecret = pk.trim();
+              restored = true;
+            }
+          }
+          if (walletAddress != null && walletAddress.isNotEmpty) {
+            final fp = _walletFingerprint(walletAddress);
+            bridge.openWalletDatabase(fp);
+          }
+          if (walletSecret != null) {
+            _activateDbEncryption(bridge, walletSecret);
           }
         } on GoBridgeException catch (_) {
           await WalletVault.instance.clearMnemonic();
@@ -166,13 +177,31 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
     }
   }
 
+  /// First 8 hex chars of the address (lowercase, no 0x prefix).
+  static String _walletFingerprint(String address) {
+    var addr = address.toLowerCase().trim();
+    if (addr.startsWith('0x')) addr = addr.substring(2);
+    return addr.length >= 8 ? addr.substring(0, 8) : addr;
+  }
+
+  static void _activateDbEncryption(GoBridge bridge, String secret) {
+    try {
+      final keyBytes = sha256.convert(utf8.encode(secret.trim())).bytes;
+      final keyHex =
+          keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      bridge.setEncryptionKey(keyHex);
+    } catch (e) {
+      AppLogger.warn('setEncryptionKey failed (non-fatal): $e');
+    }
+  }
+
   void _onWalletCreated() {
     setState(() => _hasWallet = true);
   }
 
   /// After RPC settings change: tear down Go, re-init with new URL, restore wallet from vault.
   Future<void> _restartSdkAfterRpcChange() async {
-    GoBridge().shutdown();
+    await _safeShutdown();
     if (!mounted) return;
     setState(() {
       _sdkReady = false;
@@ -181,12 +210,11 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
     await _initSDK();
   }
 
-  /// Clears Go SDK + local DB + app lock after [WalletVault] was cleared; returns to onboarding path.
+  /// Clears Go SDK + app lock after [WalletVault] was cleared; returns to onboarding.
+  /// The encrypted DB is intentionally kept — if the user re-imports the same
+  /// wallet later, conversations auto-reconnect via the fingerprinted DB name.
   Future<void> _handleWalletErased() async {
-    GoBridge().shutdown();
-    final dir = await getApplicationSupportDirectory();
-    final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
-    await AppLocalReset.wipeLocalDatabaseFiles(dataDir);
+    await _safeShutdown();
     await AppLockService.instance.clearLockCredentialsOnly();
     if (!mounted) return;
     setState(() {
@@ -196,11 +224,26 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
     await _initSDK();
   }
 
-  /// Factory reset: wallet, lock, SQLite, RPC override — re-init SDK → onboarding.
+  /// Shutdown with a timeout — avoids UI freeze if Go mutex is held by a slow Init.
+  static Future<void> _safeShutdown() async {
+    try {
+      await compute((_) { GoBridge().shutdown(); return true; }, null).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          AppLogger.warn('Shutdown timed out (Go mutex likely held by slow Init)');
+          return false;
+        },
+      );
+    } catch (e) {
+      AppLogger.warn('Shutdown error (non-fatal): $e');
+    }
+  }
+
+  /// Factory reset: ALL wallets, keys, DBs, logs, settings — nuclear option.
   Future<void> _fullFactoryReset() async {
     await WalletVault.instance.clearMnemonic();
     await AppLockService.instance.clearLockCredentialsOnly();
-    GoBridge().shutdown();
+    await _safeShutdown();
     final dir = await getApplicationSupportDirectory();
     final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
     await AppLocalReset.wipeFactoryLocalFiles(dataDir);
@@ -268,6 +311,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
       child: HomeScreen(
         onWalletErased: _handleWalletErased,
         onRpcChanged: _restartSdkAfterRpcChange,
+        onFactoryReset: _fullFactoryReset,
       ),
     );
   }

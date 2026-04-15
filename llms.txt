@@ -1,0 +1,353 @@
+# Node Neo
+
+> A consumer-grade, mobile-first client for the Morpheus decentralized AI network.
+> Wallet, MOR staking, model selection, and private chat — no Docker, no IPFS, no Swagger.
+> Published by [absgrafx](https://github.com/absgrafx). Protocol: [MorpheusAIs](https://github.com/MorpheusAIs).
+
+## Overview
+
+Node Neo is **the Signal of decentralized AI** — a consumer-grade app that makes the Morpheus network accessible to everyone. Users install the app, create a wallet, stake MOR on Base mainnet, pick an AI model, and chat — all without running any external infrastructure.
+
+**Audience:** The general public. People who want private AI inference but have no interest in running nodes, managing Docker, or reading Swagger docs. Node Neo is not for infrastructure operators (see [mor.org](https://mor.org)), API developers (see [api.mor.org](https://api.mor.org)), or protocol researchers (see [MorpheusAIs](https://github.com/MorpheusAIs)). It is the consumer endpoint — the last mile between the Morpheus network and a human who just wants to chat privately.
+
+The app also doubles as a local OpenAI-compatible API gateway with an MCP (Model Context Protocol) server, so external tools like Cursor or Claude Desktop can route prompts through the Morpheus network.
+
+- Bundle ID: `com.absgrafx.nodeneo`
+- License: MIT
+- Primary platform: macOS arm64 (iOS, Android planned)
+
+## Getting Started
+
+- [Releases](https://github.com/absgrafx/nodeneo/releases/latest): Download signed macOS builds
+- [README](https://github.com/absgrafx/nodeneo#readme): Install and build-from-source instructions
+- [Makefile](https://github.com/absgrafx/nodeneo/blob/main/Makefile): All build targets (go-macos, run-macos, dev-macos, brand-assets, etc.)
+
+## First-Time Setup & Usage
+
+### 1. Launch and create a wallet
+
+On first launch, Node Neo presents an onboarding screen with two options:
+
+- **Create Wallet** — Generates a new wallet internally. The private key is displayed masked (first 4 + last 4 chars visible, rest hidden with bullets) with Reveal and Copy buttons — treated like a password. The private key is stored in the platform's secure enclave (macOS Keychain, iOS Keychain, Android Keystore). No mnemonic is shown to the user.
+- **Import Wallet** — Users can import an existing wallet via:
+  - A raw private key (hex, with or without `0x` prefix) — **default option**
+  - A 12-word BIP-39 recovery phrase — for users migrating from other wallets
+
+Key derivation (for recovery phrase imports) follows the same HD path as the upstream proxy-router: `m/44'/60'/0'/0/0`.
+
+### 2. Fund the wallet
+
+Node Neo operates on **Base mainnet**. The wallet needs:
+
+- **MOR tokens** — Required to open sessions (stake) with AI providers. A typical session stakes ~5 MOR.
+- **ETH on Base** — Required for gas fees. A small amount (~0.001 ETH) is sufficient for many sessions.
+
+To receive funds, tap the wallet address on the home screen to copy it. Send MOR and ETH (on the Base network) to that address from any external wallet (MetaMask, Rabby, Coinbase, etc.) or bridge.
+
+### 3. Pick a model and chat
+
+The home screen lists active Morpheus models fetched from `https://active.mor.org/active_models.json` (5-min cache with hash invalidation, blockchain Multicall fallback). Models can be filtered by **MAX Privacy** (TEE-only) toggle.
+
+Tap a model to start a conversation. Node Neo automatically:
+- Opens an on-chain session (staking MOR with the provider)
+- Starts a chat thread in the local SQLite database
+- Routes prompts to the provider via MOR-RPC through the embedded SDK
+
+### 4. Send funds out
+
+From the home screen wallet section, tap **Send MOR** or **Send ETH** to transfer tokens to any Base address. The app shows a preview of the amount in both token units and wei before confirming.
+
+### 5. Wallet & sessions
+
+Settings → Wallet shows on-chain state:
+
+**Key Management:** Export Private Key (masked with Reveal/Copy buttons).
+
+**Where's My MOR:** Read-only on-chain scan showing MOR across three buckets — in wallet (spendable), active in Inference Contract (staked in open sessions), and on hold (early-close timelock). "Recover claimable MOR" button to withdraw past-timelock tokens. Links to [session staking explainer](https://tech.mor.org/session.html).
+
+**Active Sessions:** Lists unclosed on-chain sessions; close individually or all at once. Auto-close runs every 15 minutes.
+
+### 6. Backup & Reset
+
+Settings → Backup & Reset manages app data lifecycle:
+
+**Data Backup:** Export/import encrypted `.nnbak` files (AES-256-GCM, wallet-derived key).
+
+**Danger Zone:**
+- **Erase Wallet** — Removes the private key from secure storage. Encrypted DB kept for potential re-import.
+- **Full Factory Reset** — Erases ALL wallet keys, databases, logs, settings, and preferences.
+
+## Chat Features
+
+- **System prompts** — Set a default persona for all new chats (Settings → Preferences → System Prompt), or override per-conversation from the Chat Tuning panel. Prepended as an OpenAI `system` message. Encrypted at rest.
+- **Streaming replies** — On by default. Provider deltas update the chat bubble in real time (~30fps UI throttle).
+- **Per-conversation tuning** — Temperature, top_p, max_tokens, frequency penalty, presence penalty, and system prompt. Persisted in SQLite per conversation.
+- **Response metadata** — Each assistant message stores the full raw provider response JSON. A Response Info sheet shows latency, token counts, finish reason, model, and the complete JSON.
+- **Session reuse** — Active sessions are reused across conversations with the same model. Sessions have a configurable duration (default 10 minutes).
+- **On-chain sessions** — Settings → Wallet lists all unclosed on-chain sessions for the wallet with the ability to close them individually or all at once (reclaiming stake). Auto-close runs every 15 minutes in the background.
+- **MOR balance scanner** — Settings → Wallet → "Where's My MOR" performs read-only on-chain lookups showing MOR across three buckets (wallet, active sessions, on-hold timelock). Includes a "Recover claimable MOR" action to withdraw tokens past the timelock period via `withdrawUserStakes`.
+
+## API Gateway
+
+Node Neo includes a local **OpenAI-compatible HTTP API gateway** for external tools.
+
+### Enabling the gateway
+
+1. Open Node Neo
+2. Go to **Settings → Expert Mode → AI Gateway** section
+3. Choose scope: **Local only** (127.0.0.1) or **Network** (0.0.0.0 — exposes to LAN)
+4. Set the port (default: **8083**)
+5. Tap **Start Gateway**
+
+The gateway stays running while the app is open. It uses the same embedded SDK, wallet, and SQLite store as the UI — conversations created via the API appear in the app (marked with a robot icon, `source: "api"`).
+
+### Gateway endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | OpenAI-compatible chat (streaming + non-streaming) |
+| `/v1/models` | GET | List available Morpheus models (5-min cache, ETag support) |
+| `/health` | GET | Health check (unauthenticated) |
+
+### Generating API keys
+
+1. In the **AI Gateway** section of Expert Mode, scroll to **API Keys**
+2. Tap **Generate Key** → optionally name it (e.g. "Cursor", "LangChain")
+3. The full `sk-...` key is shown **once** — copy it immediately
+4. Keys are stored as bcrypt hashes in the local SQLite database
+5. To revoke, tap the delete icon next to any key
+
+Authentication: Include the key as `Authorization: Bearer sk-...` in requests.
+
+## MCP Server (Model Context Protocol)
+
+The MCP server lets AI agents (Cursor, Claude Desktop) send prompts through Morpheus without leaving the IDE. All traffic stays on localhost.
+
+### Setup
+
+**Prerequisites:** The API Gateway must be running (see above), and you need a generated API key.
+
+1. Build the MCP server:
+
+```
+cd mcp-server
+npm install && npm run build
+```
+
+2. Copy the example config:
+
+```
+cp .cursor/mcp.json.example .cursor/mcp.json
+```
+
+3. Edit `.cursor/mcp.json` — set the path and your API key:
+
+```json
+{
+  "mcpServers": {
+    "nodeneo-morpheus": {
+      "command": "node",
+      "args": ["<path-to-repo>/mcp-server/dist/index.js"],
+      "env": {
+        "NODENEO_GATEWAY_URL": "http://127.0.0.1:8083",
+        "NODENEO_API_KEY": "sk-your-key-here"
+      }
+    }
+  }
+}
+```
+
+For **Claude Desktop**, add the same `nodeneo-morpheus` entry to `~/Library/Application Support/Claude/claude_desktop_config.json` under `mcpServers`.
+
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `morpheus_models` | List available models on the Morpheus network. Returns model names, types, and tags. |
+| `morpheus_chat` | Send a chat prompt to a Morpheus model. Supports multi-turn via the messages array (OpenAI format). |
+
+### Data flow
+
+```
+AI Agent (Cursor/Claude) ←stdio→ MCP Server ←HTTP localhost→ Gateway ←SDK→ Morpheus Network
+```
+
+**Why MCP instead of OpenAI base URL override?** Cursor proxies "Override OpenAI Base URL" requests through their own servers, which blocks localhost via SSRF protection. MCP servers run as local stdio processes — prompts never leave the machine.
+
+## Developer API (Expert Mode)
+
+In addition to the AI Gateway, Node Neo can run the **full proxy-router HTTP server** with Swagger documentation and all REST endpoints. This is primarily for developers and debugging.
+
+### Enabling the Developer API
+
+1. Settings → Expert Mode → Developer API section
+2. Choose scope: Local only or Network
+3. Set the port (default: **8082**)
+4. Tap **Start API Server**
+
+Swagger docs are available at `http://<host>:<port>/swagger/index.html`.
+
+## Blockchain Connection (RPC Configuration)
+
+Node Neo needs an RPC endpoint to interact with the Base blockchain (opening sessions, checking balances, signing transactions). A default is provided. Optionally:
+
+- Settings → Expert Mode → Blockchain Connection section
+- Enter a custom RPC URL (or comma-separated list)
+- Test endpoints against Base chainId before saving
+- Clear to revert to defaults
+
+A bundled dedicated RPC may also be available depending on the build.
+
+Custom RPC override is stored at `<dataDir>/eth_rpc_override.txt`.
+
+## Database Encryption
+
+Node Neo encrypts chat message content and metadata at rest using AES-256-GCM:
+
+- On wallet creation or import, the private key (or mnemonic for legacy imports) is SHA-256 hashed to derive a 32-byte encryption key.
+- The key is passed to the Go store via `SetEncryptionKey`.
+- **Encrypted columns**: message `content`, message `metadata` (provider response JSON), conversation `title`, conversation `system_prompt` — all stored as `enc:v1:<base64(nonce+ciphertext)>`.
+- Legacy plaintext (from before encryption was enabled) is returned as-is (transparent migration).
+- If the encryption key is unavailable (e.g. wrong wallet), encrypted data cannot be read.
+
+### Wallet-scoped databases
+
+Each wallet gets its own SQLite database: `nodeneo_<fingerprint>.db` where `<fingerprint>` is the first 8 hex chars of the wallet address (lowercase, no 0x). On first use, if a legacy `nodeneo.db` exists, it is automatically renamed to the scoped path. Multiple wallets can coexist on the same device.
+
+### Backup / Restore
+
+- **Export**: Bundles all conversations, messages, and preferences into a JSON zip encrypted with AES-256-GCM. Key derived from SHA-256 of the wallet's private key. File format: `.nnbak`.
+- **Import**: Decrypts, validates manifest version, and destructively replaces all data in the current wallet's DB. The user must have the same wallet to decrypt.
+
+## Local File Locations
+
+All local data lives under the platform's Application Support directory:
+
+### macOS
+
+```
+~/Library/Application Support/com.absgrafx.nodeneo/nodeneo/
+```
+
+### File layout
+
+| Path | Description |
+|------|-------------|
+| `nodeneo_<fingerprint>.db` | Wallet-scoped SQLite database (conversations, messages, preferences, API keys) |
+| `nodeneo_<fingerprint>.db-wal` | SQLite WAL journal |
+| `nodeneo_<fingerprint>.db-shm` | SQLite shared memory |
+| `eth_rpc_override.txt` | Custom RPC URL override (if set) |
+| `chat_streaming_preference.txt` | Streaming on/off preference |
+| `session_duration_preference.txt` | Session duration preference |
+| `default_tuning.json` | Default chat tuning parameters + system prompt |
+| `keychain_sync.txt` | Keychain sync state |
+| `logs/nodeneo.log` | Rotating log file (10 MB × 5 rotated files) |
+| `logs/nodeneo.log.1` ... `.5` | Rotated log archives |
+| `.mnemonic_vault` | Legacy mnemonic file (pre-Keychain migration) |
+| `.app_lock_vault.json` | Legacy app lock file |
+
+### Secure storage (separate from data directory)
+
+| Store | Contents |
+|-------|----------|
+| macOS Keychain / iOS Keychain / Android Keystore | BIP-39 mnemonic or private key |
+| flutter_secure_storage | App lock PIN (if enabled) |
+
+### Erase vs Factory Reset
+
+**Erase Wallet** (Settings → Backup & Reset → Danger Zone):
+- Removes private key from platform secure storage
+- Encrypted DB is kept on disk (auto-reconnects if same wallet is re-imported)
+- App returns to onboarding
+
+**Full Factory Reset** (Settings → Backup & Reset → Danger Zone):
+- Removes ALL wallet keys from secure storage
+- Deletes ALL wallet databases (all fingerprints + legacy)
+- Deletes logs directory
+- Deletes RPC override, preferences, tuning defaults, all cached files
+- Removes the entire Node Neo data footprint except the app binary
+- App returns to onboarding
+
+On-chain funds remain on the blockchain and are recoverable with the private key from any compatible wallet.
+
+## Architecture
+
+- Architecture overview: [.ai-docs/architecture.md](https://github.com/absgrafx/nodeneo/blob/main/.ai-docs/architecture.md)
+- Project plan and progress: [.ai-docs/plan.md](https://github.com/absgrafx/nodeneo/blob/main/.ai-docs/plan.md)
+- Feature backlog: [.ai-docs/feature_backlog.md](https://github.com/absgrafx/nodeneo/blob/main/.ai-docs/feature_backlog.md)
+- Handoff context (session bootstrap): [.ai-docs/handoff_context.md](https://github.com/absgrafx/nodeneo/blob/main/.ai-docs/handoff_context.md)
+
+### Stack
+
+| Layer | Technology |
+|-------|------------|
+| UI | Flutter 3.x (Dart) — iOS, Android, macOS from a single codebase |
+| Go bridge | `c-shared` library (`libnodeneo`) via dart:ffi, JSON payloads |
+| Chain + inference | proxy-router mobile SDK (embedded, no HTTP hop) |
+| Wallet | Go wallet + platform Keychain / Keystore for private key (or mnemonic for legacy imports) |
+| Local DB | SQLite (modernc.org/sqlite) — AES-256-GCM encrypted, WAL mode |
+| Gateway | OpenAI-compatible HTTP server on localhost (configurable port) |
+| MCP Server | TypeScript stdio process for Cursor / Claude Desktop integration |
+
+### Data flow
+
+```
+Flutter UI → dart:ffi → Go c-shared lib → proxy-router mobile SDK → Morpheus Network (Base mainnet)
+AI Agent (Cursor/Claude) ← stdio → MCP Server ← HTTP localhost → Gateway ← SDK → Morpheus Network
+```
+
+## Repository Layout
+
+```
+lib/                    Flutter UI (Dart) — screens, widgets, services
+  screens/
+    onboarding/         Wallet create / import flow
+    home/               Home screen — wallet balance, model list, chat entry
+    chat/               Chat screen — streaming, tuning, response metadata
+    settings/
+      sessions_screen   Preferences — system prompt, default tuning, session duration, security (app lock/biometrics/iCloud)
+      wallet_screen     Wallet — key management, MOR balance scanner (Where's My MOR), active on-chain sessions
+      expert_screen     Expert Mode — Blockchain Connection, Developer API, AI Gateway, API keys
+      backup_reset_screen  Backup & Reset — data backup (export/import .nnbak), danger zone (erase/factory reset)
+      about_screen      Version & Logs — version info, proxy-router version, log viewer
+  services/
+    bridge.dart         dart:ffi bindings to libnodeneo
+    wallet_vault.dart   Platform Keychain read/write for mnemonic
+    rpc_settings_store  Custom RPC persistence
+    app_local_reset     File deletion for wallet erase / factory reset
+  widgets/
+    section_card.dart   Accordion card, status pill, info box — shared across settings screens
+    send_token_sheet    Send MOR / ETH bottom sheet
+go/                     Go backend — mobile API, FFI exports, gateway, store
+  cmd/cshared/          c-shared entry point (libnodeneo.dylib)
+  mobile/               api.go — FFI surface wrapping the SDK; mor_scanner.go — on-chain MOR balance queries
+  internal/gateway/     OpenAI-compatible local HTTP server
+  internal/store/       SQLite store with AES-256-GCM encryption
+  internal/logger/      Rotating file logger (10 MB × 5)
+mcp-server/             MCP server (TypeScript, @modelcontextprotocol/sdk)
+  src/index.ts          Two tools: morpheus_models, morpheus_chat
+assets/branding/        App icon, splash logo, wordmark, token icons
+tools/                  Build scripts (dev_macos.sh, branding pipeline)
+.ai-docs/               Architecture, plan, backlog, handoff docs
+.cursor/mcp.json.example  Example MCP config for Cursor
+Makefile                Build targets for Go, Flutter, branding
+```
+
+## Key Concepts for AI Agents
+
+- **Embedded SDK**: Node Neo does NOT run a separate proxy-router process. The Go library imports `proxy-router/mobile` directly.
+- **Consumer-only**: No provider code, no IPFS, no Docker, no local LLM hosting.
+- **Companion repo**: The proxy-router SDK lives in a fork at [absgrafx/Morpheus-Lumerin-Node](https://github.com/absgrafx/Morpheus-Lumerin-Node) (branch `feat-external_embedding`). Both repos should be in sibling directories; the Go module uses a `replace` directive.
+- **Gateway + MCP**: The app exposes an OpenAI-compatible HTTP API locally. The MCP server bridges AI agents to this gateway via stdio, keeping all traffic on localhost.
+- **Privacy**: No analytics, no telemetry, no crash reporting. Traffic is direct from device to Base RPC + Morpheus providers.
+- **Encryption at rest**: Chat messages, metadata, and conversation titles are AES-256-GCM encrypted in SQLite using a key derived from the wallet's private key.
+- **Wallet-scoped databases**: Each wallet gets its own `nodeneo_{fingerprint}.db`. Erasing a wallet keeps the encrypted DB for potential re-import recovery. Factory reset deletes everything.
+- **PK-first onboarding**: New wallets show the private key (masked) instead of a 12-word mnemonic. Treated as a password — copy to a password manager.
+
+## Links
+
+- Repository: https://github.com/absgrafx/nodeneo
+- Releases: https://github.com/absgrafx/nodeneo/releases
+- Morpheus network: https://mor.org
+- Morpheus protocol repos: https://github.com/MorpheusAIs
+- Active models endpoint: https://active.mor.org/active_models.json

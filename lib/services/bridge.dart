@@ -82,6 +82,22 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('SetEncryptionKey');
 
+  late final _openWalletDatabase = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('OpenWalletDatabase');
+
+  late final _listWalletDatabases = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ListWalletDatabases');
+
+  late final _exportBackup = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)>('ExportBackup');
+
+  late final _importBackup = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('ImportBackup');
+
   late final _getLogDir = _lib.lookupFunction<
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetLogDir');
@@ -137,6 +153,14 @@ class GoBridge {
   late final _getWalletSummary = _lib.lookupFunction<
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('GetWalletSummary');
+
+  late final _scanWalletMOR = _lib.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('ScanWalletMOR');
+
+  late final _withdrawUserStakes = _lib.lookupFunction<
+      Pointer<Utf8> Function(Int32),
+      Pointer<Utf8> Function(int)>('WithdrawUserStakes');
 
   late final _verifyRecoveryMnemonic = _lib.lookupFunction<
       Pointer<Utf8> Function(Pointer<Utf8>),
@@ -290,6 +314,16 @@ class GoBridge {
       Pointer<Utf8> Function(Pointer<Utf8>),
       Pointer<Utf8> Function(Pointer<Utf8>)>('GetPreference');
 
+  // --- Conversation System Prompt ---
+
+  late final _setConversationSystemPrompt = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>)>('SetConversationSystemPrompt');
+
+  late final _getConversationSystemPrompt = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('GetConversationSystemPrompt');
+
   // --- Conversation Tuning ---
 
   late final _setConversationTuning = _lib.lookupFunction<
@@ -417,6 +451,59 @@ class GoBridge {
     _throwIfError(json);
   }
 
+  /// Opens (or creates) a wallet-scoped DB: nodeneo_{fingerprint}.db.
+  /// Migrates legacy nodeneo.db on first call for a wallet.
+  Map<String, dynamic> openWalletDatabase(String fingerprint) {
+    final fp = fingerprint.toNativeUtf8();
+    final ptr = _openWalletDatabase(fp);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(fp);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Returns list of wallet DBs found in the data directory.
+  List<dynamic> listWalletDatabases() {
+    final ptr = _listWalletDatabases();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    return jsonDecode(result) as List<dynamic>;
+  }
+
+  /// Export all conversations, messages, and preferences to an encrypted backup file.
+  Map<String, dynamic> exportBackup(String outputPath, String passphrase, String appVersion, String walletPrefix) {
+    final op = outputPath.toNativeUtf8();
+    final pp = passphrase.toNativeUtf8();
+    final av = appVersion.toNativeUtf8();
+    final wp = walletPrefix.toNativeUtf8();
+    final ptr = _exportBackup(op, pp, av, wp);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(op);
+    calloc.free(pp);
+    calloc.free(av);
+    calloc.free(wp);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Import an encrypted backup file, destructively replacing current data.
+  Map<String, dynamic> importBackup(String inputPath, String passphrase) {
+    final ip = inputPath.toNativeUtf8();
+    final pp = passphrase.toNativeUtf8();
+    final ptr = _importBackup(ip, pp);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(ip);
+    calloc.free(pp);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
   /// Returns structured version info for the embedded proxy-router SDK.
   /// JSON keys: version, commit, is_fork, upstream_tag, fork_commits
   Map<String, dynamic> getProxyRouterVersion() {
@@ -536,6 +623,26 @@ class GoBridge {
 
   Map<String, dynamic> getWalletSummary() {
     return _callJSON(_getWalletSummary);
+  }
+
+  /// Scans on-chain state to show where the user's MOR lives (wallet, active sessions, on-hold).
+  Map<String, dynamic> scanWalletMOR() {
+    final ptr = _scanWalletMOR();
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
+  }
+
+  /// Sends a transaction to recover claimable on-hold MOR from the Inference Contract.
+  Map<String, dynamic> withdrawUserStakes({int iterations = 20}) {
+    final ptr = _withdrawUserStakes(iterations);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json;
   }
 
   /// True if the recovery phrase matches the loaded wallet (read-only; does not re-import).
@@ -1046,6 +1153,33 @@ class GoBridge {
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
     return json['value'] as String? ?? '';
+  }
+
+  // --- Conversation System Prompt ---
+
+  /// Store the system prompt for a conversation (encrypted at rest).
+  void setConversationSystemPrompt({required String conversationId, required String prompt}) {
+    final cid = conversationId.toNativeUtf8();
+    final p = prompt.toNativeUtf8();
+    final ptr = _setConversationSystemPrompt(cid, p);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    calloc.free(p);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+  }
+
+  /// Returns the stored system prompt (empty string if not set).
+  String getConversationSystemPrompt(String conversationId) {
+    final cid = conversationId.toNativeUtf8();
+    final ptr = _getConversationSystemPrompt(cid);
+    final result = ptr.toDartString();
+    _freeString(ptr);
+    calloc.free(cid);
+    final json = jsonDecode(result) as Map<String, dynamic>;
+    _throwIfError(json);
+    return json['system_prompt'] as String? ?? '';
   }
 
   // --- Conversation Tuning ---

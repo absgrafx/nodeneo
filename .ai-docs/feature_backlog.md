@@ -1,32 +1,10 @@
 # Feature Backlog
 
-Items to build once the core session/wallet/signing fundamentals are solid.
+Remaining items to build, in priority order.
 
 ---
 
-## Remaining Backlog & Bugs (priority order)
-
-### 1. Wallet-Scoped Database & App Reset
-
-**Priority:** Medium-High (data integrity)
-
-#### Problem
-The local SQLite chat database is encrypted with the wallet's private key. If a user erases their wallet and recovers a *different* wallet, the old database is inaccessible but still on disk — leaking storage and potentially confusing the app. If they recover the *same* wallet, they should regain access to their conversations.
-
-#### Requirements
-- On wallet erase: prompt whether to also delete the local chat DB, logs, and cached data
-- On wallet recovery: detect if an existing DB matches the recovered key and reconnect to it
-- Support multiple wallet-scoped databases (one per private key), so switching wallets doesn't destroy another wallet's data
-- **"Complete App Reset"** option in Wallet settings: erase wallet/keychain, database, logs, and all cached content — full factory reset with clear warning
-- Consider naming/keying databases by a deterministic wallet fingerprint (e.g. first 8 chars of address) so they can coexist
-
-#### Open Questions
-- Is the DB actually encrypted with the private key today, or just stored alongside it?
-- Should we offer an "export conversations" option before reset?
-
----
-
-### 2. Invitation Code / Faucet Integration
+### 1. Invitation Code / Faucet Integration
 
 **Priority:** High (onboarding)
 
@@ -64,7 +42,7 @@ Response: { "success": true }
 
 ---
 
-### 3. File Attachments for Chat Context
+### 2. File Attachments for Chat Context
 
 **Priority:** Medium (usability)
 
@@ -88,7 +66,7 @@ Users can't attach files (documents, code, images, etc.) to provide context for 
 
 ---
 
-### 4. Rich Media Rendering (Images, Video from LLMs)
+### 3. Rich Media Rendering (Images, Video from LLMs)
 
 **Priority:** Medium (future models)
 
@@ -113,7 +91,7 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### 5. Platform Expansion
+### 4. Platform Expansion
 
 **Priority:** High (reach / distribution)
 
@@ -169,7 +147,7 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### 6. API Gateway — Next Iteration (v0.2+)
+### 5. AI Gateway — Next Iteration (v0.2+)
 
 **Priority:** Medium (ecosystem)
 
@@ -205,14 +183,6 @@ When multimodal/generative models become available on the Morpheus network, the 
 - **LangChain / LlamaIndex** — Works via OpenAI-compatible endpoint
 - **Claude Desktop** — MCP server can be configured for Claude Desktop too
 
-#### Security Considerations
-- API keys should be long, random, and never logged in plaintext
-- Rate limiting per key (configurable)
-- Keys scoped to permission tier — never escalate
-- Admin keys should require biometric/PIN confirmation to create
-- Consider IP allowlist per key (optional)
-- All API traffic should be HTTPS when exposed beyond localhost (self-signed cert or Let's Encrypt)
-
 #### Open Questions
 - Should we support OAuth2 flows for more sophisticated integrations, or is API key sufficient for v1?
 - Do we want to support multiple concurrent users (each with their own key) sharing one node, or is it always single-user?
@@ -223,134 +193,38 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### Bug Fixes / Technical Debt
+### 6. Expert Mode API Authentication
 
-#### BUG: SDK log level not syncing with UI setting
-**Severity:** Medium
-- When the user changes log level to Debug in Version & Logs, the Flutter wrapper switches but the Go SDK's zap logger stays at INFO
-- After an SDK restart (app relaunch), the log level resets to INFO regardless of the saved preference
-- **Fix needed:** `setLogLevel` must propagate to the Go SDK's zap logger atomically, and the saved preference must be applied during SDK initialization (before first log line)
+**Priority:** High (security / usability)
 
-#### BUG: Empty provider responses shown as "(empty response)"
-**Severity:** Medium
-- When a provider returns 200 with empty content, the chat shows a blank bubble with "(empty response)" — no retry option, no explanation
-- **Fix needed:** Detect empty responses and show "No response received — the provider may be busy. Tap to retry." with a retry action button, consistent with other error bubble patterns
+#### Problem
+The embedded proxy-router HTTP server (Expert Mode / Swagger API) currently starts with `HTTPAuthConfig{WhitelistDefault: true}` but **never populates `AuthEntries`**. This means:
+- `CheckAuth` middleware runs on all protected routes (blockchain, wallet, proxy, system endpoints)
+- `ValidatePassword` always fails — zero users exist
+- Every authenticated Swagger route returns **401 Unauthorized**
+- Only unauthenticated routes work: `/swagger/*`, `/healthcheck`
 
-#### Enhancement: HTTP request/response logging for inference calls
-**Severity:** Low-Medium (debugging)
-- At DEBUG level, the SDK logs session cache lookups and semaphore acquisition, but NOT the actual HTTP request to the provider or the response status/body
-- The inference HTTP exchange goes through the proxy-router's internal client which doesn't surface in the MOBILE logger
-- **Fix needed:** In the SDK's `sendPrompt`/`sendPromptWithStream` path, log the outbound request URL, headers (sanitized), response status code, content length, and first N bytes of response body at DEBUG level. Log empty responses at WARN level.
+In the standalone daemon, this is handled by `COOKIE_CONTENT` env var or auto-generated random password written to a `.cookie` file. The embedded SDK path (`mobile/httpserver.go`) skips all of this.
 
----
+#### Requirements
+- When the user starts Expert Mode, prompt for an admin password (or auto-generate and display one)
+- Pass credentials into `SDK.StartHTTPServer` so it populates `AuthEntries` with an `admin` user
+- Store the password (encrypted) in SQLite `preferences` so it persists across restarts
+- Include in backup/restore alongside other encrypted user data
+- Show credentials in the Expert screen UI (username: `admin`, password with reveal toggle)
+- Allow password reset from Expert screen
 
-## Completed Features
+#### Changes Needed
+1. **proxy-router `mobile/httpserver.go`** — accept username + password, call `AddUser` on the `HTTPAuthConfig` before wiring routes
+2. **nodeneo `go/mobile/api.go`** — `StartExpertAPI` accepts optional credentials; falls back to stored preference
+3. **nodeneo `go/internal/store`** — store/retrieve encrypted admin password
+4. **Flutter Expert screen** — password prompt on first start, reveal/reset UI
 
-### ~~3. Chat Tuning Parameters~~ — DONE (April 2026)
-
-Implemented in `feat/local-api-gateway` branch.
-
-- **Tuning drawer**: Slide-up drawer from tune icon in chat screen with sliders for Temperature, Top P, Max Tokens, Frequency Penalty, Presence Penalty
-- **Streaming toggle**: Lives inside the tuning drawer, on by default
-- **Per-conversation persistence**: Tuning params saved in SQLite (`conversations.tuning` column), loaded on conversation resume
-- **Default tuning**: `DefaultTuningStore` (file-based) persists user-set defaults for new conversations. "Save as default" button in drawer. "Reset to defaults" returns to factory baseline.
-- **Tooltips**: Each parameter has a hoverable info icon with a brief explanation
-- **SDK support**: `ChatParams` struct in `proxy-router/mobile/sdk.go`, forwarded through `SendPromptWithMessagesAndParams`
-
-### ~~4. Raw Inference Response Viewer~~ — DONE (April 2026)
-
-Implemented in `feat/local-api-gateway` branch.
-
-- **Response Info button**: `{ }` icon on each assistant bubble opens a bottom sheet
-- **Full raw provider JSON**: SDK returns `json.RawMessage` of the last chunk's `Data()` — the complete, unfiltered provider response (usage, choices, model, system_fingerprint, created, consumer/provider usage breakdowns, etc.)
-- **Summary rows**: Latency, prompt/completion/total tokens, finish reason, model, created timestamp extracted automatically from the `provider_response` blob
-- **Copyable**: Full JSON copy button in the sheet
-- **Backward compatible**: UI gracefully handles older metadata stored before the `provider_response` field existed
-
-### ~~5. API Gateway Mode (v0.1)~~ — DONE (April 2026)
-
-Implemented in `feat/local-api-gateway` branch. See the detailed "What's Built" section below.
-
-### ~~Streaming UI~~ — DONE (April 2026)
-
-Implemented in `feat/local-api-gateway` branch.
-
-- **Async FFI bridge**: Go goroutines + Dart `NativeCallable.listener` + `Completer` for non-blocking UI during streaming
-- **Signal + fetch pattern**: Solved FFI use-after-free — Go stores delta strings in a thread-safe map, passes `int64` IDs to Dart, Dart synchronously fetches via `ReadStreamDelta` FFI export
-- **UI throttling**: ~30fps cap during streaming with `jumpTo` scrolling (no animation bounce)
-- **In-place bubble update**: Streaming assistant bubble updated in place (`_messages[idx] = ...`) instead of remove/add
-- **Mutex narrowing**: `mu.Lock()` scope in Go mobile API narrowed so streaming doesn't block concurrent operations (fixes "no streaming on resume")
-- **Session setup UX**: Single animated status line during bootstrap (replaces verbose log list), descriptive messages without step counters, persistent "ready" banner with TEE shield icon until first prompt
+#### Open Questions
+- Should it be a user-chosen password or auto-generated (like the standalone daemon)?
+- Should we support multiple users with different permission tiers, or just `admin` with full access?
+- If auto-generated, where do we show it? Notification? Clipboard? Expert screen always visible?
 
 ---
 
-## API Gateway — What's Built (v0.1 — April 2026)
-
-### Go Gateway (`nodeneo/go/internal/gateway/`)
-- **`POST /v1/chat/completions`** — OpenAI-compatible chat endpoint with streaming (SSE) and non-streaming support
-- **`GET /v1/models`** — Fetches models directly from `active.mor.org/active_models.json` with 5-minute in-memory cache, ETag support, and SDK fallback. Response includes Morpheus-specific fields (`blockchainID`, `tags`, `modelType`) alongside standard OpenAI fields
-- **`GET /health`** — Health check (unauthenticated)
-- **Bearer token auth** — `sk-` prefixed API keys, bcrypt-hashed in SQLite, with `last_used` tracking
-- **Session management** — Automatic model name → blockchain ID resolution, session reuse (scans unclosed sessions), and transparent session opening
-- **Conversation persistence** — API-initiated conversations saved to SQLite with `source: "api"`, visible in the NodeNeo UI with a robot icon
-- **Request logging** — Middleware logs all inbound requests for debugging
-- **CORS** — Permissive headers for local/LAN use
-- **Configurable port** — Independent from the Expert Mode API/Swagger port, configurable via UI
-
-### Flutter UI (Expert Mode)
-- **Gateway section** — Start/stop toggle, configurable port, connection info card
-- **API key management** — Generate, list (with last-used timestamps), revoke keys
-- **Conversation list** — API-source conversations marked with `smart_toy` icon
-
-### MCP Server (`nodeneo/mcp-server/`)
-- **TypeScript stdio server** using `@modelcontextprotocol/sdk`
-- **`morpheus_models` tool** — Lists available Morpheus models via the gateway
-- **`morpheus_chat` tool** — Sends chat prompts to any Morpheus model, supports multi-turn messages
-- **Fully local** — Communicates with gateway on localhost via stdio, no traffic leaves the machine
-- **Cursor integration** — Configured via `.cursor/mcp.json`, auto-discovered by Cursor
-
-### Key Learnings
-- **Cursor's "Override OpenAI Base URL" proxies through their servers** — SSRF protection blocks `127.0.0.1`. The OpenAI-compatible endpoint works for non-Cursor clients (LangChain, curl, custom apps) but Cursor requires MCP for local/private use.
-- **MCP is the right pattern for IDE integration** — Tools run as local processes, prompts never leave the machine. This aligns with the privacy goals of Morpheus.
-- **Cloudflared tunnel validated the pipeline** — End-to-end test confirmed the full flow works: Cursor → gateway → SDK → Morpheus provider → response rendered in Cursor.
-
----
-
-## Cursor & OpenAI-Compatible Integration — Trust Model (Research / Unlikely Feature)
-
-**Priority:** Documentation-first (may never ship as product)
-
-### Context
-We explored using Cursor's **custom OpenAI base URL** + API key with the NodeNeo gateway, and using **Cloudflare Tunnel (`cloudflared`)** so Cursor's infrastructure can reach a **public HTTPS** endpoint (Cursor often **cannot** call `localhost` / private IPs directly due to SSRF protections).
-
-### Why "hairpin" matters for privacy
-When Cursor's **Composer / custom API** path is used, requests are typically **assembled and sent via Cursor's backend** to the configured base URL. That means:
-
-- **Cursor is in the trust path** for whatever they put in the outbound HTTP request: messages, model name, parameters, and usually **extra product context** (system prompts, tool definitions, codebase snippets they attach, etc.).
-- **TLS on the wire** protects against **third parties** (network eavesdroppers). It does **not** mean prompts are **hidden from Cursor** if their servers **terminate, log, or forward** that plaintext — they have the **capability** to process that content under their product architecture and policies.
-- **Implication for a strict privacy model:** if the bar is *"no intermediary may even have the capability to intercept or inspect traffic,"* then **any** path where a third-party service constructs or relays the full request **fails that bar**. Capability alone (even if unused) is enough to undermine the mental model some users want.
-
-### What still "physically" helps (without overstating)
-- **TLS**: confidentiality and integrity **on the network** against outsiders.
-- **Cloudflare Tunnel**: encrypted tunnel from the user's machine to Cloudflare; **HTTPS** on the public hostname — solid **transport** to the gateway.
-- **Gateway API keys**: protect the **public URL** from anonymous abuse if the URL leaks; they do **not** hide request bodies from Cursor if Cursor is the client.
-
-### MCP vs custom base URL (nodeneo-morpheus MCP)
-The **MCP server** talks to the gateway via **`fetch` to localhost** (or configured URL) from a **local process**. That avoids putting the **HTTP hop to the gateway** through Cursor's cloud — different trust boundary than Composer's custom API override. Tradeoff: **not** the same UX as picking a model in the chat dropdown.
-
-### Optional built-in `cloudflared` quick tunnel (probably skip)
-**Idea:** start a **quick tunnel** (`*.trycloudflare.com`) automatically when the gateway starts, print the HTTPS URL for Cursor.
-
-**Why it's on the backlog but doubtful:**
-- It's **convenient** for reachability and **TLS to the gateway**.
-- It does **not** restore **confidentiality from Cursor** on the hairpin path; it only fixes "Cursor can't reach `127.0.0.1`."
-- Quick tunnel URLs are **secret-by-obscurity**; treat like sensitive links; rotate API keys if exposed.
-- Shipping it might **imply** a privacy story we don't actually have for Cursor users — document honestly if we ever add it.
-
-### Homework / future
-- Re-read Cursor's **current** docs and forum threads on custom OpenAI base URL (behavior changes over time).
-- If we document this for users: **one paragraph** on trust boundaries — **MCP localhost** vs **Composer + public tunnel** vs **pure local tools**.
-
----
-
-*Last updated: 2026-04-09 (items 3, 4, 5 completed; streaming done; backlog reordered)*
+*Last updated: 2026-04-14*
