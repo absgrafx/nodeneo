@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1203,6 +1204,42 @@ func GetPreference(key string) string {
 
 // --- Expert Mode (native proxy-router swagger API) ---
 
+const expertAPIUser = "admin"
+const expertAPIPasswordKey = "expert_api_password"
+
+// generateRandomPassword returns a random alphanumeric string.
+func generateRandomPassword(length int) (string, error) {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			return "", err
+		}
+		b[i] = chars[n.Int64()]
+	}
+	return string(b), nil
+}
+
+// ensureExpertAPIPassword returns the stored password, generating one if needed.
+func ensureExpertAPIPassword() (string, error) {
+	if db == nil {
+		return "", fmt.Errorf("database not initialized")
+	}
+	pass, err := db.GetPreference(expertAPIPasswordKey)
+	if err == nil && pass != "" {
+		return pass, nil
+	}
+	pass, err = generateRandomPassword(16)
+	if err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	if err := db.SetPreference(expertAPIPasswordKey, pass); err != nil {
+		return "", fmt.Errorf("store password: %w", err)
+	}
+	return pass, nil
+}
+
 // StartExpertAPI starts the native proxy-router HTTP server (swagger UI + full REST API).
 // address is "host:port", e.g. "127.0.0.1:8082" for local-only or "0.0.0.0:8082" for network.
 // publicURL sets the Swagger host for CORS (e.g. "http://192.168.1.42:8082").
@@ -1212,11 +1249,47 @@ func StartExpertAPI(address, publicURL string) string {
 	if client == nil {
 		return errJSON(errNotInit)
 	}
-	if err := client.StartHTTPServer(address, publicURL); err != nil {
+
+	pass, err := ensureExpertAPIPassword()
+	if err != nil {
+		return errJSON(fmt.Errorf("expert API credentials: %w", err))
+	}
+
+	if err := client.StartHTTPServer(address, publicURL, expertAPIUser, pass); err != nil {
 		return errJSON(err)
 	}
-	logger.Info("Expert API (swagger) started on %s (public: %s)", address, publicURL)
+	logger.Info("Expert API (swagger) started on %s (public: %s) with auth user=%s", address, publicURL, expertAPIUser)
 	return resultJSON(map[string]string{"status": "ok", "address": address, "public_url": publicURL})
+}
+
+// GetExpertAPICredentials returns the stored admin credentials for the Expert API.
+func GetExpertAPICredentials() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	pass, _ := db.GetPreference(expertAPIPasswordKey)
+	return resultJSON(map[string]string{"username": expertAPIUser, "password": pass})
+}
+
+// ResetExpertAPIPassword generates a new random password, stores it, and returns it.
+// Takes effect on the next API start (does not affect a currently running server).
+func ResetExpertAPIPassword() string {
+	mu.Lock()
+	defer mu.Unlock()
+	if db == nil {
+		return errJSON(errNotInit)
+	}
+	pass, err := generateRandomPassword(16)
+	if err != nil {
+		return errJSON(fmt.Errorf("generate password: %w", err))
+	}
+	if err := db.SetPreference(expertAPIPasswordKey, pass); err != nil {
+		return errJSON(fmt.Errorf("store password: %w", err))
+	}
+	logger.Info("Expert API password reset (takes effect on next start)")
+	return resultJSON(map[string]string{"username": expertAPIUser, "password": pass})
 }
 
 // StopExpertAPI stops the native proxy-router HTTP server.

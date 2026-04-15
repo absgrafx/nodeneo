@@ -542,6 +542,16 @@ func ExpertAPIStatus() *C.char {
 	return C.CString(mobile.ExpertAPIStatus())
 }
 
+//export GetExpertAPICredentials
+func GetExpertAPICredentials() *C.char {
+	return C.CString(mobile.GetExpertAPICredentials())
+}
+
+//export ResetExpertAPIPassword
+func ResetExpertAPIPassword() *C.char {
+	return C.CString(mobile.ResetExpertAPIPassword())
+}
+
 // --- Gateway (OpenAI-compatible API) ---
 
 //export StartGateway

@@ -306,8 +306,14 @@ jobs:
           git tag "$TAG_NAME"
           git push origin "$TAG_NAME"
 
-          cat <<'NOTES' > /tmp/release-notes.md
-          ## Node Neo Desktop (macOS)
+          # Build release notes: repo RELEASE_NOTES.md (if present) + asset table
+          : > /tmp/release-notes.md
+          if [ -f RELEASE_NOTES.md ]; then
+            cat RELEASE_NOTES.md >> /tmp/release-notes.md
+            printf '\n---\n\n' >> /tmp/release-notes.md
+          fi
+          cat <<'ASSET_TABLE' >> /tmp/release-notes.md
+          ## Download
 
           Signed and notarized — download, mount, drag to Applications.
 
@@ -315,7 +321,7 @@ jobs:
           |-------|-------------|
           | `Node Neo-VERSION-macOS.dmg` | macOS desktop client (Apple Silicon / Intel universal) |
 
-          NOTES
+          ASSET_TABLE
           sed -i '' "s/VERSION/${APP_VERSION}/g" /tmp/release-notes.md
 
           gh release create "$TAG_NAME" "$DMG_PATH" \
