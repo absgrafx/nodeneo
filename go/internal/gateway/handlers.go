@@ -96,10 +96,13 @@ func (g *Gateway) handleStreamingCompletion(w http.ResponseWriter, r *http.Reque
 	var fullResponse string
 	params := chatParamsFromRequest(req)
 
-	_, err := g.sdk.SendPromptWithMessagesAndParams(r.Context(), sess.SessionID, req.Messages, true, params, func(text string, isLast bool) error {
+	_, err := g.sdk.SendPromptWithMessagesAndParams(r.Context(), sess.SessionID, req.Messages, true, params, func(text string, isThinking bool, isLast bool) error {
 		if isLast {
 			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
+			return nil
+		}
+		if isThinking {
 			return nil
 		}
 
@@ -143,8 +146,10 @@ func (g *Gateway) handleStreamingCompletion(w http.ResponseWriter, r *http.Reque
 func (g *Gateway) handleNonStreamingCompletion(w http.ResponseWriter, r *http.Request, sess sessionResult, req openai.ChatCompletionRequest, convID string) {
 	var fullResponse string
 	params := chatParamsFromRequest(req)
-	_, err := g.sdk.SendPromptWithMessagesAndParams(r.Context(), sess.SessionID, req.Messages, false, params, func(text string, isLast bool) error {
-		fullResponse += text
+	_, err := g.sdk.SendPromptWithMessagesAndParams(r.Context(), sess.SessionID, req.Messages, false, params, func(text string, isThinking bool, isLast bool) error {
+		if !isThinking {
+			fullResponse += text
+		}
 		return nil
 	})
 	if err != nil {

@@ -193,9 +193,11 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### 6. Thinking / Reasoning Model Support
+### 6. ~~Thinking / Reasoning Model Support~~ DONE
 
-**Priority:** High (correctness — currently broken for reasoning models)
+Implemented two-zone streaming display with `reasoning_content` field support and `<think>` tag fallback. Purple thinking zone with live scroll, collapsible "Thought for Xs" after completion.
+
+~~**Priority:** High (correctness — currently broken for reasoning models)~~
 
 #### Problem
 When chatting with reasoning models (e.g. GLM-4.7, DeepSeek-R1, Qwen-3 Thinking), the model's internal chain-of-thought "thinking" tokens stream directly into the chat bubble alongside the final answer. The result is a scrambled wall of text where reasoning artifacts (hallucinated code snippets, self-dialogue, planning notes) are indistinguishable from the actual response. Observed with Venice `venice-glm-47` — the model's reasoning about Terraform/AWS config leaked into visible output.
@@ -247,9 +249,11 @@ Venice also provides `reasoning_effort` parameter (low/medium/high) and `reasoni
 
 ---
 
-### 7. Stop / Cancel Generation Button
+### 7. ~~Stop / Cancel Generation Button~~ DONE
 
-**Priority:** High (usability — no way to interrupt runaway responses)
+Amber stop button replaces send during streaming. Full cancellation plumbing through FFI → Go → proxy-router context. Partial responses preserved with "Generation stopped" indicator.
+
+~~**Priority:** High (usability — no way to interrupt runaway responses)~~
 
 #### Problem
 There is no way to stop a response once it starts generating. The send button (`Icons.send_rounded`) simply disables while `_sending` is true. If a model goes off the rails (as observed with GLM-4.7's reasoning leak), produces an unexpectedly long response, or the user simply changes their mind, they must wait for the full response to complete or kill the app.

@@ -27,6 +27,8 @@ var (
 	initErr  error
 	savedDir string // dataDir from Init, used by OpenWalletDatabase
 	savedRPC string // ethNodeURL from Init, used by MOR scanner
+
+	activePromptCancel context.CancelFunc // set during in-flight prompt, nil otherwise
 )
 
 func fileExists(path string) bool {
@@ -367,6 +369,17 @@ func GetLogLevel() string {
 	return logger.GetLevel()
 }
 
+// CancelPrompt aborts the in-flight streaming prompt (if any).
+// The partial response accumulated so far is saved and returned with "cancelled": true.
+func CancelPrompt() {
+	mu.Lock()
+	cancel := activePromptCancel
+	mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // SetSessionMaintenanceInterval changes how often the SDK checks for expired sessions
 // and auto-closes them (reclaiming locked MOR). intervalSeconds of 0 disables auto-close.
 // Default is 900 (15 minutes). Provider-initiated closes already refund MOR on-chain
@@ -682,7 +695,7 @@ func SendPrompt(sessionID string, conversationID string, prompt string, stream b
 // SendPromptWithStreamCallback is like [SendPrompt] but invokes [chunk] for each provider delta
 // (and again with isLast=true on the final chunk). When [chunk] returns an error, streaming aborts.
 // [chunk] may be nil (same behavior as [SendPrompt]).
-func SendPromptWithStreamCallback(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isLast bool) error) string {
+func SendPromptWithStreamCallback(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isThinking bool, isLast bool) error) string {
 	return sendPromptWithOptionalChunk(sessionID, conversationID, prompt, stream, chunk)
 }
 
@@ -690,14 +703,14 @@ func SendPromptWithStreamCallback(sessionID string, conversationID string, promp
 // It launches the prompt in a goroutine and returns immediately. Streaming deltas arrive through
 // [chunk]; the final result JSON is delivered through [done]. This allows the FFI caller's event
 // loop to process delta callbacks in real-time instead of batching them after completion.
-func SendPromptWithStreamCallbackAsync(sessionID, conversationID, prompt string, stream bool, chunk func(text string, isLast bool) error, done func(resultJSON string)) {
+func SendPromptWithStreamCallbackAsync(sessionID, conversationID, prompt string, stream bool, chunk func(text string, isThinking bool, isLast bool) error, done func(resultJSON string)) {
 	go func() {
 		result := sendPromptWithOptionalChunk(sessionID, conversationID, prompt, stream, chunk)
 		done(result)
 	}()
 }
 
-func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isLast bool) error) string {
+func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt string, stream bool, chunk func(text string, isThinking bool, isLast bool) error) string {
 	mu.Lock()
 	c := client
 	d := db
@@ -720,15 +733,35 @@ func sendPromptWithOptionalChunk(sessionID string, conversationID string, prompt
 		omsgs = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: prompt}}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	mu.Lock()
+	activePromptCancel = cancel
+	mu.Unlock()
+	defer func() {
+		cancel()
+		mu.Lock()
+		activePromptCancel = nil
+		mu.Unlock()
+	}()
+
 	var fullResponse string
-	err := c.SendPromptWithMessages(context.Background(), sessionID, omsgs, stream, func(text string, isLast bool) error {
-		fullResponse += text
+	err := c.SendPromptWithMessages(ctx, sessionID, omsgs, stream, func(text string, isThinking bool, isLast bool) error {
+		if !isThinking {
+			fullResponse += text
+		}
 		if chunk != nil {
-			return chunk(text, isLast)
+			return chunk(text, isThinking, isLast)
 		}
 		return nil
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			if d != nil && fullResponse != "" {
+				_ = d.SaveMessage(conversationID, "user", prompt)
+				_ = d.SaveMessage(conversationID, "assistant", fullResponse)
+			}
+			return resultJSON(map[string]interface{}{"response": fullResponse, "cancelled": true})
+		}
 		return errJSON(err)
 	}
 
@@ -765,19 +798,19 @@ func (t *TuningOptions) toChatParams() *sdk.ChatParams {
 // SendPromptWithOptions sends a prompt with optional tuning parameters.
 // [optionsJSON] is a JSON blob with temperature, top_p, max_tokens, etc.
 // Empty string or "{}" uses SDK defaults.
-func SendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isLast bool) error) string {
+func SendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isThinking bool, isLast bool) error) string {
 	return sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON, stream, chunk)
 }
 
 // SendPromptWithOptionsAsync is the non-blocking variant of [SendPromptWithOptions].
-func SendPromptWithOptionsAsync(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isLast bool) error, done func(resultJSON string)) {
+func SendPromptWithOptionsAsync(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isThinking bool, isLast bool) error, done func(resultJSON string)) {
 	go func() {
 		result := sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON, stream, chunk)
 		done(result)
 	}()
 }
 
-func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isLast bool) error) string {
+func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string, stream bool, chunk func(text string, isThinking bool, isLast bool) error) string {
 	// Grab references under the lock, then release before the (potentially long) SDK call.
 	mu.Lock()
 	c := client
@@ -823,18 +856,106 @@ func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string
 		logger.Debug("INFERENCE msg[%d]: role=%s len=%d", i, m.Role, len(m.Content))
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	mu.Lock()
+	activePromptCancel = cancel
+	mu.Unlock()
+	defer func() {
+		cancel()
+		mu.Lock()
+		activePromptCancel = nil
+		mu.Unlock()
+	}()
+
 	startTime := time.Now()
 	var fullResponse string
+	var inThinkTag bool       // tracks <think>...</think> tag state
+	var thinkBuf strings.Builder // accumulates partial tag matches
 
-	rawChunkJSON, err := c.SendPromptWithMessagesAndParams(context.Background(), sessionID, omsgs, stream, opts.toChatParams(), func(text string, isLast bool) error {
-		fullResponse += text
-		if chunk != nil {
-			return chunk(text, isLast)
+	rawChunkJSON, err := c.SendPromptWithMessagesAndParams(ctx, sessionID, omsgs, stream, opts.toChatParams(), func(text string, isThinking bool, isLast bool) error {
+		// If the SDK already identified this as reasoning_content, pass through.
+		if isThinking {
+			if chunk != nil {
+				return chunk(text, true, isLast)
+			}
+			return nil
+		}
+
+		// Fallback: detect <think>...</think> tags in content (vLLM, ollama).
+		processed := thinkBuf.String() + text
+		thinkBuf.Reset()
+
+		for len(processed) > 0 {
+			if inThinkTag {
+				idx := strings.Index(processed, "</think>")
+				if idx >= 0 {
+					thinking := processed[:idx]
+					processed = processed[idx+len("</think>"):]
+					inThinkTag = false
+					if chunk != nil && thinking != "" {
+						if err := chunk(thinking, true, false); err != nil {
+							return err
+						}
+					}
+				} else {
+					// Might be a partial </think> at end — buffer the tail
+					if len(processed) < len("</think>") && strings.HasPrefix("</think>", processed) {
+						thinkBuf.WriteString(processed)
+					} else {
+						if chunk != nil {
+							if err := chunk(processed, true, false); err != nil {
+								return err
+							}
+						}
+					}
+					processed = ""
+				}
+			} else {
+				idx := strings.Index(processed, "<think>")
+				if idx >= 0 {
+					content := processed[:idx]
+					processed = processed[idx+len("<think>"):]
+					inThinkTag = true
+					if content != "" {
+						fullResponse += content
+						if chunk != nil {
+							if err := chunk(content, false, false); err != nil {
+								return err
+							}
+						}
+					}
+				} else {
+					// Check for partial <think> at end
+					if len(processed) < len("<think>") && strings.HasPrefix("<think>", processed) {
+						thinkBuf.WriteString(processed)
+					} else {
+						fullResponse += processed
+						if chunk != nil {
+							if err := chunk(processed, false, isLast); err != nil {
+								return err
+							}
+						}
+					}
+					processed = ""
+				}
+			}
+		}
+		if isLast && chunk != nil && thinkBuf.Len() == 0 {
+			// Ensure isLast is delivered if we haven't already
 		}
 		return nil
 	})
 	if err != nil {
-		logger.Error("INFERENCE failed after %dms: %v", time.Since(startTime).Milliseconds(), err)
+		latencyMs := time.Since(startTime).Milliseconds()
+		if ctx.Err() != nil {
+			logger.Info("INFERENCE cancelled after %dms (%d chars accumulated)", latencyMs, len(fullResponse))
+			if d != nil && fullResponse != "" {
+				_ = d.SaveMessage(conversationID, "user", prompt)
+				_ = d.SaveMessageWithMetadata(conversationID, "assistant", fullResponse, `{"cancelled":true}`)
+			}
+			return resultJSON(map[string]interface{}{"response": fullResponse, "cancelled": true, "latency_ms": latencyMs})
+		}
+		logger.Error("INFERENCE failed after %dms: %v", latencyMs, err)
 		return errJSON(err)
 	}
 
