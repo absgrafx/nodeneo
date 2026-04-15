@@ -23,9 +23,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _mnemonicController = TextEditingController();
   final _privateKeyController = TextEditingController();
   bool _isCreating = false;
-  String? _createdMnemonic;
+  String? _createdPrivateKey;
   String? _createdAddress;
-  bool _importByPrivateKey = false;
+  bool _importByMnemonic = false;
 
   @override
   void dispose() {
@@ -38,10 +38,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     setState(() => _isCreating = true);
     try {
       final bridge = GoBridge();
-      final result = bridge.createWallet();
+      bridge.createWallet();
+      final exported = bridge.exportPrivateKey();
+      final pk = exported['private_key'] as String? ?? '';
+      final summary = bridge.getWalletSummary();
       setState(() {
-        _createdMnemonic = result['mnemonic'] as String?;
-        _createdAddress = result['address'] as String?;
+        _createdPrivateKey = pk;
+        _createdAddress = summary['address'] as String?;
         _isCreating = false;
       });
     } on GoBridgeException catch (e) {
@@ -55,29 +58,43 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _confirmBackupAndFinish() async {
-    final m = _createdMnemonic;
-    if (m != null) {
+    final pk = _createdPrivateKey;
+    if (pk != null && pk.isNotEmpty) {
       try {
-        await WalletVault.instance.saveMnemonic(m);
+        await WalletVault.instance.savePrivateKey(pk);
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Wallet save error: $e'), duration: const Duration(seconds: 6)),
+            SnackBar(content: Text('Save error: $e'), duration: const Duration(seconds: 6)),
           );
         }
         return;
       }
-      _activateDbEncryption(m);
+      _openScopedDbAndEncrypt(pk);
     }
     if (!mounted) return;
     widget.onComplete();
   }
 
-  void _activateDbEncryption(String secret) {
+  /// Opens the wallet-scoped DB and sets the encryption key.
+  /// Must be called after the wallet is imported into the Go SDK.
+  void _openScopedDbAndEncrypt(String secret) {
+    final bridge = GoBridge();
+    try {
+      final summary = bridge.getWalletSummary();
+      var addr = (summary['address'] as String? ?? '').toLowerCase();
+      if (addr.startsWith('0x')) addr = addr.substring(2);
+      final fp = addr.length >= 8 ? addr.substring(0, 8) : addr;
+      if (fp.isNotEmpty) {
+        bridge.openWalletDatabase(fp);
+      }
+    } catch (e) {
+      debugPrint('[Onboarding] openWalletDatabase failed (non-fatal): $e');
+    }
     try {
       final keyBytes = sha256.convert(utf8.encode(secret.trim())).bytes;
       final keyHex = keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      GoBridge().setEncryptionKey(keyHex);
+      bridge.setEncryptionKey(keyHex);
     } catch (e) {
       debugPrint('[Onboarding] setEncryptionKey failed (non-fatal): $e');
     }
@@ -95,7 +112,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       final bridge = GoBridge();
       bridge.importWalletMnemonic(mnemonic);
       await WalletVault.instance.saveMnemonic(mnemonic);
-      _activateDbEncryption(mnemonic);
+      _openScopedDbAndEncrypt(mnemonic);
       if (!mounted) return;
       widget.onComplete();
     } on GoBridgeException catch (e) {
@@ -122,7 +139,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       final bridge = GoBridge();
       bridge.importWalletPrivateKey(hexKey);
       await WalletVault.instance.savePrivateKey(hexKey);
-      _activateDbEncryption(hexKey);
+      _openScopedDbAndEncrypt(hexKey);
       if (!mounted) return;
       widget.onComplete();
     } on GoBridgeException catch (e) {
@@ -135,18 +152,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _importWallet() async {
-    if (_importByPrivateKey) {
-      await _importWalletByPrivateKey();
-    } else {
+    if (_importByMnemonic) {
       await _importWalletByMnemonic();
+    } else {
+      await _importWalletByPrivateKey();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_createdMnemonic != null) {
-      return _MnemonicBackupScreen(
-        mnemonic: _createdMnemonic!,
+    if (_createdPrivateKey != null) {
+      return _KeyBackupScreen(
+        privateKey: _createdPrivateKey!,
         address: _createdAddress ?? '',
         onConfirm: _confirmBackupAndFinish,
       );
@@ -214,7 +231,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Import method toggle
+                  // Import method toggle — PK is default
                   Container(
                     decoration: BoxDecoration(
                       color: const Color(0xFF1E293B),
@@ -224,79 +241,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     padding: const EdgeInsets.all(3),
                     child: Row(
                       children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _importByPrivateKey = false),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              decoration: BoxDecoration(
-                                color: !_importByPrivateKey
-                                    ? NeoTheme.green.withValues(alpha: 0.15)
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                                border: !_importByPrivateKey
-                                    ? Border.all(color: NeoTheme.green.withValues(alpha: 0.3))
-                                    : null,
-                              ),
-                              child: Text(
-                                'Recovery Phrase',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: !_importByPrivateKey
-                                      ? NeoTheme.green
-                                      : const Color(0xFF6B7280),
-                                ),
-                              ),
-                            ),
-                          ),
+                        _ToggleTab(
+                          label: 'Private Key',
+                          selected: !_importByMnemonic,
+                          onTap: () => setState(() => _importByMnemonic = false),
                         ),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _importByPrivateKey = true),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              decoration: BoxDecoration(
-                                color: _importByPrivateKey
-                                    ? NeoTheme.green.withValues(alpha: 0.15)
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(8),
-                                border: _importByPrivateKey
-                                    ? Border.all(color: NeoTheme.green.withValues(alpha: 0.3))
-                                    : null,
-                              ),
-                              child: Text(
-                                'Private Key',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: _importByPrivateKey
-                                      ? NeoTheme.green
-                                      : const Color(0xFF6B7280),
-                                ),
-                              ),
-                            ),
-                          ),
+                        _ToggleTab(
+                          label: 'Recovery Phrase',
+                          selected: _importByMnemonic,
+                          onTap: () => setState(() => _importByMnemonic = true),
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 12),
 
-                  if (_importByPrivateKey)
-                    TextField(
-                      controller: _privateKeyController,
-                      maxLines: 2,
-                      decoration: const InputDecoration(
-                        hintText: 'Enter hex private key (with or without 0x prefix)...',
-                      ),
-                      style: const TextStyle(fontSize: 14, fontFamily: 'JetBrains Mono'),
-                    )
-                  else
+                  if (_importByMnemonic)
                     TextField(
                       controller: _mnemonicController,
                       maxLines: 3,
@@ -304,6 +264,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         hintText: 'Enter your 12 or 24-word recovery phrase...',
                       ),
                       style: const TextStyle(fontSize: 14),
+                    )
+                  else
+                    TextField(
+                      controller: _privateKeyController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        hintText: 'Enter hex private key (with or without 0x prefix)...',
+                      ),
+                      style: const TextStyle(fontSize: 14, fontFamily: 'JetBrains Mono'),
                     ),
                   const SizedBox(height: 12),
                   SizedBox(
@@ -354,22 +323,96 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// Shows the generated mnemonic so the user can back it up.
-class _MnemonicBackupScreen extends StatelessWidget {
-  final String mnemonic;
+// ── Toggle tab for import method ────────────────────────────────
+
+class _ToggleTab extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ToggleTab({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: selected
+                ? NeoTheme.green.withValues(alpha: 0.15)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: selected
+                ? Border.all(color: NeoTheme.green.withValues(alpha: 0.3))
+                : null,
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: selected ? NeoTheme.green : const Color(0xFF6B7280),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Backup screen: masked private key with reveal & copy ────────
+
+class _KeyBackupScreen extends StatefulWidget {
+  final String privateKey;
   final String address;
   final Future<void> Function() onConfirm;
 
-  const _MnemonicBackupScreen({
-    required this.mnemonic,
+  const _KeyBackupScreen({
+    required this.privateKey,
     required this.address,
     required this.onConfirm,
   });
 
   @override
+  State<_KeyBackupScreen> createState() => _KeyBackupScreenState();
+}
+
+class _KeyBackupScreenState extends State<_KeyBackupScreen> {
+  bool _revealed = false;
+  bool _confirming = false;
+
+  String get _displayKey {
+    if (_revealed) return widget.privateKey;
+    final pk = widget.privateKey;
+    if (pk.length <= 8) return '•' * pk.length;
+    return '${pk.substring(0, 4)}${'•' * (pk.length - 8)}${pk.substring(pk.length - 4)}';
+  }
+
+  void _copyKey() {
+    Clipboard.setData(ClipboardData(text: widget.privateKey));
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Private key copied — paste into your password manager'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.only(bottom: 80, left: 24, right: 24),
+          duration: Duration(seconds: 3),
+        ),
+      );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final words = mnemonic.split(' ');
 
     return Scaffold(
       body: SafeArea(
@@ -382,8 +425,8 @@ class _MnemonicBackupScreen extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const SizedBox(height: 48),
-                  const NeoLogo(size: 144),
-                  const SizedBox(height: 12),
+                  const NeoLogo(size: 120),
+                  const SizedBox(height: 16),
                   Icon(
                     Icons.check_circle_outline_rounded,
                     size: 40,
@@ -393,13 +436,14 @@ class _MnemonicBackupScreen extends StatelessWidget {
                   Text('Wallet Created', style: theme.textTheme.headlineMedium),
                   const SizedBox(height: 8),
                   Text(
-                    address,
+                    widget.address,
                     style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'JetBrains Mono'),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
 
+                  // Warning banner
                   Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: NeoTheme.amber.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(12),
@@ -408,76 +452,105 @@ class _MnemonicBackupScreen extends StatelessWidget {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('⚠️', style: TextStyle(fontSize: 16)),
-                        const SizedBox(width: 12),
+                        Icon(Icons.shield_outlined, size: 18, color: NeoTheme.amber.withValues(alpha: 0.9)),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Write down these 12 words and store them safely. '
-                            'This is the ONLY way to recover your wallet.',
-                            style: TextStyle(color: NeoTheme.amber.withValues(alpha: 0.9), fontSize: 13),
+                            'This is your wallet key — treat it like a password. '
+                            'Copy it to a password manager now. It cannot be changed or recovered.',
+                            style: TextStyle(color: NeoTheme.amber.withValues(alpha: 0.9), fontSize: 12, height: 1.4),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
 
+                  // Masked key display
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: NeoTheme.surface,
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(14),
                       border: Border.all(color: const Color(0xFF374151)),
                     ),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: List.generate(words.length, (i) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E293B),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            '${i + 1}. ${words[i]}',
-                            style: const TextStyle(
-                              fontFamily: 'JetBrains Mono',
-                              fontSize: 13,
-                              color: Color(0xFFF9FAFB),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.key_rounded, size: 14, color: NeoTheme.emerald.withValues(alpha: 0.6)),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Private Key',
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: NeoTheme.emerald.withValues(alpha: 0.6)),
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        SelectableText(
+                          _displayKey,
+                          style: TextStyle(
+                            fontFamily: 'JetBrains Mono',
+                            fontSize: 13,
+                            color: _revealed ? const Color(0xFFF9FAFB) : const Color(0xFF6B7280),
+                            letterSpacing: _revealed ? 0 : 1,
+                            height: 1.6,
                           ),
-                        );
-                      }),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => setState(() => _revealed = !_revealed),
+                                icon: Icon(
+                                  _revealed ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                                  size: 16,
+                                ),
+                                label: Text(_revealed ? 'Hide' : 'Reveal', style: const TextStyle(fontSize: 12)),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: _copyKey,
+                                icon: const Icon(Icons.copy_rounded, size: 16),
+                                label: const Text('Copy Key', style: TextStyle(fontSize: 12)),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: NeoTheme.green,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 16),
-
-                  TextButton.icon(
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: mnemonic));
-                      ScaffoldMessenger.of(context)
-                        ..clearSnackBars()
-                        ..showSnackBar(
-                          const SnackBar(
-                            content: Text('Mnemonic copied to clipboard'),
-                            behavior: SnackBarBehavior.floating,
-                            margin: EdgeInsets.only(bottom: 80, left: 24, right: 24),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                    },
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('Copy to clipboard'),
-                  ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
 
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: () async => onConfirm(),
-                      child: const Text("I've Backed It Up — Continue"),
+                      onPressed: _confirming
+                          ? null
+                          : () async {
+                              setState(() => _confirming = true);
+                              await widget.onConfirm();
+                              if (mounted) setState(() => _confirming = false);
+                            },
+                      child: _confirming
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Text("I've Saved My Key — Continue"),
                     ),
                   ),
                   const SizedBox(height: 32),
