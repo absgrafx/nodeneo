@@ -100,7 +100,7 @@ When multimodal/generative models become available on the Morpheus network, the 
 | # | Platform | Status | Notes |
 |---|----------|--------|-------|
 | 1 | **macOS** (desktop) | Done — refining | Signed, notarized, DMG distribution via GitHub Releases |
-| 2 | **iOS — iPhone** | Planned | Touch-first layout; most UI already uses finger-friendly patterns. Go dylib → xcframework. Needs App Store provisioning. |
+| 2 | **iOS — iPhone** | **In progress** | Running on device + simulator. PlatformCaps gating, pull-to-refresh, collapsible wallet, compact privacy toggle, safe area fixes done. Needs TestFlight + App Store submission. |
 | 3 | **iOS — iPad** | Planned | Adaptive layout (split-view chat + sidebar). Leverage iPad multitasking APIs. |
 | 4 | **App Store publishing** | Planned | First-time submission. Requires App Store Connect setup, review guidelines compliance, privacy nutrition labels, and in-app purchase considerations (if any). |
 | 5 | **Linux** | Planned | Flutter Linux desktop runner. CI cross-compile for x86_64 (AppImage or .deb). Go CGO cross-compile or pre-built .so. |
@@ -193,4 +193,169 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-*Last updated: 2026-04-15*
+### 6. ~~Thinking / Reasoning Model Support~~ DONE
+
+Implemented two-zone streaming display with `reasoning_content` field support and `<think>` tag fallback. Purple thinking zone with live scroll, collapsible "Thought for Xs" after completion.
+
+~~**Priority:** High (correctness — currently broken for reasoning models)~~
+
+#### Problem
+When chatting with reasoning models (e.g. GLM-4.7, DeepSeek-R1, Qwen-3 Thinking), the model's internal chain-of-thought "thinking" tokens stream directly into the chat bubble alongside the final answer. The result is a scrambled wall of text where reasoning artifacts (hallucinated code snippets, self-dialogue, planning notes) are indistinguishable from the actual response. Observed with Venice `venice-glm-47` — the model's reasoning about Terraform/AWS config leaked into visible output.
+
+#### Root Cause
+The entire streaming pipeline — from proxy-router SDK through Go FFI to Flutter — only reads `choices[0].delta.content`. The `reasoning_content` field on the delta (the industry-standard convention for separating thinking from answer) is silently dropped at every layer:
+- `ChunkStreaming.String()` in `proxy-router` → reads `Delta.Content` only
+- `ChatCompletionDelta` struct → has `Content` and `Role` fields only, no `ReasoningContent`
+- Go mobile `api.go` → accumulates a single `fullResponse` string
+- Flutter `chat_screen.dart` → accumulates a single `accumulated` string from all deltas
+
+#### Conventions to Support
+Two patterns exist in the wild — we need to handle both:
+
+| Pattern | Used by | How it works |
+|---------|---------|--------------|
+| `delta.reasoning_content` field | Venice, DeepSeek API, OpenAI o-series, GLM-4.7, Qwen-3 | Separate field on the streaming delta; `content` is clean |
+| `<think>...</think>` tags in `content` | Self-hosted models (vLLM, ollama), some proxies | Reasoning wrapped in XML-style tags inside the content string |
+
+Venice also provides `reasoning_effort` parameter (low/medium/high) and `reasoning.enabled: false` to control/disable reasoning.
+
+#### Requirements
+
+**Go / proxy-router layer:**
+- Extend `ChatCompletionDelta` and `ChatCompletionStreamResponseExtra` to parse `reasoning_content` from the delta JSON
+- Extend `ChunkStreaming` to expose both `Content()` and `ReasoningContent()` (or a typed enum: thinking vs answer)
+- Extend the mobile SDK `StreamCallback` to carry a chunk type (thinking vs content) — e.g. `StreamCallback func(text string, isThinking bool, isLast bool) error`
+- Go mobile `api.go`: accumulate two separate buffers (`fullResponse` for content, `thinkingResponse` for reasoning); store both in SQLite metadata
+- FFI signal: extend the delta store to include chunk type so Dart knows whether each piece is thinking or content
+- Fallback: if `reasoning_content` is absent, check for `<think>...</think>` tags in `content` and split them out
+
+**Flutter UI:**
+- Two-zone streaming display:
+  - **Thinking zone** — A compact (3–5 line) scrolling window above the main response bubble, with a muted/dimmed style (e.g. smaller font, italic, 60% opacity). Shows reasoning tokens scrolling by in real time. Auto-collapses when thinking is done and content begins.
+  - **Answer zone** — The normal chat bubble, renders only `content` tokens (the actual answer)
+- Thinking zone should have a "Thinking…" label and a subtle animation while active
+- After completion, the thinking zone collapses to a single "Thought for Xs" row (tap to expand full reasoning)
+- For non-streaming mode: parse the final response and split thinking from answer before rendering
+
+**Conversation history:**
+- When building message history for multi-turn conversations, strip `reasoning_content` from prior assistant messages (per DeepSeek/Venice best practice — reasoning tokens should NOT be fed back as context)
+- Store reasoning separately in message metadata for review but don't include in prompt history
+
+#### Open Questions
+- Should we expose `reasoning_effort` as a tuning parameter in the Chat Tuning drawer? Venice supports low/medium/high for GLM-4.7.
+- Should we add a per-model flag to `active_models.json` cache indicating `supportsReasoning` / `supportsReasoningEffort`? Venice's `/v1/models` endpoint includes these fields.
+- Should the thinking zone be opt-in (hidden by default) or visible by default?
+- How to handle models that sometimes reason and sometimes don't (reasoning is task-dependent)?
+
+---
+
+### 7. ~~Stop / Cancel Generation Button~~ DONE
+
+Amber stop button replaces send during streaming. Full cancellation plumbing through FFI → Go → proxy-router context. Partial responses preserved with "Generation stopped" indicator.
+
+~~**Priority:** High (usability — no way to interrupt runaway responses)~~
+
+#### Problem
+There is no way to stop a response once it starts generating. The send button (`Icons.send_rounded`) simply disables while `_sending` is true. If a model goes off the rails (as observed with GLM-4.7's reasoning leak), produces an unexpectedly long response, or the user simply changes their mind, they must wait for the full response to complete or kill the app.
+
+#### Current State
+- Send button: `IconButton.filled` with `Icons.send_rounded`, `onPressed: _sending ? null : _send` — disabled (greyed out) during generation
+- No cancel token or `context.CancelFunc` is threaded through the FFI → Go → SDK path
+- The Go SDK's `SendPromptWithMessagesAndParams` accepts a `context.Context` (currently `context.Background()`) — so cancellation is architecturally possible but unwired
+- The `StreamCallback` in Go can return an error to abort streaming, but the c-shared wrapper's chunk function always returns `nil`
+
+#### Requirements
+
+**Flutter UI:**
+- While `_sending` is true, replace the send button icon from `Icons.send_rounded` (paper airplane) to `Icons.stop_rounded` (filled square) — standard "stop generation" convention
+- Button color: change from green to amber/red while in stop mode
+- `onPressed` while sending → calls `_stopGeneration()` instead of `_send()`
+- Keep the tuning button disabled while sending (unchanged)
+
+**Cancellation plumbing (FFI → Go → SDK):**
+- Add a new FFI export: `CancelPrompt()` (or `AbortCurrentPrompt()`) that cancels the active streaming context
+- In Go mobile `api.go`: store a `context.CancelFunc` for the in-flight prompt; `CancelPrompt()` calls it
+- Pass the cancellable `context.Context` to `SendPromptWithMessagesAndParams` instead of `context.Background()`
+- When cancelled: the SDK's HTTP streaming reader should close, the goroutine should return, and the `done` callback should fire with a result indicating cancellation
+- Dart bridge: add `cancelPrompt()` method that calls the FFI `CancelPrompt` export
+- Chat screen: on cancel, finalize the streaming bubble with whatever has accumulated so far (don't discard partial responses), mark as "(stopped)" or similar, set `_sending = false`
+
+**Edge cases:**
+- Cancel during session opening (blockchain tx) — should we allow cancelling during the `_reopeningSession` phase? Probably not (tx is already submitted). Disable stop button during session open, enable once streaming starts.
+- Cancel with no streaming started yet (waiting for first token) — should work, just show empty/cancelled state
+- Multiple rapid cancel/send — debounce or disable send for a brief period after cancel
+- Non-streaming mode — cancel should also work (abort the HTTP request via context)
+
+#### Open Questions
+- Should cancelled responses be saved to conversation history? (Probably yes — the partial response is useful context)
+- Should there be a "Regenerate" button after cancellation (re-send the same prompt)?
+- Haptic feedback on stop tap?
+
+---
+
+### 8. ~~Collapsible Wallet Card on Home Screen~~ DONE
+
+Collapsed by default on all platforms. Compact inline row with address + MOR/ETH balances. Privacy toggle slimmed to single row with TEE explainer link.
+
+---
+
+### 9. App Lock UX: Biometrics-First, Auto-Prompt
+
+**Priority:** High (mobile UX — first impression on every app launch)
+
+#### Problem
+The lock screen shows a password field and an "Use biometrics" button. On iOS with Face ID enabled, the user must manually tap the biometrics button — it doesn't auto-trigger. Additionally, biometrics requires setting a password first, which feels backwards on mobile where Face ID is the primary auth method.
+
+#### Requirements
+- **Auto-prompt biometrics on lock screen appear**: If biometrics are enabled, immediately trigger Face ID/Touch ID when the lock screen mounts (in `initState` or after first frame). No user tap required.
+- **Biometrics-only mode**: Allow enabling biometrics without requiring a password. Face ID becomes the sole unlock method.
+- **Password as optional fallback**: If the user wants both, password is the fallback when biometrics fail (e.g. "Face not recognized — enter password"). If biometrics-only, the fallback is the recovery phrase / factory reset path already in place.
+- **Lock screen layout**: When biometrics are primary, de-emphasize the password field (show it only after a failed biometric attempt or via "Use password instead" link).
+- **Settings flow**: Simplify: single toggle "Lock with Face ID" (or Touch ID). Optional "Also set a backup password" toggle underneath.
+
+#### Open Questions
+- Should we support PIN (4-6 digit) as a lighter alternative to full password?
+- On desktop (macOS), should Touch ID on Magic Keyboard auto-trigger too?
+
+---
+
+### 10. ~~Bug: MOR Scanner Doesn't Reflect Active Session Stakes~~ FIXED
+
+**Priority:** Medium (accounting accuracy)
+
+#### Problem
+The "Where's My MOR" wallet breakdown shows 0 MOR in "Active (Staked)" even when sessions are open with staked MOR. Observed on both macOS and iOS — the scanner reports "Scanned 20 of 41 sessions (newest only)" and the staked amount for the active session is missing from the total. The gap between expected balance (e.g. 105 MOR deposited) and displayed "In Wallet" (e.g. 96.7956 MOR) is unaccounted.
+
+#### Likely Cause
+The Go SDK `MorScanner` caps scanning to the 20 newest sessions. If the active session's on-chain staking data falls outside that window, or if the scanner reads `approvedAmount` rather than actual locked stake, the active stake won't appear.
+
+#### Requirements
+- Active session stakes must always appear in the "Active (Staked)" total
+- The gap between deposited and spendable MOR should be fully accounted (staked + on-hold + gas spent)
+- Consider scanning all sessions with open status, not just the newest N
+
+---
+
+### 9. Automated Regression Testing
+
+**Priority:** Medium (engineering velocity)
+
+#### Problem
+Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Android/Linux/Windows is unsustainable. Each platform has unique behaviors (safe areas, clipboard, keyboard, permissions) that need repeated verification after every change.
+
+#### Requirements
+- **Widget tests** for critical UI flows: onboarding, chat send/receive, wallet display, settings navigation
+- **Integration tests** (`flutter test integration_test/`) that run on simulator: full onboarding → import wallet → open chat → send prompt → verify response renders
+- **Golden image tests** for layout regression on key screen sizes (iPhone SE, iPhone 16 Pro, iPad Pro)
+- **CI pipeline** (GitHub Actions): run widget + integration tests on macOS runner with iOS simulator
+- **Go SDK mock** for tests that don't need real blockchain/network (mock FFI responses)
+
+#### Open Questions
+- Which test framework? Flutter's built-in `flutter_test` + `integration_test`, or Patrol / Maestro for more natural mobile testing?
+- Should we test against a local mock provider or the real Morpheus testnet?
+- How to handle Keychain/secure storage in test environments?
+- Screenshot comparison tooling for golden tests across platforms?
+
+---
+
+*Last updated: 2026-04-16*
