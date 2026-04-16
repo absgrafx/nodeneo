@@ -2201,68 +2201,64 @@ class _ModelTile extends StatelessWidget {
               ),
               const SizedBox(width: 10),
 
-              // --- Left: name · type · tags ---
               Expanded(
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      child: Text(
-                        entry.name,
-                        style: theme.textTheme.titleMedium?.copyWith(fontSize: 13, fontWeight: FontWeight.w600),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            entry.name,
+                            style: theme.textTheme.titleMedium?.copyWith(fontSize: 13, fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                        if (price != null)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Text(price, style: TextStyle(fontSize: 10, color: theme.hintColor)),
+                          ),
+                      ],
                     ),
-                    if (entry.type.isNotEmpty) ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 5),
-                        child: Text('·', style: TextStyle(color: theme.hintColor, fontSize: 12)),
-                      ),
-                      Text(
-                        entry.type,
-                        style: const TextStyle(color: Color(0xFF6B7280), fontSize: 10, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                    ...entry.tags
-                        .where((t) => t.toLowerCase() != entry.type.toLowerCase())
-                        .take(2)
-                        .map((tag) => Padding(
-                              padding: const EdgeInsets.only(left: 5),
-                              child: Text(
-                                tag,
-                                style: TextStyle(
-                                  color: tag.toLowerCase() == 'tee'
-                                      ? NeoTheme.green.withValues(alpha: 0.7)
-                                      : const Color(0xFF6B7280),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            )),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        if (entry.type.isNotEmpty)
+                          Text(
+                            entry.type,
+                            style: const TextStyle(color: Color(0xFF6B7280), fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ...entry.tags
+                            .where((t) => t.toLowerCase() != entry.type.toLowerCase())
+                            .take(3)
+                            .map((tag) => Padding(
+                                  padding: const EdgeInsets.only(left: 5),
+                                  child: Text(
+                                    tag,
+                                    style: TextStyle(
+                                      color: tag.toLowerCase() == 'tee'
+                                          ? NeoTheme.green.withValues(alpha: 0.7)
+                                          : const Color(0xFF6B7280),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                )),
+                        const Spacer(),
+                        if (entry.providers > 0) ...[
+                          Icon(Icons.dns_outlined, size: 11, color: theme.hintColor),
+                          const SizedBox(width: 2),
+                          Text(
+                            '${entry.providers}',
+                            style: TextStyle(fontSize: 10, color: theme.hintColor),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
-              ),
-
-              // --- Right: price · providers ---
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (price != null)
-                    Text(price, style: TextStyle(fontSize: 10, color: theme.hintColor)),
-                  if (price != null && entry.providers > 0)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 5),
-                      child: Text('·', style: TextStyle(color: theme.hintColor, fontSize: 10)),
-                    ),
-                  if (entry.providers > 0) ...[
-                    Icon(Icons.dns_outlined, size: 11, color: theme.hintColor),
-                    const SizedBox(width: 2),
-                    Text(
-                      '${entry.providers}',
-                      style: TextStyle(fontSize: 10, color: theme.hintColor),
-                    ),
-                  ],
-                ],
               ),
             ],
           ),
