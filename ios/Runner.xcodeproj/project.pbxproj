@@ -497,6 +497,7 @@
 					Security,
 					"-framework",
 					CoreFoundation,
+					"-rdynamic",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.absgrafx.nodeneo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -704,6 +705,7 @@
 					Security,
 					"-framework",
 					CoreFoundation,
+					"-rdynamic",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.absgrafx.nodeneo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -742,6 +744,7 @@
 					Security,
 					"-framework",
 					CoreFoundation,
+					"-rdynamic",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.absgrafx.nodeneo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
