@@ -180,6 +180,19 @@ When running the **full** proxy-router binary, these routes mirror what the embe
 
 **Cold start**: `app.dart` tries `readMnemonic()` first (backward compat), then `readPrivateKey()`. Both paths derive the encryption key via SHA-256 and open the wallet-scoped DB.
 
+## Responsive UI Policy
+
+Node Neo commits to **three form factors** — `compact` (<600 px), `medium` (600-839 px), `expanded` (>=840 px) — matching Material 3 window-size classes. Layout decisions branch on form factor via `lib/services/form_factor.dart`; platform capability gating lives in `lib/services/platform_caps.dart`. The two concerns are orthogonal and must not be mixed.
+
+Core rules:
+
+- **Homogeneity first.** If the compact design is readable at wide widths (e.g. the two-line `_ModelTile`), ship it on every platform.
+- **Cap, don't stretch.** Wrap scrollable screens in `MaxContentWidth` (default 960 px) so ultrawide monitors read proportionally.
+- **Branch on form factor, not platform.** `isCompact(ctx)` decides layout; `Platform.isXxx` never does.
+- **Inline first, split when painful.** Promote to `foo_screen_compact.dart` + `foo_screen_expanded.dart` only when divergence exceeds ~30 percent.
+
+See **`.ai-docs/ui_responsive_design.md`** for the full decision guide, screen inventory, and new-screen checklist.
+
 ## Settings UI Pattern
 
 All settings screens use a consistent **accordion layout** via the shared `SectionCard` widget (`lib/widgets/section_card.dart`):
