@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../config/chain_config.dart';
+import '../../services/form_factor.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
 import '../../constants/app_brand.dart';
@@ -94,7 +95,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     if (!isDefaults) {
       final err = RpcSettingsStore.validateUserInput(raw);
       if (err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(err)));
         return;
       }
     }
@@ -127,7 +130,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       setState(() => _testResults = results);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('$okCount of ${results.length} RPC${results.length == 1 ? '' : 's'} passed (Base chainId $defaultBaseChainId)'),
+          content: Text(
+            '$okCount of ${results.length} RPC${results.length == 1 ? '' : 's'} passed (Base chainId $defaultBaseChainId)',
+          ),
           duration: const Duration(seconds: 4),
         ),
       );
@@ -143,7 +148,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       _ctrl.clear();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Using built-in public RPCs. Restarting…')),
+        const SnackBar(
+          content: Text('Using built-in public RPCs. Restarting…'),
+        ),
       );
       Navigator.of(context).pop(true);
     } finally {
@@ -158,139 +165,171 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Network')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                Text('Custom RPC (optional)', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 10),
-                Text(
-                  'Most users should stay on the built-in public Base endpoints. '
-                  'Add your own only if you hit rate limits and have a URL you trust '
-                  '(e.g. from your own node or a provider you pay). '
-                  '${AppBrand.displayName} does not use a central relay — traffic goes straight from this device to the RPC(s) you configure.\n\n'
-                  'Before saving, each URL is checked with a live JSON-RPC call (eth_chainId must be Base mainnet, $defaultBaseChainId). '
-                  'Use Test URLs to verify without switching the app off the current RPC.',
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.4),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  _overridePreview != null && _overridePreview!.isNotEmpty
-                      ? 'You are overriding defaults.'
-                      : 'Using built-in public RPC list.',
-                  style: theme.textTheme.labelSmall?.copyWith(color: NeoTheme.green.withValues(alpha: 0.9)),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _ctrl,
-                  maxLines: 5,
-                  style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12),
-                  decoration: InputDecoration(
-                    labelText: 'ETH_RPC_URL (Base mainnet)',
-                    hintText: 'https://… or several separated by comma / newline',
-                    alignLabelWithHint: true,
-                    border: const OutlineInputBorder(),
+          ? const Center(
+              child: CircularProgressIndicator(color: NeoTheme.green),
+            )
+          : MaxContentWidth(
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  Text(
+                    'Custom RPC (optional)',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  hasBuildTimeRpc
-                      ? 'Using a bundled dedicated RPC (not shown for security).'
-                      : 'Built-in default (first URL): ${defaultBaseMainnetRpcUrls.split(',').first}',
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
-                ),
-                const SizedBox(height: 24),
-                OutlinedButton.icon(
-                  onPressed: (_saving || _testing) ? null : _testOnly,
-                  icon: _testing
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.wifi_tethering, size: 20),
-                  label: Text(_testing
-                      ? 'Testing…'
-                      : _ctrl.text.trim().isEmpty
+                  const SizedBox(height: 10),
+                  Text(
+                    'Most users should stay on the built-in public Base endpoints. '
+                    'Add your own only if you hit rate limits and have a URL you trust '
+                    '(e.g. from your own node or a provider you pay). '
+                    '${AppBrand.displayName} does not use a central relay — traffic goes straight from this device to the RPC(s) you configure.\n\n'
+                    'Before saving, each URL is checked with a live JSON-RPC call (eth_chainId must be Base mainnet, $defaultBaseChainId). '
+                    'Use Test URLs to verify without switching the app off the current RPC.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                      height: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    _overridePreview != null && _overridePreview!.isNotEmpty
+                        ? 'You are overriding defaults.'
+                        : 'Using built-in public RPC list.',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: NeoTheme.green.withValues(alpha: 0.9),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _ctrl,
+                    maxLines: 5,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: 12,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: 'ETH_RPC_URL (Base mainnet)',
+                      hintText:
+                          'https://… or several separated by comma / newline',
+                      alignLabelWithHint: true,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    hasBuildTimeRpc
+                        ? 'Using a bundled dedicated RPC (not shown for security).'
+                        : 'Built-in default (first URL): ${defaultBaseMainnetRpcUrls.split(',').first}',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.hintColor,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  OutlinedButton.icon(
+                    onPressed: (_saving || _testing) ? null : _testOnly,
+                    icon: _testing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.wifi_tethering, size: 20),
+                    label: Text(
+                      _testing
+                          ? 'Testing…'
+                          : _ctrl.text.trim().isEmpty
                           ? 'Test built-in RPCs'
-                          : 'Test URLs (no save)'),
-                ),
-                if (_testResults != null) ...[
-                  const SizedBox(height: 16),
-                  ..._testResults!.map((r) {
-                    final ok = r['ok'] == true;
-                    final url = r['url'] as String;
-                    final err = r['error'] as String?;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: ok
-                              ? NeoTheme.green.withValues(alpha: 0.08)
-                              : Colors.red.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
+                          : 'Test URLs (no save)',
+                    ),
+                  ),
+                  if (_testResults != null) ...[
+                    const SizedBox(height: 16),
+                    ..._testResults!.map((r) {
+                      final ok = r['ok'] == true;
+                      final url = r['url'] as String;
+                      final err = r['error'] as String?;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
                             color: ok
-                                ? NeoTheme.green.withValues(alpha: 0.25)
-                                : Colors.red.withValues(alpha: 0.25),
+                                ? NeoTheme.green.withValues(alpha: 0.08)
+                                : Colors.red.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: ok
+                                  ? NeoTheme.green.withValues(alpha: 0.25)
+                                  : Colors.red.withValues(alpha: 0.25),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                ok
+                                    ? Icons.check_circle_rounded
+                                    : Icons.cancel_rounded,
+                                size: 18,
+                                color: ok ? NeoTheme.green : Colors.red,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      url,
+                                      style: const TextStyle(
+                                        fontFamily: 'JetBrains Mono',
+                                        fontSize: 11,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (err != null)
+                                      Text(
+                                        err,
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.red,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
-                              size: 18,
-                              color: ok ? NeoTheme.green : Colors.red,
+                      );
+                    }),
+                  ],
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: (_saving || _testing) ? null : _save,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: NeoTheme.green,
+                    ),
+                    child: _saving
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    url,
-                                    style: const TextStyle(
-                                      fontFamily: 'JetBrains Mono',
-                                      fontSize: 11,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (err != null)
-                                    Text(
-                                      err,
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.red,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
+                          )
+                        : const Text('Save & reconnect'),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton(
+                    onPressed: (_saving || _testing) ? null : _useDefaults,
+                    child: const Text('Clear — use built-in public RPCs'),
+                  ),
                 ],
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: (_saving || _testing) ? null : _save,
-                  style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-                  child: _saving
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Save & reconnect'),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton(
-                  onPressed: (_saving || _testing) ? null : _useDefaults,
-                  child: const Text('Clear — use built-in public RPCs'),
-                ),
-              ],
+              ),
             ),
     );
   }

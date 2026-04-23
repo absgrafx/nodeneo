@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../services/bridge.dart';
+import '../../services/form_factor.dart';
 import '../../services/platform_caps.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
@@ -17,7 +18,11 @@ class BackupResetScreen extends StatefulWidget {
   final Future<void> Function()? onWalletErased;
   final Future<void> Function()? onFactoryReset;
 
-  const BackupResetScreen({super.key, this.onWalletErased, this.onFactoryReset});
+  const BackupResetScreen({
+    super.key,
+    this.onWalletErased,
+    this.onFactoryReset,
+  });
 
   @override
   State<BackupResetScreen> createState() => _BackupResetScreenState();
@@ -58,7 +63,10 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
       return;
     }
 
-    final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
+    final ts = DateTime.now()
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .substring(0, 19);
     final fileName = 'nodeneo-backup-$ts.nnbak';
 
     setState(() => _exporting = true);
@@ -69,7 +77,12 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
         // iOS/Android: export to temp file, read bytes, pass to save dialog.
         final tmpDir = await getTemporaryDirectory();
         final tmpPath = '${tmpDir.path}/$fileName';
-        GoBridge().exportBackup(tmpPath, passphrase, info.version, _walletPrefix());
+        GoBridge().exportBackup(
+          tmpPath,
+          passphrase,
+          info.version,
+          _walletPrefix(),
+        );
         final bytes = await File(tmpPath).readAsBytes();
         final outputPath = await FilePicker.saveFile(
           dialogTitle: 'Save backup',
@@ -79,26 +92,33 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
         await File(tmpPath).delete().catchError((_) => File(tmpPath));
         if (outputPath == null) return;
       } else {
-        final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+        final dir =
+            await getDownloadsDirectory() ??
+            await getApplicationDocumentsDirectory();
         final outputPath = await FilePicker.saveFile(
           dialogTitle: 'Save backup',
           fileName: fileName,
           initialDirectory: dir.path,
         );
         if (outputPath == null) return;
-        GoBridge().exportBackup(outputPath, passphrase, info.version, _walletPrefix());
+        GoBridge().exportBackup(
+          outputPath,
+          passphrase,
+          info.version,
+          _walletPrefix(),
+        );
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Backup saved to $fileName')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Backup saved to $fileName')));
       }
     } on GoBridgeException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: ${e.message}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Export failed: ${e.message}')));
       }
     } finally {
       if (mounted) setState(() => _exporting = false);
@@ -110,7 +130,9 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
     if (passphrase == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No wallet found — cannot decrypt backup.')),
+          const SnackBar(
+            content: Text('No wallet found — cannot decrypt backup.'),
+          ),
         );
       }
       return;
@@ -155,7 +177,9 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
         final convos = manifest['conversations'] ?? 0;
         final msgs = manifest['messages'] ?? 0;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Imported $convos conversations, $msgs messages.')),
+          SnackBar(
+            content: Text('Imported $convos conversations, $msgs messages.'),
+          ),
         );
       }
     } on GoBridgeException catch (e) {
@@ -173,75 +197,76 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
   }
 
   Future<void> _confirmFactoryReset() async {
-    await showFactoryResetFlow(
-      context,
-      onFactoryReset: widget.onFactoryReset,
-    );
+    await showFactoryResetFlow(context, onFactoryReset: widget.onFactoryReset);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Backup & Reset')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          SectionCard(
-            icon: Icons.backup_outlined,
-            title: 'Data Backup',
-            child: Column(
-              children: [
-                _SettingsCard(
-                  icon: Icons.upload_file_outlined,
-                  iconColor: NeoTheme.emerald,
-                  title: 'Export Backup',
-                  subtitle: 'Save conversations and settings to an encrypted file',
-                  onTap: _exporting ? () {} : _exportBackup,
-                ),
-                const Divider(height: 1, indent: 56),
-                _SettingsCard(
-                  icon: Icons.download_outlined,
-                  iconColor: NeoTheme.emerald,
-                  title: 'Import Backup',
-                  subtitle: 'Restore from a .nnbak file (replaces current data)',
-                  onTap: _importing ? () {} : _importBackup,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.warning_amber_rounded,
-            title: 'Danger Zone',
-            accentColor: NeoTheme.red,
-            child: Column(
-              children: [
-                _SettingsCard(
-                  icon: Icons.delete_outline,
-                  iconColor: NeoTheme.red.withValues(alpha: 0.9),
-                  title: 'Erase Wallet on This Device',
-                  titleColor: NeoTheme.red.withValues(alpha: 0.95),
-                  subtitle:
-                      'Removes saved phrase and conversations · on-chain funds unchanged',
-                  onTap: () => showEraseWalletFlow(
-                    context,
-                    onWalletErased: widget.onWalletErased,
+      body: MaxContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            SectionCard(
+              icon: Icons.backup_outlined,
+              title: 'Data Backup',
+              child: Column(
+                children: [
+                  _SettingsCard(
+                    icon: Icons.upload_file_outlined,
+                    iconColor: NeoTheme.emerald,
+                    title: 'Export Backup',
+                    subtitle:
+                        'Save conversations and settings to an encrypted file',
+                    onTap: _exporting ? () {} : _exportBackup,
                   ),
-                ),
-                const Divider(height: 1, indent: 56),
-                _SettingsCard(
-                  icon: Icons.delete_forever_outlined,
-                  iconColor: NeoTheme.red.withValues(alpha: 0.9),
-                  title: 'Full Factory Reset',
-                  titleColor: NeoTheme.red.withValues(alpha: 0.95),
-                  subtitle:
-                      'Erase ALL wallets, keys, databases, logs, and settings',
-                  onTap: _confirmFactoryReset,
-                ),
-              ],
+                  const Divider(height: 1, indent: 56),
+                  _SettingsCard(
+                    icon: Icons.download_outlined,
+                    iconColor: NeoTheme.emerald,
+                    title: 'Import Backup',
+                    subtitle:
+                        'Restore from a .nnbak file (replaces current data)',
+                    onTap: _importing ? () {} : _importBackup,
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.warning_amber_rounded,
+              title: 'Danger Zone',
+              accentColor: NeoTheme.red,
+              child: Column(
+                children: [
+                  _SettingsCard(
+                    icon: Icons.delete_outline,
+                    iconColor: NeoTheme.red.withValues(alpha: 0.9),
+                    title: 'Erase Wallet on This Device',
+                    titleColor: NeoTheme.red.withValues(alpha: 0.95),
+                    subtitle:
+                        'Removes saved phrase and conversations · on-chain funds unchanged',
+                    onTap: () => showEraseWalletFlow(
+                      context,
+                      onWalletErased: widget.onWalletErased,
+                    ),
+                  ),
+                  const Divider(height: 1, indent: 56),
+                  _SettingsCard(
+                    icon: Icons.delete_forever_outlined,
+                    iconColor: NeoTheme.red.withValues(alpha: 0.9),
+                    title: 'Full Factory Reset',
+                    titleColor: NeoTheme.red.withValues(alpha: 0.95),
+                    subtitle:
+                        'Erase ALL wallets, keys, databases, logs, and settings',
+                    onTap: _confirmFactoryReset,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

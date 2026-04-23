@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/app_lock_service.dart';
+import '../../services/form_factor.dart';
 import '../../theme.dart';
 import 'app_lock_autofill.dart';
 
@@ -85,7 +86,11 @@ class _AppLockSetupScreenState extends State<AppLockSetupScreen> {
       Navigator.of(context).pop(true);
       messenger?.showSnackBar(
         SnackBar(
-          content: Text(widget.changingPassword ? 'App password updated.' : 'App lock enabled.'),
+          content: Text(
+            widget.changingPassword
+                ? 'App password updated.'
+                : 'App lock enabled.',
+          ),
         ),
       );
     } finally {
@@ -99,111 +104,146 @@ class _AppLockSetupScreenState extends State<AppLockSetupScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.changingPassword ? 'Change app password' : 'Set app password'),
+        title: Text(
+          widget.changingPassword ? 'Change app password' : 'Set app password',
+        ),
       ),
       body: SafeArea(
         child: AutofillGroup(
-          child: ListView(
-            padding: const EdgeInsets.all(24),
-            children: [
-              Text(
-                widget.changingPassword
-                    ? 'Enter your current password, then a new one. Your password manager can save the new password.'
-                    : 'Choose an app password separate from your wallet seed. Save it in your password manager when prompted.',
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.4),
-              ),
-              const SizedBox(height: 24),
-              AppLockHiddenUsernameForAutofill(controller: _user),
-              const SizedBox(height: 8),
-              if (widget.changingPassword) ...[
+          child: MaxContentWidth(
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                Text(
+                  widget.changingPassword
+                      ? 'Enter your current password, then a new one. Your password manager can save the new password.'
+                      : 'Choose an app password separate from your wallet seed. Save it in your password manager when prompted.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.hintColor,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                AppLockHiddenUsernameForAutofill(controller: _user),
+                const SizedBox(height: 8),
+                if (widget.changingPassword) ...[
+                  TextField(
+                    controller: _current,
+                    focusNode: _currentFocus,
+                    obscureText: _obscure0,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    enableIMEPersonalizedLearning: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.password],
+                    keyboardType: TextInputType.visiblePassword,
+                    onSubmitted: (_) => _pwFocus.requestFocus(),
+                    decoration: InputDecoration(
+                      labelText: 'Current app password',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscure0
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                        ),
+                        onPressed: () => setState(() => _obscure0 = !_obscure0),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 TextField(
-                  controller: _current,
-                  focusNode: _currentFocus,
-                  obscureText: _obscure0,
+                  controller: _pw,
+                  focusNode: _pwFocus,
+                  obscureText: _obscure1,
                   autocorrect: false,
                   enableSuggestions: false,
                   enableIMEPersonalizedLearning: false,
                   smartDashesType: SmartDashesType.disabled,
                   smartQuotesType: SmartQuotesType.disabled,
                   textInputAction: TextInputAction.next,
-                  autofillHints: const [AutofillHints.password],
+                  autofillHints: widget.changingPassword
+                      ? const [AutofillHints.newPassword]
+                      : const [
+                          AutofillHints.newPassword,
+                          AutofillHints.password,
+                        ],
                   keyboardType: TextInputType.visiblePassword,
-                  onSubmitted: (_) => _pwFocus.requestFocus(),
+                  onSubmitted: (_) => _pw2Focus.requestFocus(),
                   decoration: InputDecoration(
-                    labelText: 'Current app password',
+                    labelText: widget.changingPassword
+                        ? 'New password'
+                        : 'App password',
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
-                      icon: Icon(_obscure0 ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                      onPressed: () => setState(() => _obscure0 = !_obscure0),
+                      icon: Icon(
+                        _obscure1
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () => setState(() => _obscure1 = !_obscure1),
                     ),
                   ),
                 ),
                 const SizedBox(height: 16),
-              ],
-              TextField(
-                controller: _pw,
-                focusNode: _pwFocus,
-                obscureText: _obscure1,
-                autocorrect: false,
-                enableSuggestions: false,
-                enableIMEPersonalizedLearning: false,
-                smartDashesType: SmartDashesType.disabled,
-                smartQuotesType: SmartQuotesType.disabled,
-                textInputAction: TextInputAction.next,
-                autofillHints: widget.changingPassword
-                    ? const [AutofillHints.newPassword]
-                    : const [AutofillHints.newPassword, AutofillHints.password],
-                keyboardType: TextInputType.visiblePassword,
-                onSubmitted: (_) => _pw2Focus.requestFocus(),
-                decoration: InputDecoration(
-                  labelText: widget.changingPassword ? 'New password' : 'App password',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscure1 ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                    onPressed: () => setState(() => _obscure1 = !_obscure1),
+                TextField(
+                  controller: _pw2,
+                  focusNode: _pw2Focus,
+                  obscureText: _obscure2,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  enableIMEPersonalizedLearning: false,
+                  smartDashesType: SmartDashesType.disabled,
+                  smartQuotesType: SmartQuotesType.disabled,
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.newPassword],
+                  keyboardType: TextInputType.visiblePassword,
+                  onSubmitted: (_) => _submit(),
+                  decoration: InputDecoration(
+                    labelText: 'Confirm password',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscure2
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () => setState(() => _obscure2 = !_obscure2),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _pw2,
-                focusNode: _pw2Focus,
-                obscureText: _obscure2,
-                autocorrect: false,
-                enableSuggestions: false,
-                enableIMEPersonalizedLearning: false,
-                smartDashesType: SmartDashesType.disabled,
-                smartQuotesType: SmartQuotesType.disabled,
-                textInputAction: TextInputAction.done,
-                autofillHints: const [AutofillHints.newPassword],
-                keyboardType: TextInputType.visiblePassword,
-                onSubmitted: (_) => _submit(),
-                decoration: InputDecoration(
-                  labelText: 'Confirm password',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscure2 ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                    onPressed: () => setState(() => _obscure2 = !_obscure2),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: Color(0xFFF87171),
+                      fontSize: 13,
+                    ),
                   ),
+                ],
+                const SizedBox(height: 28),
+                FilledButton(
+                  onPressed: _busy ? null : _submit,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: NeoTheme.green,
+                  ),
+                  child: _busy
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Save'),
                 ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(_error!, style: const TextStyle(color: Color(0xFFF87171), fontSize: 13)),
               ],
-              const SizedBox(height: 28),
-              FilledButton(
-                onPressed: _busy ? null : _submit,
-                style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-                child: _busy
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Text('Save'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
