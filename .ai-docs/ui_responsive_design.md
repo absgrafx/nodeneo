@@ -188,28 +188,35 @@ tree, split. Otherwise keep them inline.
 
 ## Current screen inventory
 
-As of the v7.0.0 merge, every screen lives in a single file and uses
-`compact` layouts. This table is the migration tracker — tick each
-off as it becomes form-factor-aware.
+Status legend: **Capped** = outer scrollable wrapped in
+`MaxContentWidth`. **Homogeneous** = single layout across all form
+factors (compact/medium/expanded look the same, just capped).
+**Needs design** = divergence would meaningfully improve readability
+and is tracked as future work.
 
-| Screen                          | Form-factor aware? | Plan                                     |
-|---------------------------------|--------------------|------------------------------------------|
-| `onboarding_screen.dart`        | No                 | Inline — cap max width; no layout change |
-| `home_screen.dart`              | Tiles, partial     | Cap model list width; nav unchanged      |
-| `chat_screen.dart`              | No                 | Cap chat column; drawer stays until split |
-| `conversation_transcript_screen.dart` | No           | Cap max width                            |
-| `wallet_screen.dart`            | No                 | Cap; no structural change planned        |
-| `sessions_screen.dart`          | No                 | Cap; tiles stay two-line                 |
-| `expert_screen.dart`            | No                 | Cap; accordions stay vertical            |
-| `network_settings_screen.dart`  | No                 | Cap; accordions stay vertical            |
-| `backup_reset_screen.dart`      | No                 | Cap; no change                           |
-| `about_screen.dart`             | No                 | Cap; no change                           |
-| `app_lock*_screen.dart`         | No                 | Cap; PIN pad stays compact               |
-| `wallet_security_actions.dart`  | No                 | Cap; no change                           |
+| Screen                                  | Status                 | Notes                                                                 |
+|-----------------------------------------|------------------------|-----------------------------------------------------------------------|
+| `onboarding_screen.dart`                | Homogeneous            | Already caps at 420 px via `ConstrainedBox` in the form body.         |
+| `home_screen.dart`                      | Needs design           | Two-line `_ModelTile` already homogeneous. Model list + wallet card still span full window — candidate for split-file. |
+| `chat_screen.dart`                      | Needs design           | Bubbles use `MediaQuery.width * 0.88`. Will cap once chat moves to `MaxContentWidth` + `LayoutBuilder` bubbles. Drawer stays on mobile. |
+| `conversation_transcript_screen.dart`   | Capped                 | Column wrapped in `MaxContentWidth`. Bubble still uses `MediaQuery.width * 0.88` — visually OK because parent is capped. |
+| `wallet_screen.dart`                    | Capped                 | `ListView` wrapped in `MaxContentWidth`.                              |
+| `sessions_screen.dart`                  | Capped                 | `ListView` wrapped; iCloud Keychain block routed through `PlatformCaps.supportsIcloudKeychainSync`. |
+| `expert_screen.dart`                    | Capped                 | `ListView` wrapped in `MaxContentWidth`.                              |
+| `network_settings_screen.dart`          | Capped                 | `ListView` wrapped in `MaxContentWidth`.                              |
+| `backup_reset_screen.dart`              | Capped                 | `ListView` wrapped in `MaxContentWidth`.                              |
+| `about_screen.dart`                     | Capped                 | `ListView` wrapped; Finder-reveal gated via `PlatformCaps.supportsRevealInFileManager`. |
+| `app_lock_setup_screen.dart`            | Capped                 | `ListView` wrapped in `MaxContentWidth`.                              |
+| `app_lock_screen.dart`                  | Intentionally skipped  | Uses `Column` + `Spacer` for full-height login layout. Cap would break Spacer — revisit via `Align + ConstrainedBox` when login gets a desktop refresh. |
+| `wallet_security_actions.dart`          | N/A                    | Dialog-only flows; `AlertDialog` handles its own sizing.              |
 
-When a screen *would benefit* from expanded-class divergence (chat
-with a persistent conversation list on desktop; home with model
-detail pane on the side), promote it to the split-file pattern.
+**Promotion candidates** (would benefit from split-file expanded
+layout in a future pass):
+
+- `home_screen.dart` — master-detail (model list left, selected model
+  detail right) on expanded.
+- `chat_screen.dart` — persistent conversation history pane on expanded
+  instead of a drawer.
 
 ---
 
