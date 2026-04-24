@@ -14,7 +14,13 @@ Map<String, dynamic> _scanWalletMorSync(void _) => GoBridge().scanWalletMOR();
 
 /// Wallet screen: key management + active on-chain sessions.
 class WalletScreen extends StatefulWidget {
-  const WalletScreen({super.key});
+  /// When true, kick off the "Where's My MOR?" scan immediately on open
+  /// instead of waiting for the user to tap the section. Used by the wallet
+  /// card's purple deep-link pill on the home screen so the user lands
+  /// directly in a running scan.
+  final bool autoRunScan;
+
+  const WalletScreen({super.key, this.autoRunScan = false});
 
   @override
   State<WalletScreen> createState() => _WalletScreenState();
@@ -39,6 +45,11 @@ class _WalletScreenState extends State<WalletScreen> {
   void initState() {
     super.initState();
     _refreshSessions();
+    if (widget.autoRunScan) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _runScan();
+      });
+    }
   }
 
   // ── MOR scanner ──────────────────────────────────────────────

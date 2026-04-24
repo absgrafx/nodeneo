@@ -226,7 +226,13 @@ All sections collapsed by default — each screen opens as a clean dashboard of 
 
 **Streaming UI:** With **Streaming reply** on (default), Dart uses **`SendPromptWithOptionsAsync`** with `stream: true` and **`NativeCallable.listener`** so provider deltas update the chat bubble in real time (~30fps UI throttle, `jumpTo` scrolling). Non-streaming mode uses **`SendPromptWithOptionsAsync`** with `stream: false`. Both paths support chat tuning parameters (temperature, top_p, max_tokens, frequency/presence penalty) and system prompts via per-conversation persistence in SQLite.
 
-**Known limitation — reasoning models:** The streaming pipeline only reads `choices[0].delta.content`. Reasoning/thinking models (GLM-4.7, DeepSeek-R1, Qwen-3 Thinking) that emit chain-of-thought in `delta.reasoning_content` or `<think>` tags have their reasoning tokens either dropped or mixed into the visible response. No stop/cancel mechanism exists for in-flight requests. See backlog items #6 and #7.
+**Reasoning / thinking models:** The streaming pipeline distinguishes `choices[0].delta.content` (answer) from `choices[0].delta.reasoning_content` (chain-of-thought) and falls back to `<think>…</think>` tag extraction for providers that inline reasoning. The UI renders a compact "Thinking…" zone above the answer bubble that auto-collapses to `Thought for Xs` once the answer stream begins; reasoning tokens are **never** fed back into the prompt history on multi-turn conversations.
+
+**Stop / Cancel:** During an in-flight prompt the send button swaps to an amber stop icon. Cancellation propagates through `CancelPrompt` FFI → Go `context.CancelFunc` → proxy-router HTTP context close; any tokens already streamed stay in the bubble marked "Generation stopped" so partial answers are never discarded.
+
+**Pre-session confirmation:** Tapping a model tile on the home screen opens `widgets/session_confirmation_sheet.dart` before any on-chain stake is posted. The modal shows the model name, TEE badge, duration dropdown, and the exact MOR stake derived linearly from the tile's calibrated hourly stake — so the number the user agrees to is the number the list advertised. Confirm → `OpenSessionByModelId` + chat navigation; Cancel → no chain interaction.
+
+**Provider endpoint redaction:** `lib/utils/error_redaction.dart` strips `http(s)://…`, `host:port`, and bare IPv4 addresses from every error string before it hits the chat UI. Full detail still lands in the app log for debugging, but users and screen-shares see a neutral `<provider endpoint>` placeholder.
 
 **Response metadata:** Each assistant message stores the full raw provider response JSON alongside the text. The Response Info sheet shows summary rows (latency, token counts, finish reason, model) and the complete JSON for debugging.
 
@@ -335,6 +341,12 @@ All user preferences (default tuning, system prompt, session duration, streaming
 - Traffic is direct: **device → Base RPC + active models HTTP + provider (MOR-RPC)** via the embedded SDK (no separate C-node process in Node Neo)
 - TEE flows use the same attestation paths as upstream proxy-router where applicable
 - No Marketplace-API or central relay in the hot path for chat
+- Provider IPs / host:port / URLs are redacted from any error message surfaced in the UI (see `lib/utils/error_redaction.dart`); full detail stays in the local app log
+
+### TEE Attestation (TDX)
+- On-device attestation for every provider that serves a `:tee` model: CPU quote fetch over HTTPS → portal cryptographic verification (SecretAI) → RTMR3 compared against cosign-verified golden values for the fork's build version
+- **Sigstore TUF cache** is redirected to the SDK's `dataDir` (under iOS `Library/Application Support/…`) via `sdk.SetSigstoreCacheDir(dataDir)` — iOS sandbox otherwise rejects the library's default `./.sigstore` path
+- Quote + TLS fingerprint cached per provider endpoint for sub-second reconnects; cache survives app relaunch and invalidates automatically when the provider reports a new version
 
 ---
 
@@ -435,8 +447,9 @@ A Cloudflare Tunnel (`cloudflared`) quick tunnel was validated end-to-end but is
 
 ## Target Platforms (Priority Order)
 
-1. **macOS** (arm64) — development and testing
-2. **iOS** (arm64) — primary target, iPhone + iPad
-3. **Android** (arm64) — secondary mobile target
-4. **Linux** (x86_64, arm64) — future
-5. **Windows** (x86_64) — future
+1. **macOS** (Apple Silicon + Intel) — **shipping** — signed + notarized DMG via GitHub Releases
+2. **iOS — iPhone** (arm64, iOS 16+) — **shipping** — TEE attestation working, TestFlight track open
+3. **iOS — iPad** — planned, adaptive split-view on top of the existing `FormFactor` policy
+4. **Android** (arm64) — planned, `gomobile` target exists
+5. **Linux** (x86_64, arm64) — future
+6. **Windows** (x86_64) — future

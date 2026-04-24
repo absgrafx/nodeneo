@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'error_redaction.dart';
+
 /// Human-first session open failure: [headline] in red in the UI; raw JSON only under "Technical details".
 class SessionOpenErrorParts {
   const SessionOpenErrorParts({
@@ -29,7 +31,10 @@ class SessionOpenErrorParts {
 const int _maxTechnicalChars = 900;
 
 String _truncateTechnical(String raw) {
-  final oneLine = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+  // Redact first, then truncate — so a provider endpoint straddling the
+  // character budget doesn't leak half an IP.
+  final redacted = redactProviderEndpoints(raw);
+  final oneLine = redacted.replaceAll(RegExp(r'\s+'), ' ').trim();
   if (oneLine.length <= _maxTechnicalChars) return oneLine;
   return '${oneLine.substring(0, _maxTechnicalChars)}…';
 }
@@ -215,7 +220,9 @@ SessionOpenErrorParts explainSessionOpenError(String? raw) {
   }
 
   if (reasons.isNotEmpty) {
-    final first = reasons.first;
+    // Reasons often embed the provider's raw endpoint — redact before it
+    // reaches `supporting` so we don't leak IPs into the red error banner.
+    final first = redactProviderEndpoints(reasons.first);
     final fl = first.toLowerCase();
     String headline;
     String? supporting;

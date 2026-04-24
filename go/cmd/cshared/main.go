@@ -226,6 +226,11 @@ func ScanWalletMOR() *C.char {
 	return C.CString(mobile.ScanWalletMOR())
 }
 
+//export SumActiveSessionStakes
+func SumActiveSessionStakes(sessionIDsJSON *C.char) *C.char {
+	return C.CString(mobile.SumActiveSessionStakes(C.GoString(sessionIDsJSON)))
+}
+
 //export WithdrawUserStakes
 func WithdrawUserStakes(iterations C.int) *C.char {
 	return C.CString(mobile.WithdrawUserStakes(int(iterations)))
