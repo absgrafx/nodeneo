@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/absgrafx/nodeneo/releases/latest"><img src="https://img.shields.io/github/v/release/absgrafx/nodeneo?style=flat-square&color=00ff41&label=latest%20release" alt="Latest Release" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20arm64-333?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20iOS-333?style=flat-square" alt="Platform" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" /></a>
 </p>
 
@@ -22,15 +22,19 @@
 
 ## Install
 
-### Signed releases (recommended)
+### macOS — signed releases (recommended)
 
 Grab the latest **signed & notarized** `.dmg` from [**Releases**](https://github.com/absgrafx/nodeneo/releases/latest).
 
-1. Download the `.dmg` for your platform
+1. Download the `.dmg` (Apple Silicon / Intel universal)
 2. Mount, drag **Node Neo** to Applications
 3. Launch — create or import a wallet, stake MOR, pick a model, and chat
 
-> More platforms (iOS, Android) coming soon. macOS arm64 is the current target.
+### iPhone (iOS 16+)
+
+Currently distributed via TestFlight / enterprise provisioning while App Store submission is in progress. Ping [@absgrafx](https://github.com/absgrafx) for an invite, or build from source with Xcode (see below).
+
+> Linux and Windows are on the backlog — not yet shipped.
 
 ## Down The Rabbit Hole?
 
@@ -63,44 +67,47 @@ Flutter UI → dart:ffi → Go c-shared (.dylib) → proxy-router mobile SDK →
                                               → active models HTTP (cached)
 ```
 
-- **Flutter** for cross-platform UI (iOS, Android, macOS) — accordion-style settings screens
-- **Go** `c-shared` library (`libnodeneo`) — embeds `proxy-router/mobile` SDK
+- **Flutter** for cross-platform UI (macOS + iOS shipping, Android / Linux / Windows on the backlog) — accordion-style settings screens
+- **Go** `c-shared` library (`libnodeneo.dylib` on macOS, static `libnodeneo.a` on iOS device + simulator) — embeds `proxy-router/mobile` SDK
 - **SQLite** for conversations, messages, preferences — wallet-scoped with column-level encryption
-- **Platform** secure storage (Keychain/Keystore) + optional biometrics
+- **Platform** secure storage (Keychain) + optional biometrics (Face ID / Touch ID)
 
 Full architecture docs: [.ai-docs/architecture.md](.ai-docs/architecture.md)
 
 ## Platforms
 
-| Platform | Status |
-|----------|--------|
-| macOS (arm64) | Active development |
-| iOS | Planned |
-| Android | Planned |
-| Linux | Future |
-| Windows | Future |
+| Platform | Status | Notes |
+|----------|--------|-------|
+| macOS (Apple Silicon / Intel) | Shipping | Signed & notarized DMG via GitHub Releases |
+| iOS — iPhone (iOS 16+) | Shipping | TEE attestation working, TestFlight in progress |
+| iOS — iPad | Planned | Adaptive layout (split-view chat + sidebar) |
+| Android | Planned | Flutter + Go `gomobile` builds fine, UI polish + secure store TBD |
+| Linux | Future | Flutter Linux runner + CGO cross-compile |
+| Windows | Future | Evaluate demand |
 
 ---
 
 ### Build from source
 
-Requires **Go 1.26+**, **Flutter 3.x**, **Xcode** (macOS), and **Python 3** with `cairosvg` (`pip install cairosvg`).
+Requires **Go 1.26+**, **Flutter 3.41.7+**, **Xcode** (macOS/iOS), and **Python 3** with `cairosvg` (`pip install cairosvg`).
 
-You also need a local clone of the [proxy-router fork](https://github.com/absgrafx/Morpheus-Lumerin-Node) (branch `feat-external_embedding`) in a sibling directory.
+Node Neo pins a specific pseudo-version of the [absgrafx fork of Morpheus-Lumerin-Node](https://github.com/absgrafx/Morpheus-Lumerin-Node) via `go/go.mod` — you do **not** need a sibling clone for a release build. If you want to hack on the fork alongside Node Neo, add a local `replace` directive to `go/go.mod` pointing at your checkout.
 
 ```bash
-# Clone both repos side-by-side
-git clone git@github.com:absgrafx/Morpheus-Lumerin-Node.git
-cd Morpheus-Lumerin-Node && git checkout feat-external_embedding && cd ..
-
 git clone git@github.com:absgrafx/nodeneo.git
 cd nodeneo
 
-# Full dev build (clean → pub get → brand assets → Go dylib → flutter run)
+# macOS: full dev build (clean → pub get → brand assets → Go dylib → flutter run)
 make dev-macos
 
-# Day-to-day fast iteration (skip clean + icon/splash regen)
+# macOS: day-to-day fast iteration (skip clean + icon/splash regen)
 make go-macos && make run-macos
+
+# iOS Simulator (arm64 host)
+make run-ios-sim
+
+# iOS device — plug in phone, trust, then:
+make go-ios && flutter run --release -d <device-udid>
 ```
 
 See the [Makefile](Makefile) for all targets.

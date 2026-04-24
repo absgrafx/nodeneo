@@ -14,9 +14,11 @@ import '../../services/model_status_api.dart';
 import '../../services/platform_caps.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
+import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../../utils/token_amount.dart';
 import '../../widgets/crypto_token_icons.dart';
+import '../../widgets/session_confirmation_sheet.dart';
 import '../chat/chat_screen.dart';
 import '../chat/conversation_transcript_screen.dart';
 import '../settings/about_screen.dart';
@@ -63,6 +65,12 @@ String conversationMetaLine(
   return '$model · ${tee ? 'Secure' : 'Standard'} · $sessionBit · ${rel(c)}';
 }
 
+/// Top-level isolate entry — must be a top-level / static function so
+/// [compute] can ship it across the isolate boundary. Sums active stake for
+/// the supplied session IDs via the Go bridge.
+Map<String, dynamic> _sumActiveSessionStakesSync(List<String> ids) =>
+    GoBridge().sumActiveSessionStakes(ids);
+
 class HomeScreen extends StatefulWidget {
   final Future<void> Function()? onWalletErased;
   final Future<void> Function()? onRpcChanged;
@@ -98,6 +106,50 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   List<Map<String, dynamic>> _historyConvos = [];
   List<Map<String, dynamic>> _activeResumeChats = [];
 
+  /// Sum of on-chain stake across `_activeResumeChats` — the "Active (Staked)"
+  /// figure shown on the wallet card. Computed via the targeted
+  /// [GoBridge.sumActiveSessionStakes] FFI (one eth_call per local session).
+  /// `null` until the first scan completes; does not block the UI.
+  String? _activeStakeWei;
+  int _activeStakeComputationId = 0;
+
+  /// Network-global calibration cached from a single `EstimateOpenSessionStake`
+  /// call. The stake formula is:
+  ///
+  ///     stake = (supply × price_per_second × duration) ÷ emissions_budget
+  ///
+  /// `supply` and `budget` are identical for every model and change slowly,
+  /// so caching them once per home refresh lets us derive any model's stake
+  /// for any duration from the `min_price_mor_hr` already in the status API
+  /// response — pure BigInt math, no extra FFI calls.
+  BigInt? _supplyWei;
+  BigInt? _budgetWei;
+
+  /// Default session length for affordability gating on the home screen,
+  /// read from [SessionDurationStore] during the compute pass so tile
+  /// greying reflects the same duration the modal defaults to.
+  int _defaultDurationSeconds = SessionDurationStore.defaultSeconds;
+
+  int _affordabilityComputationId = 0;
+
+  /// Tri-state phase for affordability:
+  ///
+  ///   * `_affordabilityLoading = true` — calibration hasn't finished yet;
+  ///     tiles render muted as a loading cue ("light up when known good").
+  ///   * `_affordabilityLoading = false, _affordabilityResolved = true` —
+  ///     calibration succeeded; the cache is authoritative.
+  ///   * `_affordabilityLoading = false, _affordabilityResolved = false` —
+  ///     calibration failed (RPC down / no bids); render everything bright
+  ///     and disable the "show only affordable" filter so the user isn't
+  ///     stranded looking at a greyed-out or empty list.
+  bool _affordabilityLoading = true;
+  bool _affordabilityResolved = false;
+
+  /// User toggle: when true, show unaffordable models (greyed) alongside
+  /// affordable ones. Default (false) hides unaffordable rows to keep the
+  /// list focused on what can actually start right now.
+  bool _showUnaffordable = false;
+
   @override
   void initState() {
     super.initState();
@@ -105,9 +157,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _refreshRpcReachability();
     _loadModels();
     _loadConversations();
-    // Re-fetch unclosed sessions + reconcile expired / closed (chain + wall clock).
+    // Idle refresh: conversations (for expiry/closed reconciliation) plus
+    // wallet balance so the model list's affordability verdicts don't go
+    // stale after off-screen balance changes (e.g. direct on-chain transfers).
     _sessionRefreshTimer = Timer.periodic(const Duration(seconds: 45), (_) {
-      if (mounted) _loadConversations();
+      if (!mounted) return;
+      _loadConversations();
+      _loadWallet();
     });
   }
 
@@ -181,14 +237,62 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           _historyConvos = list;
           _activeResumeChats = active;
         });
+        // NOTE: We deliberately do NOT fire `_computeActiveStake` from
+        // here. At app start `_loadConversations` is called alongside
+        // `_loadWallet` from initState; launching a second compute()
+        // isolate into the Go/FFI dylib while `_loadWallet`'s isolate is
+        // still negotiating its first RPC call was starving the wallet
+        // balance path and leaving the card stuck at 0 MOR / 0 ETH for
+        // ~45 s (one full idle-refresh cycle). The staked-MOR suffix is
+        // a nice-to-have decoration on the card; the liquid balance is
+        // the primary signal. We compute the stake sum only after
+        // [_loadWallet] has completed once (see [_loadWallet]) and on
+        // the periodic idle refresh — this restores the pre-staked-MOR
+        // startup behavior byte-for-byte while still surfacing the
+        // staked amount within a few seconds of launch.
       }
     } catch (_) {
       if (mounted) {
         setState(() {
           _historyConvos = [];
           _activeResumeChats = [];
+          _activeStakeWei = '0';
         });
       }
+    }
+  }
+
+  /// Sum the on-chain stakes of the locally-known open sessions for the
+  /// "(X.XX Staked)" figure on the wallet card. One targeted `getSession`
+  /// eth_call per session — bounded by the 12-row cap in [_loadConversations]
+  /// — so this runs happily on idle refreshes and didPopNext without blocking
+  /// the UI. Off-device sessions aren't counted; the Wallet → "Where's My
+  /// MOR?" scan remains the source of truth.
+  Future<void> _computeActiveStake(List<Map<String, dynamic>> active) async {
+    final runId = ++_activeStakeComputationId;
+    if (active.isEmpty) {
+      if (!mounted || runId != _activeStakeComputationId) return;
+      setState(() => _activeStakeWei = '0');
+      return;
+    }
+    final ids = <String>[];
+    for (final c in active) {
+      final sid = c['session_id'];
+      if (sid is String && sid.isNotEmpty) ids.add(sid);
+    }
+    // Off-isolate: the underlying Go call iterates active sessions and
+    // hits `getSessionData()` per ID, which is an RPC read and can block
+    // for seconds on a slow endpoint. Running this inline on the UI
+    // isolate freezes frames for that duration. The runId guard above
+    // handles isolates returning out-of-order.
+    try {
+      final result = await compute(_sumActiveSessionStakesSync, ids);
+      if (!mounted || runId != _activeStakeComputationId) return;
+      final wei = result['stake_wei'] as String? ?? '0';
+      setState(() => _activeStakeWei = wei);
+    } catch (_) {
+      // Keep the previous value on transient failure so the card doesn't
+      // flicker between "X staked" and "(unknown)".
     }
   }
 
@@ -204,38 +308,100 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return '${t.month}/${t.day}';
   }
 
-  static final BigInt _minEthWei = BigInt.parse('1000000000000000'); // 0.001 ETH
-  static final BigInt _minMorWei = BigInt.parse('5000000000000000000'); // 5 MOR
-
-  bool get _walletUnfunded {
+  /// True when either balance is literally zero. We stopped gating on a
+  /// "recommended watermark" (5 MOR / 0.001 ETH) because the affordability
+  /// filter + Show all toggle on the model list already protect the user
+  /// from picking something they can't afford. The overlay is now only for
+  /// the "literally nothing in the wallet" case where no chat can start.
+  bool get _walletEmpty {
     final eth = BigInt.tryParse(_rawEthWei) ?? BigInt.zero;
     final mor = BigInt.tryParse(_rawMorWei) ?? BigInt.zero;
-    return eth < _minEthWei || mor < _minMorWei;
+    return eth == BigInt.zero || mor == BigInt.zero;
   }
 
+  bool get _morZero =>
+      (BigInt.tryParse(_rawMorWei) ?? BigInt.zero) == BigInt.zero;
+  bool get _ethZero =>
+      (BigInt.tryParse(_rawEthWei) ?? BigInt.zero) == BigInt.zero;
+
   Future<void> _loadWallet() async {
+    // Wrapped in compute() so that the synchronous FFI → Go →
+    // `client.GetBalance()` RPC round trip runs off the UI isolate. On
+    // slow RPC responses (or cold-start, first-hop failover) this call
+    // can block for several seconds — running it inline freezes the
+    // whole UI for that duration, which makes the wallet card appear
+    // stuck at the default "0" placeholder until the 45 s idle timer
+    // fires a second fetch. The background isolate keeps frames flowing.
     try {
       final summary = await compute(
         (_) => GoBridge().getWalletSummary(),
         null,
       );
       if (!mounted) return;
-      final rawEth = summary['eth_balance'] as String? ?? '0';
-      final rawMor = summary['mor_balance'] as String? ?? '0';
-      setState(() {
-        _address = summary['address'] as String? ?? '';
-        _rawEthWei = rawEth;
-        _rawMorWei = rawMor;
-        _ethBalance = formatWeiFixedDecimals(rawEth, _walletBalanceDecimals);
-        _morBalance = formatWeiFixedDecimals(rawMor, _walletBalanceDecimals);
-      });
-    } catch (_) {}
+
+      // `getWalletSummary` on the Go side returns "eth_balance":"0",
+      // "mor_balance":"0" along with a non-empty "error" field when the
+      // RPC round-trip fails (private-key load, getTransactOpts, or the
+      // two BalanceAt calls). If we naively apply those zeros to state
+      // we paint a confident "0.00000 MOR / 0.00000 ETH" — which also
+      // trips the `_walletEmpty` overlay — for a wallet that is
+      // actually healthy, just momentarily unreachable. Treat the error
+      // case as transient: log it, keep the previously-rendered balance
+      // (or the initial "—" placeholder), and let the 45 s idle timer
+      // retry. This restores the pre-staked-MOR "fast paint" feel while
+      // also making genuinely-flaky RPCs visible in the debug console.
+      final errMsg = summary['error'];
+      if (errMsg is String && errMsg.isNotEmpty) {
+        debugPrint('[wallet] getWalletSummary error (keeping prior '
+            'balance): $errMsg');
+        setState(() {
+          _address = summary['address'] as String? ?? _address;
+        });
+      } else {
+        final rawEth = summary['eth_balance'] as String? ?? '0';
+        final rawMor = summary['mor_balance'] as String? ?? '0';
+        setState(() {
+          _address = summary['address'] as String? ?? '';
+          _rawEthWei = rawEth;
+          _rawMorWei = rawMor;
+          _ethBalance = formatWeiFixedDecimals(rawEth, _walletBalanceDecimals);
+          _morBalance = formatWeiFixedDecimals(rawMor, _walletBalanceDecimals);
+        });
+      }
+
+      // Now that the liquid wallet balance has painted (or we've logged
+      // a retryable error above), it's safe to kick off the staked-MOR
+      // scan in a second compute() isolate. Firing this here — instead
+      // of from _loadConversations — guarantees the wallet balance
+      // isolate has already returned before we start contending with it
+      // for the Go/FFI dylib.
+      if (_activeResumeChats.isNotEmpty) {
+        unawaited(_computeActiveStake(_activeResumeChats));
+      } else {
+        _activeStakeWei = '0';
+      }
+    } catch (e) {
+      debugPrint('[wallet] _loadWallet threw: $e');
+    }
   }
 
   Future<void> _loadModels() async {
+    // Only flip into the muted "loading" state on the very first load (when
+    // we have no cached calibration yet). Subsequent refreshes preserve the
+    // last known-good supply/budget so tiles don't flicker and — more
+    // importantly — so the Show-all filter stays functional while we
+    // re-fetch. If calibration below fails transiently (RPC blip, no bids
+    // cached right this instant), we keep the old values so toggles remain
+    // usable. See [_computeAffordability] for the matching preserve-on-fail
+    // logic.
+    final hasCalibration = _supplyWei != null && _budgetWei != null;
     setState(() {
       _loadingModels = true;
       _modelsError = null;
+      if (!hasCalibration) {
+        _affordabilityLoading = true;
+        _affordabilityResolved = false;
+      }
     });
     try {
       final resp = await fetchModelStatus();
@@ -244,7 +410,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (_maxPrivacy) {
         list = list.where((m) => m.isTEE).toList();
       }
-      list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      _sortModelsAlpha(list);
       setState(() {
         _statusApi = resp;
         _models = list;
@@ -268,7 +434,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             minPriceMorHr: 0,
           );
         }).toList();
-        fallback.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        _sortModelsAlpha(fallback);
         setState(() {
           _statusApi = null;
           _models = fallback;
@@ -282,9 +448,183 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         });
       }
     }
+    unawaited(_computeAffordability());
   }
 
-  void _openModelChat(BuildContext context, ModelStatusEntry m) {
+  /// Case-insensitive alpha sort on model name. Affordability does **not**
+  /// affect ordering — unaffordable models are rendered muted in place so
+  /// users can always find a known model by name without it jumping around
+  /// as balances / default duration change.
+  void _sortModelsAlpha(List<ModelStatusEntry> list) {
+    list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
+  /// Calibrate the stake formula once, cache the globals, and let per-model
+  /// stake be derived on the fly via [_hourlyStakeWeiFor] / [_isAffordable].
+  ///
+  /// The Go estimator does a per-model `GetRatedBids` RPC round trip, so
+  /// calling it N times is slow and scroll-hostile. But the formula is
+  /// linear in `price_per_second`:
+  ///
+  ///     stake = (supply × price_per_second × duration) ÷ emissions_budget
+  ///
+  /// `supply` and `emissions_budget` are global; once we know them we can
+  /// compute any model's stake locally using `min_price_mor_hr` (lowest bid
+  /// across providers) from the status API response. One FFI call per home
+  /// refresh, everything else is pure math, affordability re-renders
+  /// automatically whenever the wallet balance changes.
+  Future<void> _computeAffordability() async {
+    final runId = ++_affordabilityComputationId;
+    final seconds = await SessionDurationStore.instance.readSeconds();
+    if (!mounted || runId != _affordabilityComputationId) return;
+
+    final bridge = GoBridge();
+
+    // Calibration: iterate until we get a model with bids + a valid
+    // supply/budget. Transient RPC failures fall through to the next model.
+    BigInt? supplyWei;
+    BigInt? budgetWei;
+    for (final m in _models) {
+      if (m.id.isEmpty || m.type != 'LLM') continue;
+      try {
+        final est = bridge.estimateOpenSessionStake(
+          m.id,
+          seconds,
+          directPayment: false,
+        );
+        final sup = BigInt.tryParse((est['mor_supply_wei'] as String?) ?? '');
+        final bud =
+            BigInt.tryParse((est['emissions_budget_wei'] as String?) ?? '');
+        if (sup != null && bud != null && bud > BigInt.zero) {
+          supplyWei = sup;
+          budgetWei = bud;
+          break;
+        }
+      } catch (_) {
+        // Try the next model.
+      }
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted || runId != _affordabilityComputationId) return;
+    }
+
+    if (!mounted || runId != _affordabilityComputationId) return;
+    setState(() {
+      // Preserve previously-calibrated globals on transient failure so the
+      // Show-all / affordability filter doesn't silently disable itself when
+      // an RPC hiccup returns no usable bids for any sampled model. The
+      // wallet balance is the only input that actually changes frame-to-
+      // frame; the stake formula (supply / emissions_budget) is effectively
+      // constant across a short window.
+      if (supplyWei != null && budgetWei != null) {
+        _supplyWei = supplyWei;
+        _budgetWei = budgetWei;
+      }
+      _defaultDurationSeconds = seconds;
+      _affordabilityLoading = false;
+      _affordabilityResolved = _supplyWei != null && _budgetWei != null;
+    });
+  }
+
+  /// Hourly stake (wei) for [m] using the cached globals.
+  /// Returns null when globals are unknown or the model has no price (e.g.
+  /// Go bridge fallback path). Cheap — pure BigInt math.
+  BigInt? _hourlyStakeWeiFor(ModelStatusEntry m) {
+    final supply = _supplyWei;
+    final budget = _budgetWei;
+    if (supply == null || budget == null || budget == BigInt.zero) return null;
+    if (m.minPriceMorHr <= 0) return null;
+    // price_per_hour (wei) = minPriceMorHr × 1e18
+    // hourly stake       = supply × price_per_hour ÷ budget
+    final priceWeiPerHour = BigInt.from((m.minPriceMorHr * 1e18).round());
+    return (supply * priceWeiPerHour) ~/ budget;
+  }
+
+  /// Stake (wei) for [m] over [seconds]. Linear scaling from the hourly rate.
+  BigInt? _stakeWeiFor(ModelStatusEntry m, int seconds) {
+    final hourly = _hourlyStakeWeiFor(m);
+    if (hourly == null) return null;
+    return hourly * BigInt.from(seconds) ~/ BigInt.from(3600);
+  }
+
+  /// Label for the right side of the `MODELS` header row.
+  ///
+  /// The provider count from the status API is network-wide ("active
+  /// providers") — it is only accurate for the **unfiltered** list. The API
+  /// exposes only a count of providers per model, not provider IDs, so we
+  /// can't dedupe across a subset to say "this TEE-only list is served by 2
+  /// providers". Rather than lie, we drop the provider roll-up whenever any
+  /// filter narrows the view and fall back to model counts.
+  ///
+  /// Priority:
+  ///   1. `N of M affordable` — when the Show-all filter is hiding rows.
+  ///   2. `N TEE models` — when Privacy is on (TEE subset).
+  ///   3. `N across P providers` — full unfiltered list (provider count valid).
+  ///   4. `N available` — when we're on the Go-bridge fallback (no API).
+  String _modelsHeaderCountLabel() {
+    if (_loadingModels) return 'loading...';
+    final total = _models.length;
+    final filterActive = _affordabilityResolved && !_showUnaffordable;
+    if (filterActive) {
+      final visible = _visibleModels().length;
+      if (visible < total) {
+        return _maxPrivacy
+            ? '$visible of $total TEE affordable'
+            : '$visible of $total affordable';
+      }
+    }
+    if (_maxPrivacy) {
+      return total == 1 ? '1 TEE model' : '$total TEE models';
+    }
+    if (_statusApi != null) {
+      return '$total across ${_statusApi!.activeProviders} providers';
+    }
+    return '$total available';
+  }
+
+  /// The subset of `_models` that would render in the list right now, given
+  /// the current Show-all toggle + calibration state. Kept as a single source
+  /// of truth so the header count and the list stay in lock-step.
+  ///
+  /// When calibration has resolved and the user hasn't flipped Show-all on,
+  /// hide unaffordable entries. While loading or when calibration failed,
+  /// show everything (muted vs bright is handled by the tile itself).
+  List<ModelStatusEntry> _visibleModels() {
+    if (_affordabilityResolved && !_showUnaffordable) {
+      return _models.where(_isAffordable).toList();
+    }
+    return _models;
+  }
+
+  /// Affordability verdict at render time. Optimistic when stake is unknown
+  /// (Go fallback path models, missing calibration) so the tile stays
+  /// tappable — the modal will do the authoritative check on tap.
+  bool _isAffordable(ModelStatusEntry m) {
+    final stake = _stakeWeiFor(m, _defaultDurationSeconds);
+    if (stake == null) return true;
+    final bal = BigInt.tryParse(_rawMorWei) ?? BigInt.zero;
+    return bal >= stake;
+  }
+
+  /// "68.70 MOR/hr" style label for the tile. Falls back to the status API's
+  /// provider rate when calibration hasn't resolved yet so tiles never
+  /// render a naked nothing during the brief compute window.
+  String? _hourlyStakeLabelFor(ModelStatusEntry m) {
+    final hourly = _hourlyStakeWeiFor(m);
+    if (hourly == null) {
+      // Pre-calibration: show provider rate so tiles aren't bare. This is
+      // the same number the status API exposes; once calibration lands,
+      // we swap it for the honest hourly stake.
+      if (m.minPriceMorHr <= 0) return null;
+      if (m.minPriceMorHr < 0.001) return '<0.001 MOR/hr';
+      if (m.minPriceMorHr < 0.01) {
+        return '${m.minPriceMorHr.toStringAsFixed(4)} MOR/hr';
+      }
+      return '${m.minPriceMorHr.toStringAsFixed(2)} MOR/hr';
+    }
+    return '${formatWeiFixedDecimals(hourly.toString(), 2)} MOR/hr';
+  }
+
+  Future<void> _openModelChat(BuildContext context, ModelStatusEntry m) async {
     if (m.type != 'LLM') {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -303,19 +643,38 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final name = m.name;
     final tags = m.tags;
     final isTEE = tags.any((t) => t.toUpperCase().contains('TEE'));
-    Navigator.of(context)
-        .push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) =>
-                ChatScreen(modelId: id, modelName: name, isTEE: isTEE),
-          ),
-        )
-        .then((_) {
-          if (mounted) {
-            _loadWallet();
-            _loadConversations();
-          }
-        });
+
+    // Pre-chat confirmation: model + duration + stake preview. We pass the
+    // hourly stake we already computed on the home screen so the modal's
+    // numbers match the tile's label by construction (lowest-price bid ×
+    // supply ÷ budget), and so there's zero additional FFI on tap.
+    final navigator = Navigator.of(context);
+    final decision = await showSessionConfirmation(
+      context: context,
+      modelId: id,
+      modelName: name,
+      modelType: m.type,
+      isTEE: isTEE,
+      hourlyStakeWei: _hourlyStakeWeiFor(m),
+      walletMorWei: BigInt.tryParse(_rawMorWei) ?? BigInt.zero,
+      initialDurationSeconds: _defaultDurationSeconds,
+    );
+    if (decision == null || !mounted) return;
+
+    await navigator.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatScreen(
+          modelId: id,
+          modelName: name,
+          isTEE: isTEE,
+          sessionDurationSecondsOverride: decision.durationSeconds,
+        ),
+      ),
+    );
+    if (mounted) {
+      _loadWallet();
+      _loadConversations();
+    }
   }
 
   void _openResumeChat(BuildContext context, Map<String, dynamic> c) {
@@ -495,6 +854,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       await runCloseOnChainSessionFlow(context, sid);
       if (!mounted) return;
       _loadConversations();
+      // Stake is returned to the wallet on close — refresh so affordability
+      // verdicts reflect the restored balance without waiting for the idle
+      // tick or a full route pop.
+      _loadWallet();
     } on GoBridgeException catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(
@@ -633,6 +996,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         fullAddress: _address,
                         ethBalance: _ethBalance,
                         morBalance: _morBalance,
+                        activeStakeWei: _activeStakeWei,
                         rpcChecking: _rpcChecking,
                         rpcReachable: _rpcReachable,
                         onOpenExpert: () async {
@@ -663,183 +1027,79 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             },
                           );
                         },
+                        onOpenWheresMyMor: () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const WalletScreen(autoRunScan: true),
+                            ),
+                          );
+                          // Returning from the wallet screen may have
+                          // closed expired sessions or reshuffled state;
+                          // refresh so the card reflects reality.
+                          if (mounted) {
+                            _loadWallet();
+                            _loadConversations();
+                          }
+                        },
                       ),
                       const SizedBox(height: 16),
                     ],
                   ),
                 ),
 
-              if (_walletUnfunded) ...[
+              // Resume chats: render above the models section *regardless*
+              // of wallet balance — an existing on-chain session already has
+              // its stake locked, so a user with a near-empty wallet can
+              // still reopen and finish their chat. Only the model list
+              // below gets masked by the empty-wallet overlay.
+              if (_activeResumeChats.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: _buildResumeChatsSection(context, theme),
+                ),
+
+              if (_walletEmpty) ...[
                 SliverFillRemaining(
                   hasScrollBody: false,
-                  child: _FundWalletOverlay(address: _address),
+                  child: _FundWalletOverlay(
+                    address: _address,
+                    morMissing: _morZero,
+                    ethMissing: _ethZero,
+                    hasActiveChats: _activeResumeChats.isNotEmpty,
+                  ),
                 ),
               ] else ...[
                 SliverToBoxAdapter(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _PrivacyToggle(
-                        enabled: _maxPrivacy,
-                        onChanged: (val) {
-                          setState(() => _maxPrivacy = val);
-                          _loadModels();
-                        },
-                      ),
-                      if (_activeResumeChats.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.forum_outlined,
-                              size: 16,
-                              color: NeoTheme.green.withValues(alpha: 0.9),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _PrivacyToggle(
+                              enabled: _maxPrivacy,
+                              onChanged: (val) {
+                                setState(() => _maxPrivacy = val);
+                                _loadModels();
+                              },
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'CONTINUE CHATTING',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: NeoTheme.green.withValues(alpha: 0.85),
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.hintColor,
-                            fontSize: 11,
-                            height: 1.3,
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        ListView.separated(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: _activeResumeChats.length,
-                          separatorBuilder: (context, i) => const SizedBox(height: 8),
-                          itemBuilder: (ctx, i) {
-                            final c = _activeResumeChats[i];
-                            final name = conversationHeadline(c);
-                            final tee = c['is_tee'] == true;
-                            return Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(12),
-                                onTap: () => _openResumeChat(context, c),
-                                child: Ink(
-                                  decoration: BoxDecoration(
-                                    color: NeoTheme.mainPanelFill,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: NeoTheme.mainPanelOutline(),
-                                    ),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 6,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        IconButton(
-                                          tooltip: 'Close on-chain session',
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(
-                                            minWidth: 36,
-                                            minHeight: 36,
-                                          ),
-                                          icon: Icon(
-                                            Icons.close_rounded,
-                                            size: 22,
-                                            color: Colors.red.shade400,
-                                          ),
-                                          onPressed: () =>
-                                              _closeOnChainSessionForConversation(
-                                                context,
-                                                c,
-                                              ),
-                                        ),
-                                        Container(
-                                          width: 36,
-                                          height: 36,
-                                          decoration: BoxDecoration(
-                                            color: tee
-                                                ? NeoTheme.green.withValues(alpha: 0.18)
-                                                : NeoTheme.mainPanelFill,
-                                            borderRadius: BorderRadius.circular(8),
-                                            border: Border.all(
-                                              color: tee
-                                                  ? NeoTheme.green.withValues(alpha: 0.35)
-                                                  : const Color(0xFF374151),
-                                            ),
-                                          ),
-                                          child: Center(
-                                            child: Text(
-                                              tee ? '🛡️' : '💬',
-                                              style: const TextStyle(fontSize: 16),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                name,
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: theme.textTheme.titleSmall
-                                                    ?.copyWith(
-                                                      fontWeight: FontWeight.w600,
-                                                    ),
-                                              ),
-                                              Text(
-                                                conversationMetaLine(
-                                                  c,
-                                                  _relativeUpdated,
-                                                ),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: theme.textTheme.bodySmall
-                                                    ?.copyWith(
-                                                      color: const Color(0xFF6B7280),
-                                                      fontSize: 10,
-                                                      height: 1.25,
-                                                    ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        Icon(
-                                          Icons.chevron_right,
-                                          color: theme.hintColor,
-                                          size: 22,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _ShowAllToggle(
+                              enabled: _showUnaffordable,
+                              onChanged: (val) =>
+                                  setState(() => _showUnaffordable = val),
+                            ),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 20),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('MODELS', style: theme.textTheme.labelSmall),
                           Text(
-                            _loadingModels
-                                ? 'loading...'
-                                : _statusApi != null
-                                    ? '${_models.length} across ${_statusApi!.activeProviders} providers'
-                                    : '${_models.length} available',
+                            _modelsHeaderCountLabel(),
                             style: theme.textTheme.bodySmall,
                           ),
                         ],
@@ -898,6 +1158,149 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
+  /// "Continue chatting" section: rendered above the models list
+  /// regardless of wallet balance so users with an active on-chain session
+  /// can always reach/resume their chat. Stake for an open session is
+  /// already locked in the diamond — no new MOR is needed to reopen it.
+  Widget _buildResumeChatsSection(BuildContext context, ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Icon(
+              Icons.forum_outlined,
+              size: 16,
+              color: NeoTheme.green.withValues(alpha: 0.9),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'CONTINUE CHATTING',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: NeoTheme.green.withValues(alpha: 0.85),
+                letterSpacing: 0.6,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Tap to resume. Use ✕ to close on-chain (same as reclaim flow).',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            fontSize: 11,
+            height: 1.3,
+          ),
+        ),
+        const SizedBox(height: 10),
+        ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: _activeResumeChats.length,
+          separatorBuilder: (context, i) => const SizedBox(height: 8),
+          itemBuilder: (ctx, i) {
+            final c = _activeResumeChats[i];
+            final name = conversationHeadline(c);
+            final tee = c['is_tee'] == true;
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _openResumeChat(context, c),
+                child: Ink(
+                  decoration: BoxDecoration(
+                    color: NeoTheme.mainPanelFill,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: NeoTheme.mainPanelOutline()),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Close on-chain session',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
+                          icon: Icon(
+                            Icons.close_rounded,
+                            size: 22,
+                            color: Colors.red.shade400,
+                          ),
+                          onPressed: () =>
+                              _closeOnChainSessionForConversation(context, c),
+                        ),
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: tee
+                                ? NeoTheme.green.withValues(alpha: 0.18)
+                                : NeoTheme.mainPanelFill,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: tee
+                                  ? NeoTheme.green.withValues(alpha: 0.35)
+                                  : const Color(0xFF374151),
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              tee ? '🛡️' : '💬',
+                              style: const TextStyle(fontSize: 16),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Text(
+                                conversationMetaLine(c, _relativeUpdated),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: const Color(0xFF6B7280),
+                                  fontSize: 10,
+                                  height: 1.25,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right,
+                          color: theme.hintColor,
+                          size: 22,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
   Widget _buildModelList() {
     if (_loadingModels) {
       return const Center(
@@ -932,12 +1335,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (_models.isEmpty) {
       return _EmptyState(maxPrivacy: _maxPrivacy);
     }
+    final visible = _visibleModels();
+    if (visible.isEmpty) {
+      return _NoAffordableState(
+        onShowAll: () => setState(() => _showUnaffordable = true),
+      );
+    }
     return ListView.builder(
-      itemCount: _models.length,
+      itemCount: visible.length,
       itemBuilder: (ctx, i) {
-        final m = _models[i];
+        final m = visible[i];
+        final bool affordable;
+        if (_affordabilityLoading) {
+          affordable = false; // loading cue — tile renders muted
+        } else if (!_affordabilityResolved) {
+          affordable = true; // calibration failed — don't mislead
+        } else {
+          affordable = _isAffordable(m);
+        }
         return _ModelTile(
           entry: m,
+          affordable: affordable,
+          priceLabel: _hourlyStakeLabelFor(m),
           onTap: () => _openModelChat(ctx, m),
         );
       },
@@ -969,13 +1388,20 @@ class _PrivacyToggle extends StatelessWidget {
                   style: const TextStyle(fontSize: 14),
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  enabled ? 'FULL PRIVACY MODELS' : 'Full Privacy Models',
-                  style: TextStyle(
-                    color: enabled ? NeoTheme.green : const Color(0xFF9CA3AF),
-                    fontSize: 11,
-                    fontWeight: enabled ? FontWeight.w700 : FontWeight.w500,
-                    letterSpacing: 0.5,
+                Flexible(
+                  child: Text(
+                    enabled ? 'PRIVACY' : 'Privacy',
+                    overflow: TextOverflow.fade,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      color:
+                          enabled ? NeoTheme.green : const Color(0xFF9CA3AF),
+                      fontSize: 11,
+                      fontWeight:
+                          enabled ? FontWeight.w700 : FontWeight.w500,
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ),
               ],
@@ -997,6 +1423,68 @@ class _PrivacyToggle extends StatelessWidget {
           GestureDetector(
             onTap: () => onChanged(!enabled),
             child: _AnimatedToggleSwitch(enabled: enabled, onChanged: onChanged),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Show-unaffordable toggle. Off (default) filters unaffordable models out
+/// of the list so the user only sees what they can start right now; on
+/// shows everything alphabetical, with unaffordable rows rendered muted in
+/// place. Lives next to [_PrivacyToggle] on the models header row.
+class _ShowAllToggle extends StatelessWidget {
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _ShowAllToggle({required this.enabled, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => onChanged(!enabled),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  enabled
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_outlined,
+                  size: 14,
+                  color: enabled
+                      ? NeoTheme.green
+                      : const Color(0xFF9CA3AF),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    enabled ? 'SHOW ALL' : 'Show all',
+                    overflow: TextOverflow.fade,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      color:
+                          enabled ? NeoTheme.green : const Color(0xFF9CA3AF),
+                      fontSize: 11,
+                      fontWeight:
+                          enabled ? FontWeight.w700 : FontWeight.w500,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => onChanged(!enabled),
+            child:
+                _AnimatedToggleSwitch(enabled: enabled, onChanged: onChanged),
           ),
         ],
       ),
@@ -1050,6 +1538,53 @@ class _AnimatedToggleSwitch extends StatelessWidget {
 
 // --- Empty state ---
 
+/// Shown when the "show only affordable" filter hides every model — the
+/// user has models loaded but none are affordable at the current default
+/// session duration. Offers a direct way back to the full list.
+class _NoAffordableState extends StatelessWidget {
+  final VoidCallback onShowAll;
+  const _NoAffordableState({required this.onShowAll});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('💤', style: TextStyle(fontSize: 48)),
+            const SizedBox(height: 16),
+            const Text(
+              'Nothing affordable right now',
+              style: TextStyle(
+                color: Color(0xFF9CA3AF),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Your MOR balance is below every model’s stake for the '
+              'current default session length. Add MOR, shorten the '
+              'default session in Preferences, or show the full list.',
+              style: TextStyle(color: Color(0xFF6B7280), fontSize: 12, height: 1.4),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: onShowAll,
+              icon: const Icon(Icons.visibility_rounded, size: 16),
+              label: const Text('Show all models'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _EmptyState extends StatelessWidget {
   final bool maxPrivacy;
   const _EmptyState({required this.maxPrivacy});
@@ -1089,11 +1624,53 @@ class _EmptyState extends StatelessWidget {
 
 class _FundWalletOverlay extends StatelessWidget {
   final String address;
-  const _FundWalletOverlay({required this.address});
+
+  /// Wallet has zero MOR — can't stake for a new session.
+  final bool morMissing;
+
+  /// Wallet has zero ETH — can't pay gas on Base.
+  final bool ethMissing;
+
+  /// When true, an on-chain session is still open; the overlay mentions
+  /// that those chats are unaffected and resumable above.
+  final bool hasActiveChats;
+
+  const _FundWalletOverlay({
+    required this.address,
+    required this.morMissing,
+    required this.ethMissing,
+    this.hasActiveChats = false,
+  });
+
+  /// Title + supporting text, tailored to which balance is empty.
+  /// Existing sessions can continue regardless of balance; the copy calls
+  /// that out when relevant so the overlay doesn't feel like a dead end.
+  ({String title, String body}) _copy() {
+    if (morMissing && ethMissing) {
+      return (
+        title: 'Your wallet is empty',
+        body: 'Add MOR (stake for inference) and ETH (gas on Base) '
+            'to this address to start a new chat.',
+      );
+    }
+    if (morMissing) {
+      return (
+        title: 'No MOR in your wallet',
+        body: 'Add MOR to this address so you can stake for a new '
+            'inference session.',
+      );
+    }
+    return (
+      title: 'No ETH in your wallet',
+      body: 'Add a small amount of ETH (Base) to this address to '
+          'cover on-chain gas.',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final copy = _copy();
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1128,7 +1705,8 @@ class _FundWalletOverlay extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Text(
-                'Fund Your Wallet to Start',
+                copy.title,
+                textAlign: TextAlign.center,
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: NeoTheme.amber,
@@ -1136,7 +1714,7 @@ class _FundWalletOverlay extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                'Send at least 5 MOR and 0.001 ETH (Arbitrum) to your wallet address to begin using AI inference.',
+                copy.body,
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF9CA3AF),
@@ -1193,25 +1771,12 @@ class _FundWalletOverlay extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _FundRequirement(
-                    label: 'MOR',
-                    amount: '≥ 5',
-                    color: NeoTheme.green,
-                  ),
-                  const SizedBox(width: 20),
-                  _FundRequirement(
-                    label: 'ETH',
-                    amount: '≥ 0.001',
-                    color: NeoTheme.ethBlue,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
               Text(
-                'Models will appear here once your wallet is funded.\nPull to refresh or tap ⋯ → Refresh.',
+                hasActiveChats
+                    ? 'Active chats above keep working. Models will appear '
+                        'once funds arrive — pull to refresh.'
+                    : 'Models will appear here once funds arrive. Pull to '
+                        'refresh or tap ⋯ → Refresh.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF6B7280),
@@ -1227,70 +1792,60 @@ class _FundWalletOverlay extends StatelessWidget {
   }
 }
 
-class _FundRequirement extends StatelessWidget {
-  final String label;
-  final String amount;
-  final Color color;
-  const _FundRequirement({
-    required this.label,
-    required this.amount,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: color.withValues(alpha: 0.8),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          '$amount $label',
-          style: TextStyle(
-            color: color,
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            fontFamily: 'JetBrains Mono',
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 // --- Wallet Card ---
 
 class _WalletCard extends StatefulWidget {
   final String fullAddress;
   final String ethBalance;
   final String morBalance;
+
+  /// Sum of on-chain stake (in wei, as a decimal string) across the user's
+  /// locally-known open sessions. `null` means "not yet computed" — the UI
+  /// simply omits the `(X.XX Staked)` suffix instead of showing a zero that
+  /// could be misleading. Set to `"0"` explicitly when the scan finishes
+  /// with nothing staked.
+  final String? activeStakeWei;
   final bool rpcChecking;
   final bool? rpcReachable;
   final Future<void> Function()? onOpenExpert;
   final VoidCallback onSendMor;
   final VoidCallback onSendEth;
 
+  /// Jumps to Wallet → "Where's My MOR?" with the scan auto-running.
+  final VoidCallback? onOpenWheresMyMor;
+
   const _WalletCard({
     required this.fullAddress,
     required this.ethBalance,
     required this.morBalance,
+    required this.activeStakeWei,
     required this.rpcChecking,
     required this.rpcReachable,
     required this.onOpenExpert,
     required this.onSendMor,
     required this.onSendEth,
+    required this.onOpenWheresMyMor,
   });
 
   static String _shorten(String addr) {
     if (addr.length < 12) return addr;
     return '${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}';
+  }
+
+  /// Purple accent used for "Active (Staked)" everywhere (home card +
+  /// Wallet → Where's My MOR). Matches the `Color(0xFFA855F7)` used in the
+  /// Wallet screen's `_morBucket`.
+  static const Color stakedAccent = Color(0xFFA855F7);
+
+  /// Returns the formatted "(X.XX Staked)" suffix for the supplied wei
+  /// string, or `null` if there's nothing to show (unresolved or zero).
+  /// Kept on the widget so both the collapsed header and the expanded
+  /// balance chip stay in sync.
+  static String? formatStakedSuffix(String? activeStakeWei) {
+    if (activeStakeWei == null) return null;
+    final wei = BigInt.tryParse(activeStakeWei);
+    if (wei == null || wei == BigInt.zero) return null;
+    return formatWeiFixedDecimals(activeStakeWei, 2);
   }
 
   @override
@@ -1330,17 +1885,6 @@ class _WalletCardState extends State<_WalletCard>
     });
   }
 
-  static const double _reservedNonTextWidth = 48 + 8 + 130;
-
-  static double _measureTextWidth(String text, TextStyle style) {
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: style),
-      maxLines: 1,
-      textDirection: TextDirection.ltr,
-    )..layout(minWidth: 0, maxWidth: double.infinity);
-    return tp.width;
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1369,8 +1913,15 @@ class _WalletCardState extends State<_WalletCard>
                 onTap: _toggle,
                 borderRadius: BorderRadius.circular(12),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  // Asymmetric horizontal padding: the copy IconButton on
+                  // the left already contributes ~6px of its own padding, and
+                  // the chevron on the right is small and low-contrast. A
+                  // smaller right inset keeps the ETH balance from looking
+                  // stranded against the card edge without cramping the copy
+                  // button.
+                  padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       IconButton(
                         tooltip: 'Copy full address',
@@ -1382,9 +1933,9 @@ class _WalletCardState extends State<_WalletCard>
                               : theme.colorScheme.onSurface.withValues(alpha: 0.7),
                         ),
                         style: IconButton.styleFrom(
-                          minimumSize: const Size(36, 36),
+                          minimumSize: const Size(32, 32),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          padding: const EdgeInsets.all(6),
+                          padding: const EdgeInsets.all(4),
                           visualDensity: VisualDensity.compact,
                         ),
                         onPressed: widget.fullAddress.isEmpty
@@ -1400,43 +1951,68 @@ class _WalletCardState extends State<_WalletCard>
                                 );
                               },
                       ),
-                      Expanded(
-                        child: Text(
-                          widget.fullAddress.isEmpty
-                              ? '—'
-                              : _WalletCard._shorten(widget.fullAddress),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: addressStyle.copyWith(fontSize: 12),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
+                      // Address: a truncated "0x…" is always short (13
+                      // chars after _shorten), so we let it claim its
+                      // natural width instead of sharing a flex slot with
+                      // the balances. That means the balance Wrap below
+                      // gets ALL the remaining row width to fill, and
+                      // WrapAlignment.end can push content to the right
+                      // edge with no "unused flex slot" gap in the middle.
                       Text(
-                        widget.morBalance,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: NeoTheme.green.withValues(alpha: 0.9),
-                        ),
-                      ),
-                      Text(
-                        ' MOR',
-                        style: TextStyle(fontSize: 10, color: NeoTheme.green.withValues(alpha: 0.6)),
+                        widget.fullAddress.isEmpty
+                            ? '—'
+                            : _WalletCard._shorten(widget.fullAddress),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: addressStyle.copyWith(fontSize: 13),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        widget.ethBalance,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: NeoTheme.ethBlue.withValues(alpha: 0.9),
+                      // Balance cluster takes ALL remaining width via
+                      // Expanded (== Flexible flex:1 tight). Wrap fills
+                      // that full width and WrapAlignment.end pins
+                      // MOR / staked / ETH flush-right against the
+                      // chevron. On narrow widths the cluster waterfalls
+                      // onto a second line, still right-aligned — each
+                      // value+unit pair is atomic (_BalanceInline) so a
+                      // break only happens between pairs, not mid-number.
+                      Expanded(
+                        child: Wrap(
+                          alignment: WrapAlignment.end,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 6,
+                          runSpacing: 2,
+                          children: [
+                            _BalanceInline(
+                              value: widget.morBalance,
+                              unit: 'MOR',
+                              valueColor: NeoTheme.green.withValues(alpha: 0.9),
+                              unitColor: NeoTheme.green.withValues(alpha: 0.6),
+                            ),
+                            if (_WalletCard.formatStakedSuffix(
+                                    widget.activeStakeWei) !=
+                                null)
+                              Text(
+                                '(+${_WalletCard.formatStakedSuffix(widget.activeStakeWei)} staked)',
+                                maxLines: 1,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w500,
+                                  color: _WalletCard.stakedAccent
+                                      .withValues(alpha: 0.75),
+                                ),
+                              ),
+                            _BalanceInline(
+                              value: widget.ethBalance,
+                              unit: 'ETH',
+                              valueColor:
+                                  NeoTheme.ethBlue.withValues(alpha: 0.9),
+                              unitColor:
+                                  NeoTheme.ethBlue.withValues(alpha: 0.6),
+                            ),
+                          ],
                         ),
                       ),
-                      Text(
-                        ' ETH',
-                        style: TextStyle(fontSize: 10, color: NeoTheme.ethBlue.withValues(alpha: 0.6)),
-                      ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 2),
                       RotationTransition(
                         turns: _ctrl.drive(
                           Tween<double>(begin: 0.0, end: 0.5)
@@ -1444,7 +2020,7 @@ class _WalletCardState extends State<_WalletCard>
                         ),
                         child: Icon(
                           Icons.expand_more_rounded,
-                          size: 20,
+                          size: 18,
                           color: NeoTheme.platinum.withValues(alpha: 0.4),
                         ),
                       ),
@@ -1469,42 +2045,29 @@ class _WalletCardState extends State<_WalletCard>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final avail = (constraints.maxWidth - _reservedNonTextWidth)
-                    .clamp(48.0, double.infinity);
-                final showFull = widget.fullAddress.isNotEmpty &&
-                    _measureTextWidth(widget.fullAddress, addressStyle) <= avail;
-                final addressText = widget.fullAddress.isEmpty
-                    ? '—'
-                    : (showFull ? widget.fullAddress : _WalletCard._shorten(widget.fullAddress));
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        addressText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: addressStyle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: widget.rpcChecking
-                          ? 'Checking whether your Base RPC URL(s) respond...'
-                          : widget.rpcReachable == true
-                              ? 'At least one configured Base RPC URL is reachable (same list the app uses).'
-                              : 'No configured Base RPC URL responded. Tap to open Expert settings.',
-                      child: _WalletRpcStatusPill(
-                        rpcChecking: widget.rpcChecking,
-                        rpcReachable: widget.rpcReachable,
-                        onOpenExpert: widget.onOpenExpert,
-                      ),
-                    ),
-                  ],
-                );
-              },
+            // Status row: previously duplicated the full wallet address here
+            // (which is already shown — ellipsized — in the collapsed header).
+            // We now use this slot purely for the two status pills: the new
+            // purple "Where's My MOR?" deep-link and the existing RPC pill.
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (widget.onOpenWheresMyMor != null)
+                  _WheresMyMorPill(onTap: widget.onOpenWheresMyMor!),
+                const Spacer(),
+                Tooltip(
+                  message: widget.rpcChecking
+                      ? 'Checking whether your Base RPC URL(s) respond...'
+                      : widget.rpcReachable == true
+                          ? 'At least one configured Base RPC URL is reachable (same list the app uses).'
+                          : 'No configured Base RPC URL responded. Tap to open Expert settings.',
+                  child: _WalletRpcStatusPill(
+                    rpcChecking: widget.rpcChecking,
+                    rpcReachable: widget.rpcReachable,
+                    onOpenExpert: widget.onOpenExpert,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             Text(
@@ -1526,6 +2089,8 @@ class _WalletCardState extends State<_WalletCard>
                     value: widget.morBalance,
                     color: NeoTheme.green,
                     helperText: AppBrand.morBalanceHelper,
+                    stakedSuffix: _WalletCard.formatStakedSuffix(widget.activeStakeWei),
+                    stakedColor: _WalletCard.stakedAccent,
                     onTap: widget.onSendMor,
                     token: TokenWithBaseInlay(
                       token: MorTokenIcon(size: _tokenVisualSize),
@@ -1553,6 +2118,55 @@ class _WalletCardState extends State<_WalletCard>
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Purple pill that deep-links into Wallet → "Where's My MOR?" with the
+/// scan auto-running. Styled to match the `_WalletRpcStatusPill` it sits
+/// next to in the expanded wallet card.
+class _WheresMyMorPill extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _WheresMyMorPill({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    const accent = _WalletCard.stakedAccent;
+    return Tooltip(
+      message: 'Scan the chain for your MOR across wallet, active stakes, and on-hold.',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: NeoTheme.mainPanelFill,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: accent.withValues(alpha: 0.45)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.search_rounded, size: 11, color: accent),
+                const SizedBox(width: 4),
+                Text(
+                  "WHERE'S MY MOR?",
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: accent,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1912,6 +2526,50 @@ class _WalletRpcStatusPill extends StatelessWidget {
   }
 }
 
+/// Compact "value + unit" pair used in the collapsed wallet card header.
+///
+/// Rendered as a single RichText so MOR / ETH / the staked hint can be laid
+/// out in a Wrap — wrapping only happens *between* pairs, never mid-number
+/// ("15.27929" will never be broken off from "MOR"). The value is the bold,
+/// fully-opaque glyph; the unit follows in the same color at lower
+/// opacity and slightly smaller size, matching the legacy two-Text design.
+class _BalanceInline extends StatelessWidget {
+  final String value;
+  final String unit;
+  final Color valueColor;
+  final Color unitColor;
+
+  const _BalanceInline({
+    required this.value,
+    required this.unit,
+    required this.valueColor,
+    required this.unitColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.visible,
+      text: TextSpan(children: [
+        TextSpan(
+          text: value,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: valueColor,
+          ),
+        ),
+        TextSpan(
+          text: ' $unit',
+          style: TextStyle(fontSize: 11, color: unitColor),
+        ),
+      ]),
+    );
+  }
+}
+
 class _BalanceChip extends StatelessWidget {
   final String symbol;
   final String value;
@@ -1921,6 +2579,13 @@ class _BalanceChip extends StatelessWidget {
   final VoidCallback onTap;
   final bool expand;
 
+  /// Optional secondary amount shown in [stakedColor] immediately after
+  /// [value] — used for the MOR tile's "(X.XX Staked)" purple hint.
+  /// Rendered with `Wrap` so it falls to the next line on narrow widths
+  /// instead of ellipsizing the liquid balance.
+  final String? stakedSuffix;
+  final Color? stakedColor;
+
   const _BalanceChip({
     required this.symbol,
     required this.value,
@@ -1929,6 +2594,8 @@ class _BalanceChip extends StatelessWidget {
     required this.onTap,
     this.helperText,
     this.expand = false,
+    this.stakedSuffix,
+    this.stakedColor,
   });
 
   @override
@@ -1939,7 +2606,53 @@ class _BalanceChip extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
       border: Border.all(color: color.withValues(alpha: 0.55), width: 1.2),
     );
-    final textColumn = Column(
+    final liquidStyle = TextStyle(
+      color: color,
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      fontFamily: 'JetBrains Mono',
+    );
+    final stakedStyle = TextStyle(
+      color: stakedColor ?? color,
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+      fontFamily: 'JetBrains Mono',
+    );
+    // Liquid balance: wrapped in FittedBox(scaleDown) so values like
+    // "0.01063" never get ellipsized to "0.010..." on narrow iPhone widths
+    // where the chip column is ~70px wide — the text scales down one or
+    // two percent instead, which is imperceptible and keeps the decimals
+    // honest. Left-aligned inside FittedBox so the number stays flush with
+    // the chip symbol above it.
+    final Widget liquidValue = FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Text(value, maxLines: 1, style: liquidStyle),
+    );
+    // When a staked suffix is present we use Wrap so '49.80986 MOR (110.24
+    // Staked)' falls to a second line gracefully on narrow phones rather
+    // than truncating the liquid balance. Each child is itself scale-safe
+    // so neither the liquid balance nor the staked hint can overflow.
+    final Widget amountWidget = stakedSuffix == null
+        ? liquidValue
+        : Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: 6,
+            runSpacing: 2,
+            children: [
+              liquidValue,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text('($stakedSuffix Staked)',
+                    maxLines: 1, style: stakedStyle),
+              ),
+            ],
+          );
+    // Upper block: just the symbol header + amount(s). The helper text is
+    // pulled OUT of this column so it can span the FULL chip width below
+    // (not the narrow right-of-icon slot).
+    final amountColumn = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1953,32 +2666,25 @@ class _BalanceChip extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: color,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            fontFamily: 'JetBrains Mono',
-          ),
-        ),
-        if (helperText != null && helperText!.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(
-            helperText!,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.hintColor,
-              fontSize: 9,
-              height: 1.25,
-            ),
-          ),
-        ],
+        amountWidget,
       ],
     );
+    final Widget? helperRow =
+        (helperText != null && helperText!.isNotEmpty)
+            ? Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  helperText!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.hintColor,
+                    fontSize: 9,
+                    height: 1.25,
+                  ),
+                ),
+              )
+            : null;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1988,16 +2694,24 @@ class _BalanceChip extends StatelessWidget {
           decoration: decoration,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Row(
-              mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                token,
-                const SizedBox(width: 10),
-                if (expand)
-                  Expanded(child: textColumn)
-                else
-                  Flexible(child: textColumn),
+                Row(
+                  mainAxisSize:
+                      expand ? MainAxisSize.max : MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    token,
+                    const SizedBox(width: 10),
+                    if (expand)
+                      Expanded(child: amountColumn)
+                    else
+                      Flexible(child: amountColumn),
+                  ],
+                ),
+                if (helperRow != null) helperRow,
               ],
             ),
           ),
@@ -2149,7 +2863,25 @@ class _ModelTile extends StatelessWidget {
   final ModelStatusEntry entry;
   final VoidCallback onTap;
 
-  const _ModelTile({required this.entry, required this.onTap});
+  /// When false, the wallet cannot cover the on-chain stake for the
+  /// current default session duration. The tile stays tappable (the
+  /// confirmation modal lets the user pick a shorter duration) but is
+  /// rendered muted so it clearly reads as "not ready to go".
+  final bool affordable;
+
+  /// Pre-formatted hourly stake label (e.g. `"68.70 MOR/hr"`). This is the
+  /// number the user must **lock** per hour of chat — same formula the
+  /// confirmation modal uses, so the tile and modal agree by construction.
+  /// Parent passes null when the stake can't be computed (no price / no
+  /// calibration) so the tile simply omits the label.
+  final String? priceLabel;
+
+  const _ModelTile({
+    required this.entry,
+    required this.onTap,
+    this.affordable = true,
+    this.priceLabel,
+  });
 
   static Color _healthColor(double? pct) {
     if (pct == null) return NeoTheme.mainPanelOutline();
@@ -2162,16 +2894,21 @@ class _ModelTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isTEE = entry.isTEE;
-    final price = entry.formattedPrice;
+    final price = priceLabel;
     final borderColor = _healthColor(entry.uptime6h);
 
-    return Card(
+    final card = Card(
       color: NeoTheme.mainPanelFill,
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 4),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: borderColor.withValues(alpha: 0.55), width: 1.3),
+        side: BorderSide(
+          color: affordable
+              ? borderColor.withValues(alpha: 0.55)
+              : borderColor.withValues(alpha: 0.22),
+          width: 1.3,
+        ),
       ),
       child: InkWell(
         onTap: onTap,
@@ -2201,74 +2938,71 @@ class _ModelTile extends StatelessWidget {
               ),
               const SizedBox(width: 10),
 
-              // --- Left: name · type · tags ---
               Expanded(
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      child: Text(
-                        entry.name,
-                        style: theme.textTheme.titleMedium?.copyWith(fontSize: 13, fontWeight: FontWeight.w600),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            entry.name,
+                            style: theme.textTheme.titleMedium?.copyWith(fontSize: 13, fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                        if (price != null)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: Text(price, style: TextStyle(fontSize: 10, color: theme.hintColor)),
+                          ),
+                      ],
                     ),
-                    if (entry.type.isNotEmpty) ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 5),
-                        child: Text('·', style: TextStyle(color: theme.hintColor, fontSize: 12)),
-                      ),
-                      Text(
-                        entry.type,
-                        style: const TextStyle(color: Color(0xFF6B7280), fontSize: 10, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                    ...entry.tags
-                        .where((t) => t.toLowerCase() != entry.type.toLowerCase())
-                        .take(2)
-                        .map((tag) => Padding(
-                              padding: const EdgeInsets.only(left: 5),
-                              child: Text(
-                                tag,
-                                style: TextStyle(
-                                  color: tag.toLowerCase() == 'tee'
-                                      ? NeoTheme.green.withValues(alpha: 0.7)
-                                      : const Color(0xFF6B7280),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            )),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        if (entry.type.isNotEmpty)
+                          Text(
+                            entry.type,
+                            style: const TextStyle(color: Color(0xFF6B7280), fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ...entry.tags
+                            .where((t) => t.toLowerCase() != entry.type.toLowerCase())
+                            .take(3)
+                            .map((tag) => Padding(
+                                  padding: const EdgeInsets.only(left: 5),
+                                  child: Text(
+                                    tag,
+                                    style: TextStyle(
+                                      color: tag.toLowerCase() == 'tee'
+                                          ? NeoTheme.green.withValues(alpha: 0.7)
+                                          : const Color(0xFF6B7280),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                )),
+                        const Spacer(),
+                        if (entry.providers > 0) ...[
+                          Icon(Icons.dns_outlined, size: 11, color: theme.hintColor),
+                          const SizedBox(width: 2),
+                          Text(
+                            '${entry.providers}',
+                            style: TextStyle(fontSize: 10, color: theme.hintColor),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
-              ),
-
-              // --- Right: price · providers ---
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (price != null)
-                    Text(price, style: TextStyle(fontSize: 10, color: theme.hintColor)),
-                  if (price != null && entry.providers > 0)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 5),
-                      child: Text('·', style: TextStyle(color: theme.hintColor, fontSize: 10)),
-                    ),
-                  if (entry.providers > 0) ...[
-                    Icon(Icons.dns_outlined, size: 11, color: theme.hintColor),
-                    const SizedBox(width: 2),
-                    Text(
-                      '${entry.providers}',
-                      style: TextStyle(fontSize: 10, color: theme.hintColor),
-                    ),
-                  ],
-                ],
               ),
             ],
           ),
         ),
       ),
     );
+    return affordable ? card : Opacity(opacity: 0.45, child: card);
   }
 }
 
