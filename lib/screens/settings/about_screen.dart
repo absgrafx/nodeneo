@@ -6,6 +6,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../constants/app_brand.dart';
 import '../../services/bridge.dart';
+import '../../services/form_factor.dart';
+import '../../services/platform_caps.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
 
@@ -84,8 +86,9 @@ class _AboutScreenState extends State<AboutScreen> {
     setState(() => _loadingTail = true);
     try {
       final lines = await logFile.readAsLines();
-      final tail =
-          lines.length <= 50 ? lines : lines.sublist(lines.length - 50);
+      final tail = lines.length <= 50
+          ? lines
+          : lines.sublist(lines.length - 50);
       if (mounted) {
         setState(() {
           _logTail = tail.join('\n');
@@ -112,20 +115,20 @@ class _AboutScreenState extends State<AboutScreen> {
     final dir = Directory(_logDir);
     if (!dir.existsSync()) return;
     final entries = dir.listSync()
-      ..sort(
-          (a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+      ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
     _logFiles = entries
         .whereType<File>()
         .where((f) => f.path.endsWith('.log'))
         .map((f) {
-      final stat = f.statSync();
-      return _LogFileInfo(
-        name: f.uri.pathSegments.last,
-        path: f.path,
-        sizeKb: (stat.size / 1024).ceil(),
-        modified: stat.modified,
-      );
-    }).toList();
+          final stat = f.statSync();
+          return _LogFileInfo(
+            name: f.uri.pathSegments.last,
+            path: f.path,
+            sizeKb: (stat.size / 1024).ceil(),
+            modified: stat.modified,
+          );
+        })
+        .toList();
   }
 
   void _setLogLevel(String level) {
@@ -136,8 +139,9 @@ class _AboutScreenState extends State<AboutScreen> {
         SnackBar(content: Text('Log level set to ${level.toUpperCase()}')),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
   }
 
@@ -146,83 +150,90 @@ class _AboutScreenState extends State<AboutScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Version & Logs')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          SectionCard(
-            icon: Icons.info_outline_rounded,
-            title: 'About',
-            status: Text(
-              'v$_appVersion',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w500,
-                color: NeoTheme.platinum.withValues(alpha: 0.4),
+      body: MaxContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            SectionCard(
+              icon: Icons.info_outline_rounded,
+              title: 'About',
+              status: Text(
+                'v$_appVersion',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w500,
+                  color: NeoTheme.platinum.withValues(alpha: 0.4),
+                ),
               ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Image.asset(
-                      'assets/branding/splash_logo.png',
-                      width: 40,
-                      height: 40,
-                    ),
-                    const SizedBox(width: 14),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          AppBrand.displayName,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Image.asset(
+                        'assets/branding/splash_logo.png',
+                        width: 40,
+                        height: 40,
+                      ),
+                      const SizedBox(width: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            AppBrand.displayName,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          AppBrand.tagline,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.hintColor,
-                            fontSize: 11,
+                          const SizedBox(height: 2),
+                          Text(
+                            AppBrand.tagline,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.hintColor,
+                              fontSize: 11,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _VersionRow(label: 'App version', value: 'v$_appVersion ($_buildNumber)'),
-                const SizedBox(height: 8),
-                _VersionRow(
-                  label: 'Proxy-router',
-                  value: _isFork
-                      ? '$_upstreamTag + $_forkCommits commits (fork)'
-                      : _prVersion,
-                ),
-                if (_sdkCommit.isNotEmpty) ...[
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _VersionRow(
+                    label: 'App version',
+                    value: 'v$_appVersion ($_buildNumber)',
+                  ),
                   const SizedBox(height: 8),
                   _VersionRow(
-                    label: 'SDK commit',
-                    value: _sdkCommit.length > 12 ? _sdkCommit.substring(0, 12) : _sdkCommit,
-                    mono: true,
+                    label: 'Proxy-router',
+                    value: _isFork
+                        ? '$_upstreamTag + $_forkCommits commits (fork)'
+                        : _prVersion,
                   ),
+                  if (_sdkCommit.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _VersionRow(
+                      label: 'SDK commit',
+                      value: _sdkCommit.length > 12
+                          ? _sdkCommit.substring(0, 12)
+                          : _sdkCommit,
+                      mono: true,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.article_outlined,
-            title: 'Logs',
-            status: StatusPill(
-              active: _logLevel == 'debug',
-              label: _logLevel[0].toUpperCase() + _logLevel.substring(1),
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.article_outlined,
+              title: 'Logs',
+              status: StatusPill(
+                active: _logLevel == 'debug',
+                label: _logLevel[0].toUpperCase() + _logLevel.substring(1),
+              ),
+              child: _buildLoggingSection(theme),
             ),
-            child: _buildLoggingSection(theme),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -235,9 +246,12 @@ class _AboutScreenState extends State<AboutScreen> {
           children: [
             const Icon(Icons.tune, size: 18),
             const SizedBox(width: 10),
-            Text('Log Level',
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w600)),
+            Text(
+              'Log Level',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -253,8 +267,7 @@ class _AboutScreenState extends State<AboutScreen> {
                     DropdownMenuItem(value: 'debug', child: Text('Debug')),
                     DropdownMenuItem(value: 'info', child: Text('Info')),
                     DropdownMenuItem(value: 'warn', child: Text('Warning')),
-                    DropdownMenuItem(
-                        value: 'error', child: Text('Error only')),
+                    DropdownMenuItem(value: 'error', child: Text('Error only')),
                   ],
                   onChanged: (v) {
                     if (v != null) _setLogLevel(v);
@@ -274,9 +287,10 @@ class _AboutScreenState extends State<AboutScreen> {
                   child: Text(
                     _logDir,
                     style: const TextStyle(
-                        fontFamily: 'JetBrains Mono',
-                        fontSize: 10,
-                        color: Color(0xFFD1D5DB)),
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: 10,
+                      color: Color(0xFFD1D5DB),
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -291,14 +305,16 @@ class _AboutScreenState extends State<AboutScreen> {
                     Clipboard.setData(ClipboardData(text: _logDir));
                     ScaffoldMessenger.of(context)
                       ..clearSnackBars()
-                      ..showSnackBar(const SnackBar(
-                        content: Text('Log path copied'),
-                        behavior: SnackBarBehavior.floating,
-                        duration: Duration(seconds: 2),
-                      ));
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text('Log path copied'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
                   },
                 ),
-                if (Platform.isMacOS)
+                if (PlatformCaps.supportsRevealInFileManager)
                   IconButton(
                     tooltip: 'Open in Finder',
                     icon: const Icon(Icons.folder_open, size: 16),
@@ -314,8 +330,10 @@ class _AboutScreenState extends State<AboutScreen> {
           const SizedBox(height: 6),
           Text(
             'Logs rotate: 10 MB per file, up to 5 rotated files.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.hintColor, fontSize: 10),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.hintColor,
+              fontSize: 10,
+            ),
           ),
         ],
 
@@ -326,21 +344,30 @@ class _AboutScreenState extends State<AboutScreen> {
               padding: const EdgeInsets.only(bottom: 4),
               child: Row(
                 children: [
-                  const Icon(Icons.description_outlined,
-                      size: 14, color: Color(0xFF6B7280)),
+                  const Icon(
+                    Icons.description_outlined,
+                    size: 14,
+                    color: Color(0xFF6B7280),
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
-                    child: Text(lf.name,
-                        style: const TextStyle(
-                            fontFamily: 'JetBrains Mono',
-                            fontSize: 10,
-                            color: Color(0xFFD1D5DB))),
-                  ),
-                  Text('${lf.sizeKb} KB',
+                    child: Text(
+                      lf.name,
                       style: const TextStyle(
-                          fontFamily: 'JetBrains Mono',
-                          fontSize: 9,
-                          color: Color(0xFF9CA3AF))),
+                        fontFamily: 'JetBrains Mono',
+                        fontSize: 10,
+                        color: Color(0xFFD1D5DB),
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${lf.sizeKb} KB',
+                    style: const TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: 9,
+                      color: Color(0xFF9CA3AF),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -350,9 +377,13 @@ class _AboutScreenState extends State<AboutScreen> {
         Row(
           children: [
             Expanded(
-              child: Text('Recent output',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w600, fontSize: 13)),
+              child: Text(
+                'Recent output',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
             ),
             IconButton(
               tooltip: 'Refresh logs',
@@ -360,7 +391,8 @@ class _AboutScreenState extends State<AboutScreen> {
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.refresh, size: 18),
               onPressed: _loadingTail ? null : _loadLogTail,
             ),
@@ -376,8 +408,7 @@ class _AboutScreenState extends State<AboutScreen> {
             border: Border.all(color: const Color(0xFF1E293B)),
           ),
           child: _loadingTail
-              ? const Center(
-                  child: CircularProgressIndicator(strokeWidth: 2))
+              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
               : Scrollbar(
                   controller: _tailScrollCtrl,
                   thumbVisibility: true,
@@ -401,7 +432,6 @@ class _AboutScreenState extends State<AboutScreen> {
   }
 }
 
-
 class _VersionRow extends StatelessWidget {
   final String label;
   final String value;
@@ -422,19 +452,19 @@ class _VersionRow extends StatelessWidget {
           width: 110,
           child: Text(
             label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.hintColor,
-            ),
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
           ),
         ),
         Expanded(
           child: Text(
             value,
-            style: (mono
-                    ? theme.textTheme.bodySmall
-                        ?.copyWith(fontFamily: 'monospace')
-                    : theme.textTheme.bodySmall)
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style:
+                (mono
+                        ? theme.textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                          )
+                        : theme.textTheme.bodySmall)
+                    ?.copyWith(fontWeight: FontWeight.w600),
           ),
         ),
       ],

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/bridge.dart';
+import '../../services/form_factor.dart';
 import '../../theme.dart';
 import '../../widgets/chat_message_body.dart';
 import 'chat_screen.dart';
@@ -26,10 +27,12 @@ class ConversationTranscriptScreen extends StatefulWidget {
   });
 
   @override
-  State<ConversationTranscriptScreen> createState() => _ConversationTranscriptScreenState();
+  State<ConversationTranscriptScreen> createState() =>
+      _ConversationTranscriptScreenState();
 }
 
-class _ConversationTranscriptScreenState extends State<ConversationTranscriptScreen> {
+class _ConversationTranscriptScreenState
+    extends State<ConversationTranscriptScreen> {
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _messages = [];
@@ -93,122 +96,175 @@ class _ConversationTranscriptScreenState extends State<ConversationTranscriptScr
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.modelName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            Text(
+              widget.modelName,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
             Text(
               'History (read-only)',
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor, fontWeight: FontWeight.w400),
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).hintColor,
+                fontWeight: FontWeight.w400,
+              ),
             ),
           ],
         ),
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: NeoTheme.green))
-                : _error != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(_error!, style: const TextStyle(color: Color(0xFFF87171))),
+      body: MaxContentWidth(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: NeoTheme.green),
+                    )
+                  : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          _error!,
+                          style: const TextStyle(color: Color(0xFFF87171)),
                         ),
-                      )
-                    : _messages.isEmpty
-                        ? const Center(child: Text('No messages saved.', style: TextStyle(color: Color(0xFF6B7280))))
-                        : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                            itemCount: _messages.length,
-                            itemBuilder: (ctx, i) {
-                              final m = _messages[i];
-                              final role = m['role'] as String? ?? '';
-                              final text = m['content'] as String? ?? '';
-                              final isUser = role == 'user';
-                              return Align(
-                                alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                                child: Container(
-                                  margin: const EdgeInsets.only(bottom: 10),
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                  constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.88),
-                                  decoration: BoxDecoration(
-                                    color: isUser
-                                        ? NeoTheme.green.withValues(alpha: 0.12)
-                                        : NeoTheme.surface,
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(color: const Color(0xFF374151)),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                                    mainAxisSize: MainAxisSize.min,
+                      ),
+                    )
+                  : _messages.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No messages saved.',
+                        style: TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      itemCount: _messages.length,
+                      itemBuilder: (ctx, i) {
+                        final m = _messages[i];
+                        final role = m['role'] as String? ?? '';
+                        final text = m['content'] as String? ?? '';
+                        final isUser = role == 'user';
+                        return Align(
+                          alignment: isUser
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            constraints: BoxConstraints(
+                              maxWidth: MediaQuery.sizeOf(context).width * 0.88,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isUser
+                                  ? NeoTheme.green.withValues(alpha: 0.12)
+                                  : NeoTheme.surface,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: const Color(0xFF374151),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (isUser)
+                                  Row(
                                     children: [
-                                      if (isUser)
-                                        Row(
-                                          children: [
-                                            const Spacer(),
-                                            IconButton(
-                                              tooltip: 'Copy message',
-                                              padding: EdgeInsets.zero,
-                                              visualDensity: VisualDensity.compact,
-                                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                              icon: Icon(
-                                                Icons.copy_rounded,
-                                                size: 18,
-                                                color: theme.hintColor,
-                                              ),
-                                              onPressed: text.isEmpty
-                                                  ? null
-                                                  : () async {
-                                                      await Clipboard.setData(ClipboardData(text: text));
-                                                      if (!ctx.mounted) return;
-                                                      ScaffoldMessenger.of(ctx).showSnackBar(
-                                                        const SnackBar(
-                                                          content: Text('Message copied'),
-                                                          behavior: SnackBarBehavior.floating,
-                                                          duration: Duration(seconds: 2),
-                                                        ),
-                                                      );
-                                                    },
-                                            ),
-                                          ],
+                                      const Spacer(),
+                                      IconButton(
+                                        tooltip: 'Copy message',
+                                        padding: EdgeInsets.zero,
+                                        visualDensity: VisualDensity.compact,
+                                        constraints: const BoxConstraints(
+                                          minWidth: 32,
+                                          minHeight: 32,
                                         ),
-                                      buildChatMessageBody(
-                                        theme,
-                                        role: role,
-                                        text: text,
-                                        isError: false,
+                                        icon: Icon(
+                                          Icons.copy_rounded,
+                                          size: 18,
+                                          color: theme.hintColor,
+                                        ),
+                                        onPressed: text.isEmpty
+                                            ? null
+                                            : () async {
+                                                await Clipboard.setData(
+                                                  ClipboardData(text: text),
+                                                );
+                                                if (!ctx.mounted) return;
+                                                ScaffoldMessenger.of(
+                                                  ctx,
+                                                ).showSnackBar(
+                                                  const SnackBar(
+                                                    content: Text(
+                                                      'Message copied',
+                                                    ),
+                                                    behavior: SnackBarBehavior
+                                                        .floating,
+                                                    duration: Duration(
+                                                      seconds: 2,
+                                                    ),
+                                                  ),
+                                                );
+                                              },
                                       ),
                                     ],
                                   ),
+                                buildChatMessageBody(
+                                  theme,
+                                  role: role,
+                                  text: text,
+                                  isError: false,
                                 ),
-                              );
-                            },
+                              ],
+                            ),
                           ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    (widget.onChainSessionId != null && widget.onChainSessionId!.trim().isNotEmpty)
-                        ? 'Resume uses your open on-chain session. Prior messages stay in context.'
-                        : 'A new on-chain session starts when you send. Prior messages stay in context.',
-                    style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, fontSize: 11, height: 1.3),
-                  ),
-                  const SizedBox(height: 10),
-                  FilledButton.icon(
-                    onPressed: _loading || widget.modelId.isEmpty ? null : _continueThread,
-                    style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-                    icon: const Icon(Icons.chat_rounded, color: Colors.white, size: 20),
-                    label: const Text('Continue chatting'),
-                  ),
-                ],
+                        );
+                      },
+                    ),
+            ),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      (widget.onChainSessionId != null &&
+                              widget.onChainSessionId!.trim().isNotEmpty)
+                          ? 'Resume uses your open on-chain session. Prior messages stay in context.'
+                          : 'A new on-chain session starts when you send. Prior messages stay in context.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.hintColor,
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    FilledButton.icon(
+                      onPressed: _loading || widget.modelId.isEmpty
+                          ? null
+                          : _continueThread,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: NeoTheme.green,
+                      ),
+                      icon: const Icon(
+                        Icons.chat_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      label: const Text('Continue chatting'),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
