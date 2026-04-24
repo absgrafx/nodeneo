@@ -284,6 +284,62 @@ func ScanWalletMOR() string {
 	})
 }
 
+// SumActiveSessionStakes does a narrow, fast scan over the supplied session
+// IDs (typically the local "Continue Chatting" list) and sums the stakes of
+// any that are still open on-chain. Designed for the home screen: one
+// eth_call per session, bounded by the local open-session count (<= 12),
+// unlike ScanWalletMOR which iterates every historical session.
+//
+// Input: JSON array of bytes32 session IDs (with or without "0x" prefix).
+// Output JSON: { stake_wei, stake, open_count, scanned, skipped }
+//
+// Sessions that fail to decode, are closed on-chain, or produce RPC errors
+// are silently skipped — a partial answer is better than blocking the home
+// card on a single flaky session.
+func SumActiveSessionStakes(sessionIDsJSON string) string {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+	if c == nil {
+		return errJSON(errNotInit)
+	}
+
+	var ids []string
+	if err := json.Unmarshal([]byte(sessionIDsJSON), &ids); err != nil {
+		return errJSON(fmt.Errorf("invalid session_ids JSON: %w", err))
+	}
+
+	total := big.NewInt(0)
+	openCount := 0
+	scanned := 0
+	skipped := 0
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			skipped++
+			continue
+		}
+		sess, err := getSessionData(id)
+		if err != nil {
+			skipped++
+			continue
+		}
+		scanned++
+		if sess.closedAt.Sign() == 0 {
+			total.Add(total, sess.stake)
+			openCount++
+		}
+	}
+
+	return resultJSON(map[string]interface{}{
+		"stake_wei":  total.String(),
+		"stake":      formatMOR(total),
+		"open_count": openCount,
+		"scanned":    scanned,
+		"skipped":    skipped,
+	})
+}
+
 type sessionData struct {
 	stake    *big.Int
 	endsAt   *big.Int
