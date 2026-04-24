@@ -358,4 +358,71 @@ Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Andr
 
 ---
 
+### 12. Bug: TEE Attestation Fails on iOS (Sigstore Cache Path)
+
+**Priority:** High (blocks Secure/TEE models on iPhone)
+
+#### Problem
+TEE attestation fails on iOS with `mkdir .sigstore: operation not permitted`. The Sigstore library used for TEE golden value verification tries to create a `.sigstore` cache directory in the app container root, which iOS sandboxing prohibits. Non-TEE models work fine.
+
+#### Error
+```
+TEE attestation failed: failed to fetch golden values for version v6.2.0:
+failed to fetch Sigstore trusted root: mkdir /private/var/mobile/Containers/
+Data/Application/.../.sigstore: operation not permitted
+```
+
+#### Root Cause
+The proxy-router's attestation module (or the underlying Sigstore Go library) defaults to creating its cache in the current working directory or the process root. On macOS this is writable; on iOS it's the sandboxed container root which only allows writes to `Documents/`, `Library/`, and `tmp/`.
+
+#### Fix
+Configure the Sigstore library's cache/root path to use the `dataDir` passed during SDK `Init` (which is already under `Library/Application Support/nodeneo/`). This may be an environment variable (`SIGSTORE_ROOT_DIR` or similar) or a library initialization parameter in the Go attestation code.
+
+#### Workaround
+Use non-TEE model variants on iOS until fixed. 50+ models available without TEE.
+
+---
+
+### 13. Bug: Provider IP/Port Exposed in Error Messages on iOS
+
+**Priority:** High (security — leaks provider infrastructure)
+
+#### Problem
+When a provider request fails on iOS, the raw error message is displayed to the user including the provider's internal IP and port (e.g. `Post "http://216.81.245.17:15856/chat/completions": EOF`). This leaks provider infrastructure details that should never be shown to end users.
+
+This also happened with a non-TEE thinking model (Arcee-Trinity-Large-Thinking) — the first attempt failed with this error, then a retry with "Reconnect session" worked and thinking mode displayed correctly. The initial failure may be related to the iOS sandbox environment or ATS restrictions on plain HTTP connections to provider IPs.
+
+#### Requirements
+- Sanitize all provider error messages before displaying to users — strip IPs, ports, and internal URLs
+- Show user-friendly messages: "Provider temporarily unavailable — tap to retry" instead of raw HTTP errors
+- Investigate whether iOS ATS (App Transport Security) blocks plain HTTP to provider IPs — may need `NSAllowsArbitraryLoads` or the existing `NSAllowsLocalNetworking` may be insufficient for external provider endpoints
+- Log the full error details to the app log (viewable in Version & Logs) for debugging, but don't surface them in the chat UI
+
+---
+
+### 14. iOS Full Regression Test Checklist
+
+**Priority:** High (pre-release gate)
+
+#### Problem
+Several iOS-specific issues surfaced during initial testing that wouldn't occur on macOS: TEE sigstore path, ATS/HTTP restrictions, provider error message exposure. A systematic iOS regression checklist is needed before each release.
+
+#### Checklist
+- [ ] Onboarding: create wallet, import PK, import mnemonic
+- [ ] Home screen: wallet card, model list, pull-to-refresh
+- [ ] Chat: non-TEE model send/receive/stream
+- [ ] Chat: TEE model (verify sigstore fix when done)
+- [ ] Chat: thinking model — thinking zone + answer zone
+- [ ] Chat: stop/cancel generation
+- [ ] Chat: error handling (provider busy, session expired, reconnect)
+- [ ] Wallet: Where's My MOR scan, active sessions
+- [ ] Settings: Network (Blockchain Connection only, no API/Gateway)
+- [ ] Settings: Preferences, Backup & Reset (export/import)
+- [ ] App lock: password, Face ID, factory reset (DELETE ALL)
+- [ ] Safe areas: notch, Dynamic Island, keyboard overlap
+- [ ] Background/foreground: app survives backgrounding and resume
+- [ ] Release build: symbols exported (-rdynamic), no debug dylib issues
+
+---
+
 *Last updated: 2026-04-16*

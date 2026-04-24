@@ -1,11 +1,11 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../services/app_lock_service.dart';
 import '../../services/default_tuning_store.dart';
+import '../../services/form_factor.dart';
 import '../../services/keychain_sync_store.dart';
+import '../../services/platform_caps.dart';
 import '../../services/session_duration_store.dart';
 import '../../services/wallet_vault.dart';
 import '../../theme.dart';
@@ -91,11 +91,20 @@ class _SessionsScreenState extends State<SessionsScreen> {
     setState(() {
       _promptController.text = prompt;
       _savedPrompt = prompt;
-      _temperature = (d['temperature'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTemperature;
-      _topP = (d['top_p'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTopP;
-      _maxTokens = (d['max_tokens'] as num?)?.toInt() ?? DefaultTuningStore.defaultMaxTokens;
-      _frequencyPenalty = (d['frequency_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultFrequencyPenalty;
-      _presencePenalty = (d['presence_penalty'] as num?)?.toDouble() ?? DefaultTuningStore.defaultPresencePenalty;
+      _temperature =
+          (d['temperature'] as num?)?.toDouble() ??
+          DefaultTuningStore.defaultTemperature;
+      _topP =
+          (d['top_p'] as num?)?.toDouble() ?? DefaultTuningStore.defaultTopP;
+      _maxTokens =
+          (d['max_tokens'] as num?)?.toInt() ??
+          DefaultTuningStore.defaultMaxTokens;
+      _frequencyPenalty =
+          (d['frequency_penalty'] as num?)?.toDouble() ??
+          DefaultTuningStore.defaultFrequencyPenalty;
+      _presencePenalty =
+          (d['presence_penalty'] as num?)?.toDouble() ??
+          DefaultTuningStore.defaultPresencePenalty;
       _defaultsLoading = false;
     });
   }
@@ -151,14 +160,18 @@ class _SessionsScreenState extends State<SessionsScreen> {
 
   Future<void> _openEnableLock() async {
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const AppLockSetupScreen(changingPassword: false)),
+      MaterialPageRoute<bool>(
+        builder: (_) => const AppLockSetupScreen(changingPassword: false),
+      ),
     );
     if (ok == true && mounted) await _loadSecurity();
   }
 
   Future<void> _openChangePassword() async {
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const AppLockSetupScreen(changingPassword: true)),
+      MaterialPageRoute<bool>(
+        builder: (_) => const AppLockSetupScreen(changingPassword: true),
+      ),
     );
     if (ok == true && mounted) await _loadSecurity();
   }
@@ -202,7 +215,10 @@ class _SessionsScreenState extends State<SessionsScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () async {
               final v = await AppLockService.instance.verifyPassword(ctrl.text);
@@ -232,7 +248,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
   Future<void> _setBiometric(bool v) async {
     if (v && !_bioAvailable) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Biometrics are not available on this device.')),
+        const SnackBar(
+          content: Text('Biometrics are not available on this device.'),
+        ),
       );
       return;
     }
@@ -247,9 +265,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
       await WalletVault.instance.resyncKeychainItems();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Keychain update error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Keychain update error: $e')));
       }
     }
     if (mounted) {
@@ -275,49 +293,51 @@ class _SessionsScreenState extends State<SessionsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Preferences')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          SectionCard(
-            icon: Icons.psychology_outlined,
-            title: 'System Prompt',
-            status: StatusPill(
-              active: _savedPrompt.isNotEmpty,
-              label: _savedPrompt.isNotEmpty ? 'Custom' : 'None',
+      body: MaxContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            SectionCard(
+              icon: Icons.psychology_outlined,
+              title: 'System Prompt',
+              status: StatusPill(
+                active: _savedPrompt.isNotEmpty,
+                label: _savedPrompt.isNotEmpty ? 'Custom' : 'None',
+              ),
+              child: _buildSystemPromptBody(theme),
             ),
-            child: _buildSystemPromptBody(theme),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.tune_rounded,
-            title: 'Default Tuning',
-            status: StatusPill(
-              active: _hasTuningOverrides,
-              label: _hasTuningOverrides ? 'Custom' : 'Default',
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.tune_rounded,
+              title: 'Default Tuning',
+              status: StatusPill(
+                active: _hasTuningOverrides,
+                label: _hasTuningOverrides ? 'Custom' : 'Default',
+              ),
+              child: _buildTuningBody(theme),
             ),
-            child: _buildTuningBody(theme),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.timer_outlined,
-            title: 'Session Duration',
-            status: StatusPill(
-              active: true,
-              label: _shortDuration(_sessionDurationSeconds),
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.timer_outlined,
+              title: 'Session Duration',
+              status: StatusPill(
+                active: true,
+                label: _shortDuration(_sessionDurationSeconds),
+              ),
+              child: _buildDurationBody(theme),
             ),
-            child: _buildDurationBody(theme),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.lock_outline,
-            title: 'Security',
-            status: StatusPill(
-              active: _lockOn,
-              label: _lockOn ? 'Locked' : 'Off',
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.lock_outline,
+              title: 'Security',
+              status: StatusPill(
+                active: _lockOn,
+                label: _lockOn ? 'Locked' : 'Off',
+              ),
+              child: _buildSecurityBody(theme),
             ),
-            child: _buildSecurityBody(theme),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -351,7 +371,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
           minLines: 3,
           style: const TextStyle(fontSize: 13, height: 1.4),
           decoration: InputDecoration(
-            hintText: 'e.g. "You are a concise technical assistant. '
+            hintText:
+                'e.g. "You are a concise technical assistant. '
                 'Respond in short paragraphs with no filler."',
             hintStyle: TextStyle(
               fontSize: 12,
@@ -371,7 +392,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: NeoTheme.green.withValues(alpha: 0.6)),
+              borderSide: BorderSide(
+                color: NeoTheme.green.withValues(alpha: 0.6),
+              ),
             ),
             contentPadding: const EdgeInsets.all(12),
           ),
@@ -381,7 +404,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         Row(
           children: [
             Tooltip(
-              message: 'Tip: Start with "You are..." to define the assistant\'s role,\n'
+              message:
+                  'Tip: Start with "You are..." to define the assistant\'s role,\n'
                   'then add style rules like "Be concise" or "Use bullet points".',
               preferBelow: false,
               triggerMode: TooltipTriggerMode.tap,
@@ -389,11 +413,18 @@ class _SessionsScreenState extends State<SessionsScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.lightbulb_outline, size: 14, color: NeoTheme.green.withValues(alpha: 0.7)),
+                  Icon(
+                    Icons.lightbulb_outline,
+                    size: 14,
+                    color: NeoTheme.green.withValues(alpha: 0.7),
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'Prompt tips',
-                    style: TextStyle(fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.7)),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: NeoTheme.green.withValues(alpha: 0.7),
+                    ),
                   ),
                 ],
               ),
@@ -413,12 +444,16 @@ class _SessionsScreenState extends State<SessionsScreen> {
                   ? () => _saveDefaults(
                       snackMessage: _promptController.text.trim().isEmpty
                           ? 'System prompt cleared'
-                          : 'Default system prompt saved')
+                          : 'Default system prompt saved',
+                    )
                   : null,
               style: FilledButton.styleFrom(
                 backgroundColor: NeoTheme.green,
                 disabledBackgroundColor: NeoTheme.green.withValues(alpha: 0.2),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
               ),
               child: Text(
                 'Save',
@@ -459,7 +494,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         const SizedBox(height: 12),
         _buildSlider(
           label: 'Temperature',
-          tooltip: 'Controls randomness. Lower = more focused; higher = more creative.',
+          tooltip:
+              'Controls randomness. Lower = more focused; higher = more creative.',
           value: _temperature,
           min: 0.0,
           max: 2.0,
@@ -473,7 +509,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         const SizedBox(height: 8),
         _buildSlider(
           label: 'Top P',
-          tooltip: 'Nucleus sampling. Limits token choices to the top P probability mass.',
+          tooltip:
+              'Nucleus sampling. Limits token choices to the top P probability mass.',
           value: _topP,
           min: 0.0,
           max: 1.0,
@@ -494,11 +531,16 @@ class _SessionsScreenState extends State<SessionsScreen> {
                   const Text('Max Tokens', style: TextStyle(fontSize: 13)),
                   const SizedBox(width: 4),
                   Tooltip(
-                    message: 'Maximum tokens in the response. Higher = longer replies.',
+                    message:
+                        'Maximum tokens in the response. Higher = longer replies.',
                     preferBelow: false,
                     triggerMode: TooltipTriggerMode.tap,
                     showDuration: const Duration(seconds: 4),
-                    child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+                    child: Icon(
+                      Icons.info_outline,
+                      size: 14,
+                      color: const Color(0xFF6B7280),
+                    ),
                   ),
                 ],
               ),
@@ -507,7 +549,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
               icon: const Icon(Icons.remove_circle_outline, size: 20),
               onPressed: _maxTokens > 64
                   ? () {
-                      setState(() => _maxTokens = (_maxTokens - 256).clamp(64, 16384));
+                      setState(
+                        () => _maxTokens = (_maxTokens - 256).clamp(64, 16384),
+                      );
                       _saveDefaults();
                     }
                   : null,
@@ -524,7 +568,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
               icon: const Icon(Icons.add_circle_outline, size: 20),
               onPressed: _maxTokens < 16384
                   ? () {
-                      setState(() => _maxTokens = (_maxTokens + 256).clamp(64, 16384));
+                      setState(
+                        () => _maxTokens = (_maxTokens + 256).clamp(64, 16384),
+                      );
                       _saveDefaults();
                     }
                   : null,
@@ -534,7 +580,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         const SizedBox(height: 8),
         _buildSlider(
           label: 'Frequency Penalty',
-          tooltip: 'Penalises tokens based on how often they appeared. Reduces repetition.',
+          tooltip:
+              'Penalises tokens based on how often they appeared. Reduces repetition.',
           value: _frequencyPenalty,
           min: 0.0,
           max: 2.0,
@@ -548,7 +595,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         const SizedBox(height: 8),
         _buildSlider(
           label: 'Presence Penalty',
-          tooltip: 'Penalises tokens that appeared at all. Encourages new topics.',
+          tooltip:
+              'Penalises tokens that appeared at all. Encourages new topics.',
           value: _presencePenalty,
           min: 0.0,
           max: 2.0,
@@ -569,13 +617,17 @@ class _SessionsScreenState extends State<SessionsScreen> {
                   _temperature = DefaultTuningStore.defaultTemperature;
                   _topP = DefaultTuningStore.defaultTopP;
                   _maxTokens = DefaultTuningStore.defaultMaxTokens;
-                  _frequencyPenalty = DefaultTuningStore.defaultFrequencyPenalty;
+                  _frequencyPenalty =
+                      DefaultTuningStore.defaultFrequencyPenalty;
                   _presencePenalty = DefaultTuningStore.defaultPresencePenalty;
                 });
                 _saveDefaults(snackMessage: 'Tuning reset to defaults');
               },
               icon: const Icon(Icons.restart_alt, size: 16),
-              label: const Text('Reset to defaults', style: TextStyle(fontSize: 12)),
+              label: const Text(
+                'Reset to defaults',
+                style: TextStyle(fontSize: 12),
+              ),
             ),
           ),
         ],
@@ -605,7 +657,11 @@ class _SessionsScreenState extends State<SessionsScreen> {
               preferBelow: false,
               triggerMode: TooltipTriggerMode.tap,
               showDuration: const Duration(seconds: 4),
-              child: Icon(Icons.info_outline, size: 14, color: const Color(0xFF6B7280)),
+              child: Icon(
+                Icons.info_outline,
+                size: 14,
+                color: const Color(0xFF6B7280),
+              ),
             ),
             const Spacer(),
             Text(
@@ -733,7 +789,10 @@ class _SessionsScreenState extends State<SessionsScreen> {
           const SizedBox(height: 8),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Unlock with biometrics', style: TextStyle(fontSize: 13)),
+            title: const Text(
+              'Unlock with biometrics',
+              style: TextStyle(fontSize: 13),
+            ),
             subtitle: Text(
               _bioAvailable
                   ? 'Face ID, Touch ID, or fingerprint.'
@@ -741,7 +800,9 @@ class _SessionsScreenState extends State<SessionsScreen> {
               style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
             value: _bioOn,
-            onChanged: (!_bioAvailable && !_bioOn) ? null : (v) => _setBiometric(v),
+            onChanged: (!_bioAvailable && !_bioOn)
+                ? null
+                : (v) => _setBiometric(v),
             activeThumbColor: NeoTheme.green,
           ),
           const SizedBox(height: 4),
@@ -749,18 +810,24 @@ class _SessionsScreenState extends State<SessionsScreen> {
             alignment: Alignment.centerLeft,
             child: TextButton(
               onPressed: _confirmDisableLock,
-              child: const Text('Turn off app lock', style: TextStyle(fontSize: 12, color: Color(0xFFF87171))),
+              child: const Text(
+                'Turn off app lock',
+                style: TextStyle(fontSize: 12, color: Color(0xFFF87171)),
+              ),
             ),
           ),
         ],
 
-        if (Platform.isMacOS || Platform.isIOS) ...[
+        if (PlatformCaps.supportsIcloudKeychainSync) ...[
           const SizedBox(height: 12),
           const Divider(height: 1, color: Color(0xFF374151)),
           const SizedBox(height: 12),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
-            title: const Text('iCloud Keychain sync', style: TextStyle(fontSize: 13)),
+            title: const Text(
+              'iCloud Keychain sync',
+              style: TextStyle(fontSize: 13),
+            ),
             subtitle: Text(
               _icloudSync
                   ? 'Wallet secret syncs across your Apple devices.'
@@ -779,12 +846,18 @@ class _SessionsScreenState extends State<SessionsScreen> {
                 decoration: BoxDecoration(
                   color: NeoTheme.amber.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: NeoTheme.amber.withValues(alpha: 0.25)),
+                  border: Border.all(
+                    color: NeoTheme.amber.withValues(alpha: 0.25),
+                  ),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.warning_amber_rounded, size: 16, color: NeoTheme.amber.withValues(alpha: 0.9)),
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 16,
+                      color: NeoTheme.amber.withValues(alpha: 0.9),
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/chain_config.dart';
 import '../../services/bridge.dart';
+import '../../services/form_factor.dart';
 import '../../services/platform_caps.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
@@ -136,8 +137,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
     if (!isDefaults) {
       final err = RpcSettingsStore.validateUserInput(raw);
       if (err != null) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(err)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(err)));
         return;
       }
     }
@@ -188,7 +190,8 @@ class _ExpertScreenState extends State<ExpertScreen> {
       _rpcChanged = true;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Using built-in public RPCs. Restarting...')),
+          content: Text('Using built-in public RPCs. Restarting...'),
+        ),
       );
       Navigator.of(context).pop(true);
     } finally {
@@ -258,9 +261,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reset failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Reset failed: $e')));
     }
   }
 
@@ -290,12 +293,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
       final addr = '$listenHost:$port';
       final publicURL = _apiBaseUrlCtrl.text.trim();
       GoBridge().startExpertAPI(addr, publicURL);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Expert API started on $addr')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Expert API started on $addr')));
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
     _refreshApiStatus();
     _loadApiCredentials();
@@ -304,12 +308,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
   void _stopApi() {
     try {
       GoBridge().stopExpertAPI();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Expert API stopped')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Expert API stopped')));
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
     _refreshApiStatus();
     _rebuildApiBaseUrl();
@@ -344,12 +349,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
       final host = _gwNetworkAccessible ? '0.0.0.0' : '127.0.0.1';
       final addr = '$host:$port';
       GoBridge().startGateway(addr);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gateway started on $addr')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gateway started on $addr')));
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
     _refreshGatewayStatus();
   }
@@ -357,12 +363,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
   void _stopGateway() {
     try {
       GoBridge().stopGateway();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Gateway stopped')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Gateway stopped')));
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
     _refreshGatewayStatus();
   }
@@ -416,8 +423,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
       _loadApiKeys();
       _showNewKeyDialog(fullKey);
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -459,10 +467,12 @@ class _ExpertScreenState extends State<ExpertScreen> {
               Clipboard.setData(ClipboardData(text: key));
               ScaffoldMessenger.of(ctx)
                 ..clearSnackBars()
-                ..showSnackBar(const SnackBar(
-                  content: Text('Key copied to clipboard'),
-                  behavior: SnackBarBehavior.floating,
-                ));
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text('Key copied to clipboard'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
               Navigator.pop(ctx);
             },
             style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
@@ -493,12 +503,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
               try {
                 GoBridge().revokeAPIKey(id);
                 _loadApiKeys();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Key revoked')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('Key revoked')));
               } catch (e) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text('Error: $e')));
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Error: $e')));
               }
             },
             style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
@@ -532,48 +543,51 @@ class _ExpertScreenState extends State<ExpertScreen> {
         ),
         body: _rpcLoading
             ? const Center(
-                child: CircularProgressIndicator(color: NeoTheme.green))
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                children: [
-                  SectionCard(
-                    icon: Icons.link_rounded,
-                    title: 'Blockchain Connection',
-                    status: StatusPill(
-                      active: hasCustomRpc,
-                      label: hasCustomRpc ? 'Custom' : 'Default',
-                    ),
-                    child: _buildNetworkSection(theme),
-                  ),
-                  if (PlatformCaps.supportsDeveloperApi) ...[
-                    const SizedBox(height: 12),
+                child: CircularProgressIndicator(color: NeoTheme.green),
+              )
+            : MaxContentWidth(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  children: [
                     SectionCard(
-                      icon: Icons.code_rounded,
-                      title: 'Developer API',
+                      icon: Icons.link_rounded,
+                      title: 'Blockchain Connection',
                       status: StatusPill(
-                        active: _apiRunning,
-                        label: _apiRunning
-                            ? 'Running :${_apiPortCtrl.text}'
-                            : 'Stopped',
+                        active: hasCustomRpc,
+                        label: hasCustomRpc ? 'Custom' : 'Default',
                       ),
-                      child: _buildApiSection(theme),
+                      child: _buildNetworkSection(theme),
                     ),
-                  ],
-                  if (PlatformCaps.supportsGateway) ...[
-                    const SizedBox(height: 12),
-                    SectionCard(
-                      icon: Icons.smart_toy_outlined,
-                      title: 'AI Gateway',
-                      status: StatusPill(
-                        active: _gwRunning,
-                        label: _gwRunning
-                            ? 'Running :${_gwPortCtrl.text}'
-                            : 'Stopped',
+                    if (PlatformCaps.supportsDeveloperApi) ...[
+                      const SizedBox(height: 12),
+                      SectionCard(
+                        icon: Icons.code_rounded,
+                        title: 'Developer API',
+                        status: StatusPill(
+                          active: _apiRunning,
+                          label: _apiRunning
+                              ? 'Running :${_apiPortCtrl.text}'
+                              : 'Stopped',
+                        ),
+                        child: _buildApiSection(theme),
                       ),
-                      child: _buildGatewaySection(theme),
-                    ),
+                    ],
+                    if (PlatformCaps.supportsGateway) ...[
+                      const SizedBox(height: 12),
+                      SectionCard(
+                        icon: Icons.smart_toy_outlined,
+                        title: 'AI Gateway',
+                        status: StatusPill(
+                          active: _gwRunning,
+                          label: _gwRunning
+                              ? 'Running :${_gwPortCtrl.text}'
+                              : 'Stopped',
+                        ),
+                        child: _buildGatewaySection(theme),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
       ),
     );
@@ -590,18 +604,22 @@ class _ExpertScreenState extends State<ExpertScreen> {
           '(opening sessions, checking balances, signing transactions). '
           'We provide a default — only change this if you experience connection issues '
           'or want to use your own node.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.hintColor, height: 1.35, fontSize: 11),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            height: 1.35,
+            fontSize: 11,
+          ),
         ),
         const SizedBox(height: 12),
         Text(
           _rpcOverridePreview != null && _rpcOverridePreview!.isNotEmpty
               ? 'Currently using a custom RPC.'
               : hasBuildTimeRpc
-                  ? 'Currently using the bundled default.'
-                  : 'Currently using built-in public endpoints.',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(color: NeoTheme.green.withValues(alpha: 0.9)),
+              ? 'Currently using the bundled default.'
+              : 'Currently using built-in public endpoints.',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: NeoTheme.green.withValues(alpha: 0.9),
+          ),
         ),
         const SizedBox(height: 10),
         TextField(
@@ -624,8 +642,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: ok
                       ? NeoTheme.green.withValues(alpha: 0.08)
@@ -640,9 +660,7 @@ class _ExpertScreenState extends State<ExpertScreen> {
                 child: Row(
                   children: [
                     Icon(
-                      ok
-                          ? Icons.check_circle_rounded
-                          : Icons.cancel_rounded,
+                      ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
                       size: 18,
                       color: ok ? NeoTheme.green : Colors.red,
                     ),
@@ -651,15 +669,22 @@ class _ExpertScreenState extends State<ExpertScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(url,
-                              style: const TextStyle(
-                                  fontFamily: 'JetBrains Mono',
-                                  fontSize: 11),
-                              overflow: TextOverflow.ellipsis),
+                          Text(
+                            url,
+                            style: const TextStyle(
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 11,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                           if (err != null)
-                            Text(err,
-                                style: const TextStyle(
-                                    fontSize: 11, color: Colors.red)),
+                            Text(
+                              err,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.red,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -679,12 +704,18 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.wifi_tethering, size: 16),
-              label: Text(_rpcTesting ? 'Testing...' : 'Test',
-                  style: const TextStyle(fontSize: 13)),
+              label: Text(
+                _rpcTesting ? 'Testing...' : 'Test',
+                style: const TextStyle(fontSize: 13),
+              ),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
               ),
             ),
             const SizedBox(width: 12),
@@ -692,14 +723,20 @@ class _ExpertScreenState extends State<ExpertScreen> {
               onPressed: (_rpcSaving || _rpcTesting) ? null : _saveRpc,
               style: FilledButton.styleFrom(
                 backgroundColor: NeoTheme.green,
-                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 28,
+                  vertical: 10,
+                ),
               ),
               child: _rpcSaving
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
                   : const Text('Save', style: TextStyle(fontSize: 13)),
             ),
           ],
@@ -733,8 +770,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
           'Starts a local HTTP server with full Swagger documentation for '
           'developers and debugging. Exposes blockchain operations, session '
           'management, and low-level SDK functions.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.hintColor, height: 1.35),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            height: 1.35,
+          ),
         ),
         const SizedBox(height: 16),
         Row(
@@ -773,21 +812,23 @@ class _ExpertScreenState extends State<ExpertScreen> {
             decoration: BoxDecoration(
               color: NeoTheme.amber.withValues(alpha: 0.07),
               borderRadius: BorderRadius.circular(8),
-              border:
-                  Border.all(color: NeoTheme.amber.withValues(alpha: 0.25)),
+              border: Border.all(color: NeoTheme.amber.withValues(alpha: 0.25)),
             ),
             child: Row(
               children: [
-                Icon(Icons.warning_amber_rounded,
-                    size: 16,
-                    color: NeoTheme.amber.withValues(alpha: 0.8)),
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 16,
+                  color: NeoTheme.amber.withValues(alpha: 0.8),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Exposes API to all devices on your local network.',
                     style: TextStyle(
-                        color: NeoTheme.amber.withValues(alpha: 0.9),
-                        fontSize: 11),
+                      color: NeoTheme.amber.withValues(alpha: 0.9),
+                      fontSize: 11,
+                    ),
                   ),
                 ),
               ],
@@ -824,7 +865,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   isDense: true,
                 ),
                 style: const TextStyle(
-                    fontFamily: 'JetBrains Mono', fontSize: 12),
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: 12,
+                ),
               ),
             ),
           ],
@@ -836,19 +879,31 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   onPressed: _stopApi,
                   style: FilledButton.styleFrom(
                     backgroundColor: Colors.red.shade700,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
                   ),
                   icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                  label: const Text('Stop API Server', style: TextStyle(fontSize: 13)),
+                  label: const Text(
+                    'Stop API Server',
+                    style: TextStyle(fontSize: 13),
+                  ),
                 )
               : FilledButton.icon(
                   onPressed: _startApi,
                   style: FilledButton.styleFrom(
                     backgroundColor: NeoTheme.green,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
                   ),
                   icon: const Icon(Icons.play_circle_outline, size: 18),
-                  label: const Text('Start API Server', style: TextStyle(fontSize: 13)),
+                  label: const Text(
+                    'Start API Server',
+                    style: TextStyle(fontSize: 13),
+                  ),
                 ),
         ),
         if (_apiRunning)
@@ -858,8 +913,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
               child: Text(
                 'Listening on $_apiRunningAddress',
                 style: TextStyle(
-                    fontSize: 11,
-                    color: NeoTheme.green.withValues(alpha: 0.9)),
+                  fontSize: 11,
+                  color: NeoTheme.green.withValues(alpha: 0.9),
+                ),
               ),
             ),
           ),
@@ -869,7 +925,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
             children: [
               Expanded(
                 child: InkWell(
-                  onTap: () => launchUrl(Uri.parse(swaggerUrl), mode: LaunchMode.externalApplication),
+                  onTap: () => launchUrl(
+                    Uri.parse(swaggerUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
                   child: Text(
                     swaggerUrl,
                     style: const TextStyle(
@@ -894,11 +953,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   Clipboard.setData(ClipboardData(text: swaggerUrl));
                   ScaffoldMessenger.of(context)
                     ..clearSnackBars()
-                    ..showSnackBar(const SnackBar(
-                      content: Text('Swagger URL copied'),
-                      behavior: SnackBarBehavior.floating,
-                      duration: Duration(seconds: 2),
-                    ));
+                    ..showSnackBar(
+                      const SnackBar(
+                        content: Text('Swagger URL copied'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
                 },
               ),
             ],
@@ -908,7 +969,11 @@ class _ExpertScreenState extends State<ExpertScreen> {
         if (_apiCredPass.isNotEmpty) ...[
           Text(
             'HTTP Basic Auth',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.hintColor),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: theme.hintColor,
+            ),
           ),
           const SizedBox(height: 8),
           Container(
@@ -924,11 +989,18 @@ class _ExpertScreenState extends State<ExpertScreen> {
                 Row(
                   children: [
                     const SizedBox(width: 4),
-                    const Text('Username', style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
+                    const Text(
+                      'Username',
+                      style: TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
+                    ),
                     const Spacer(),
                     Text(
                       _apiCredUser,
-                      style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, color: Color(0xFFD1D5DB)),
+                      style: const TextStyle(
+                        fontFamily: 'JetBrains Mono',
+                        fontSize: 12,
+                        color: Color(0xFFD1D5DB),
+                      ),
                     ),
                     const SizedBox(width: 8),
                     _copyIcon(context, _apiCredUser, 'Username copied'),
@@ -938,14 +1010,21 @@ class _ExpertScreenState extends State<ExpertScreen> {
                 Row(
                   children: [
                     const SizedBox(width: 4),
-                    const Text('Password', style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
+                    const Text(
+                      'Password',
+                      style: TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
+                    ),
                     const Spacer(),
                     Text(
-                      _apiCredRevealed ? _apiCredPass : '•' * _apiCredPass.length,
+                      _apiCredRevealed
+                          ? _apiCredPass
+                          : '•' * _apiCredPass.length,
                       style: TextStyle(
                         fontFamily: 'JetBrains Mono',
                         fontSize: 12,
-                        color: _apiCredRevealed ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280),
+                        color: _apiCredRevealed
+                            ? const Color(0xFFD1D5DB)
+                            : const Color(0xFF6B7280),
                         letterSpacing: _apiCredRevealed ? 0 : 1,
                       ),
                     ),
@@ -953,11 +1032,17 @@ class _ExpertScreenState extends State<ExpertScreen> {
                     IconButton(
                       tooltip: _apiCredRevealed ? 'Hide' : 'Reveal',
                       icon: Icon(
-                        _apiCredRevealed ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                        _apiCredRevealed
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
                         size: 16,
                       ),
-                      style: IconButton.styleFrom(minimumSize: const Size(28, 28), padding: EdgeInsets.zero),
-                      onPressed: () => setState(() => _apiCredRevealed = !_apiCredRevealed),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(28, 28),
+                        padding: EdgeInsets.zero,
+                      ),
+                      onPressed: () =>
+                          setState(() => _apiCredRevealed = !_apiCredRevealed),
                     ),
                     _copyIcon(context, _apiCredPass, 'Password copied'),
                   ],
@@ -976,7 +1061,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
               ),
               TextButton(
                 onPressed: _resetApiPassword,
-                child: const Text('Reset password', style: TextStyle(fontSize: 11)),
+                child: const Text(
+                  'Reset password',
+                  style: TextStyle(fontSize: 11),
+                ),
               ),
             ],
           ),
@@ -995,16 +1083,21 @@ class _ExpertScreenState extends State<ExpertScreen> {
     return IconButton(
       tooltip: 'Copy',
       icon: const Icon(Icons.copy_rounded, size: 14),
-      style: IconButton.styleFrom(minimumSize: const Size(28, 28), padding: EdgeInsets.zero),
+      style: IconButton.styleFrom(
+        minimumSize: const Size(28, 28),
+        padding: EdgeInsets.zero,
+      ),
       onPressed: () {
         Clipboard.setData(ClipboardData(text: text));
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
-          ..showSnackBar(SnackBar(
-            content: Text(snackMessage),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
-          ));
+          ..showSnackBar(
+            SnackBar(
+              content: Text(snackMessage),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+            ),
+          );
       },
     );
   }
@@ -1015,7 +1108,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
     final host = _gwNetworkAccessible
         ? (_detectedIp.isNotEmpty ? _detectedIp : '127.0.0.1')
         : '127.0.0.1';
-    final port = _gwPortCtrl.text.trim().isEmpty ? '8083' : _gwPortCtrl.text.trim();
+    final port = _gwPortCtrl.text.trim().isEmpty
+        ? '8083'
+        : _gwPortCtrl.text.trim();
     final gatewayBaseUrl = 'http://$host:$port/v1';
 
     return Column(
@@ -1025,8 +1120,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
           'Connect external AI tools to Morpheus. Works with Cursor, LangChain, '
           'Claude Desktop, and any app that supports the OpenAI API format. '
           'Sessions and model selection are handled automatically.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.hintColor, height: 1.35),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.hintColor,
+            height: 1.35,
+          ),
         ),
         const SizedBox(height: 16),
         Row(
@@ -1076,19 +1173,31 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   onPressed: _stopGateway,
                   style: FilledButton.styleFrom(
                     backgroundColor: Colors.red.shade700,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
                   ),
                   icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                  label: const Text('Stop Gateway', style: TextStyle(fontSize: 13)),
+                  label: const Text(
+                    'Stop Gateway',
+                    style: TextStyle(fontSize: 13),
+                  ),
                 )
               : FilledButton.icon(
                   onPressed: _startGateway,
                   style: FilledButton.styleFrom(
                     backgroundColor: NeoTheme.green,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
                   ),
                   icon: const Icon(Icons.play_circle_outline, size: 18),
-                  label: const Text('Start Gateway', style: TextStyle(fontSize: 13)),
+                  label: const Text(
+                    'Start Gateway',
+                    style: TextStyle(fontSize: 13),
+                  ),
                 ),
         ),
         if (_gwRunning)
@@ -1098,7 +1207,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
               child: Text(
                 'Listening on $_gwAddress',
                 style: TextStyle(
-                    fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.9)),
+                  fontSize: 11,
+                  color: NeoTheme.green.withValues(alpha: 0.9),
+                ),
               ),
             ),
           ),
@@ -1110,11 +1221,19 @@ class _ExpertScreenState extends State<ExpertScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.terminal_rounded, size: 14, color: Color(0xFF9CA3AF)),
+                  const Icon(
+                    Icons.terminal_rounded,
+                    size: 14,
+                    color: Color(0xFF9CA3AF),
+                  ),
                   const SizedBox(width: 6),
                   const Text(
                     'Cursor / OpenAI Config',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF9CA3AF)),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF9CA3AF),
+                    ),
                   ),
                   const Spacer(),
                   IconButton(
@@ -1129,11 +1248,13 @@ class _ExpertScreenState extends State<ExpertScreen> {
                       Clipboard.setData(ClipboardData(text: snippet));
                       ScaffoldMessenger.of(context)
                         ..clearSnackBars()
-                        ..showSnackBar(const SnackBar(
-                          content: Text('Copied'),
-                          behavior: SnackBarBehavior.floating,
-                          duration: Duration(seconds: 2),
-                        ));
+                        ..showSnackBar(
+                          const SnackBar(
+                            content: Text('Copied'),
+                            behavior: SnackBarBehavior.floating,
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
                     },
                   ),
                 ],
@@ -1142,13 +1263,19 @@ class _ExpertScreenState extends State<ExpertScreen> {
               Text(
                 'Base URL:  $gatewayBaseUrl',
                 style: const TextStyle(
-                  fontFamily: 'JetBrains Mono', fontSize: 10, color: Color(0xFFD1D5DB)),
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: 10,
+                  color: Color(0xFFD1D5DB),
+                ),
               ),
               const SizedBox(height: 2),
               const Text(
                 'API Key:   sk-... (generate below)',
                 style: TextStyle(
-                  fontFamily: 'JetBrains Mono', fontSize: 10, color: Color(0xFFD1D5DB)),
+                  fontFamily: 'JetBrains Mono',
+                  fontSize: 10,
+                  color: Color(0xFFD1D5DB),
+                ),
               ),
             ],
           ),
@@ -1160,7 +1287,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
           children: [
             Text(
               'API Keys',
-              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const Spacer(),
             TextButton.icon(
@@ -1196,7 +1325,10 @@ class _ExpertScreenState extends State<ExpertScreen> {
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFF1E293B),
                   borderRadius: BorderRadius.circular(8),
@@ -1204,7 +1336,11 @@ class _ExpertScreenState extends State<ExpertScreen> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.key_rounded, size: 16, color: Color(0xFF9CA3AF)),
+                    const Icon(
+                      Icons.key_rounded,
+                      size: 16,
+                      color: Color(0xFF9CA3AF),
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
@@ -1213,21 +1349,37 @@ class _ExpertScreenState extends State<ExpertScreen> {
                           Text(
                             '$prefix...',
                             style: const TextStyle(
-                              fontFamily: 'JetBrains Mono', fontSize: 11, color: Color(0xFFD1D5DB)),
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 11,
+                              color: Color(0xFFD1D5DB),
+                            ),
                           ),
                           if (name.isNotEmpty)
-                            Text(name, style: TextStyle(fontSize: 10, color: theme.hintColor)),
+                            Text(
+                              name,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: theme.hintColor,
+                              ),
+                            ),
                           if (lastUsed > 0)
                             Text(
                               'Last used: ${DateTime.fromMillisecondsSinceEpoch(lastUsed * 1000).toLocal().toString().substring(0, 16)}',
-                              style: TextStyle(fontSize: 9, color: theme.hintColor),
+                              style: TextStyle(
+                                fontSize: 9,
+                                color: theme.hintColor,
+                              ),
                             ),
                         ],
                       ),
                     ),
                     IconButton(
                       tooltip: 'Revoke key',
-                      icon: Icon(Icons.delete_outline, size: 16, color: Colors.red.shade400),
+                      icon: Icon(
+                        Icons.delete_outline,
+                        size: 16,
+                        color: Colors.red.shade400,
+                      ),
                       style: IconButton.styleFrom(
                         minimumSize: const Size(32, 32),
                         padding: const EdgeInsets.all(4),
@@ -1243,7 +1395,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     );
   }
 }
-
 
 // ── Reusable scope option for API section ─────────────────────
 
@@ -1285,9 +1436,11 @@ class _ScopeOption extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon,
-                size: 18,
-                color: enabled ? color : color.withValues(alpha: 0.4)),
+            Icon(
+              icon,
+              size: 18,
+              color: enabled ? color : color.withValues(alpha: 0.4),
+            ),
             const SizedBox(width: 8),
             Text(
               label,
@@ -1303,4 +1456,3 @@ class _ScopeOption extends StatelessWidget {
     );
   }
 }
-
