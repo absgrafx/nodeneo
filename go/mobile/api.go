@@ -969,8 +969,31 @@ func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string
 	latencyMs := time.Since(startTime).Milliseconds()
 	respLen := len(fullResponse)
 	logger.Debug("INFERENCE response: %dms, %d chars, raw_meta=%d bytes", latencyMs, respLen, len(rawChunkJSON))
+	// Always extract finish_reason from the raw chunk JSON when available,
+	// so callers (Dart UI, logs) can react to actual provider state instead
+	// of guessing. Empty string means we couldn't determine it.
+	finishReason := ""
+	if len(rawChunkJSON) > 0 {
+		var raw map[string]interface{}
+		if json.Unmarshal(rawChunkJSON, &raw) == nil {
+			if choices, ok := raw["choices"].([]interface{}); ok && len(choices) > 0 {
+				if c0, ok := choices[0].(map[string]interface{}); ok {
+					if fr, ok := c0["finish_reason"].(string); ok && fr != "" {
+						finishReason = fr
+					}
+				}
+			}
+			if fr, ok := raw["finish_reason"].(string); ok && fr != "" {
+				finishReason = fr
+			}
+		}
+	}
 	if respLen == 0 {
-		logger.Warn("INFERENCE empty response from provider (session=%s, %dms)", sessionID, latencyMs)
+		fr := finishReason
+		if fr == "" {
+			fr = "unknown"
+		}
+		logger.Warn("INFERENCE empty response body (session=%s, %dms, finish_reason=%s)", sessionID, latencyMs, fr)
 	}
 
 	// Build result: start with any raw provider metadata the SDK captured,
@@ -984,6 +1007,9 @@ func sendPromptWithOptions(sessionID, conversationID, prompt, optionsJSON string
 	}
 	result["response"] = fullResponse
 	result["latency_ms"] = latencyMs
+	if finishReason != "" {
+		result["finish_reason"] = finishReason
+	}
 
 	if d != nil {
 		_ = d.SaveMessage(conversationID, "user", prompt)
