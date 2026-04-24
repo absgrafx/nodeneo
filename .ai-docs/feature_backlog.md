@@ -262,9 +262,10 @@ Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Andr
 ## Recently Shipped (for the short-term memory)
 
 ### v3.0.0 — 2026-04
+- **Full TEE compliance with proxy-router v7.0.0** — upstream merge, TDX attestation with cosign-verified golden values, TLS-fingerprint-bound `reportdata`, per-provider quick-attestation cache, end-to-end verified on iPhone
+- iOS Sigstore TUF cache fix (`sdk.SetSigstoreCacheDir(dataDir)`) — unblocks TEE models on iPhone
 - Pre-session confirmation modal with live stake preview and duration presets
 - In-place affordability (greyed models, no re-sort, `X of Y affordable` counter)
-- TEE attestation on iPhone (Sigstore TUF cache path fix via `SetSigstoreCacheDir`)
 - Wallet card redesign (single-line address, right-aligned balances, full-width helpers)
 - Provider endpoint redaction (`lib/utils/error_redaction.dart`)
 - "Fund Your Wallet" overlay scoped — no more covering active chats

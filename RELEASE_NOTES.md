@@ -1,5 +1,15 @@
 ## What's New in v3.0.0
 
+### Full TEE Compliance with proxy-router v7.0.0
+**Node Neo is now a first-class v7.0.0 TEE client on both macOS and iPhone.** This is the headline change of the release — everything else is built on top of it.
+
+- **Upstream merge:** the embedded `proxy-router/mobile` SDK is pinned to `absgrafx/Morpheus-Lumerin-Node` at the current `main` tip, which carries the full upstream `MorpheusAIs/Morpheus-Lumerin-Node` **v7.0.0** merge: redesigned TEE attestation pipeline, tightened session maintenance loop, new eth-client retry contract.
+- **TDX attestation end-to-end on device:** CPU quote fetch → SecretAI portal cryptographic verification → RTMR3 compared against **cosign-verified golden values** for the fork's exact build version. No trust-on-first-use anywhere in the path.
+- **TLS fingerprint anti-spoofing:** the attestation quote's `reportdata` is bound to the provider's live TLS certificate fingerprint. A man-in-the-middle can't reuse a valid quote against a different cert.
+- **iOS Sigstore cache fix:** the last blocker for TEE on iPhone — `mkdir .sigstore: operation not permitted` — is gone. The Sigstore TUF cache now lives under the SDK's `dataDir` via `sdk.SetSigstoreCacheDir`, which the iOS sandbox allows.
+- **Quick-attestation cache** per provider endpoint: once a provider is verified against golden values, subsequent sessions to the same `endpoint + version + TLS fingerprint` reconnect in sub-second. Cache survives app relaunch and invalidates automatically when the provider reports a new version.
+- **Verified on Phlame** (iPhone, iOS 26.4.1): `gemma3-4b:tee`, `Mistral-Fake:TEE`, Arcee-Trinity thinking model — full attestation + session + streaming chat confirmed.
+
 ### Pre-Session Confirmation Flow
 - Tapping a model now opens a **"Start chat?"** modal before any stake is posted: model name, MAX Privacy (TEE) badge, duration dropdown, and the exact MOR that will be staked for the chosen duration
 - Duration presets surface the **live hourly stake** calibrated from the home list so the number in the modal matches the number on the tile (no more drift between list price and actual stake)
@@ -11,11 +21,6 @@
 - Header counter now reads `X of Y affordable` and respects the Privacy / Show All filters
 - "Show All" reveals unaffordable models (still greyed); off by default, so only what you can actually chat with is shown
 - Affordability refreshes on wallet balance change, session open/close, return from Send MOR, and a 60s idle tick
-
-### TEE Attestation on iPhone
-- Fixed `mkdir .sigstore: operation not permitted` — the Sigstore TUF cache now lives under the iOS-writable `dataDir` via `sdk.SetSigstoreCacheDir`
-- TEE models verified end-to-end on device (CPU attestation + cosign golden-value check)
-- Quick-attestation cache now persists across relaunches for sub-second reconnects to known-good providers
 
 ### Wallet Card Redesign
 - Collapsed card: address on a single line, right-aligned MOR / ETH numbers with compact `(+staked)` suffix in purple that visually recedes below the liquid balances
@@ -44,10 +49,6 @@
 ### Flutter 3.41.7 Upgrade
 - Local toolchain bumped from 3.41.5 → 3.41.7 after a debugger-attach edge case left iOS releases suspended on splash
 - macOS CI Flutter version pinned to 3.41.7 to match
-
-### Fork Refresh (Morpheus-Lumerin-Node)
-- `proxy-router/mobile` pseudo-version bumped to the current `absgrafx/Morpheus-Lumerin-Node` fork tip
-- Pulls in Sigstore cache configurability, the expanded RPC retry list, and the upstream `v7.0.0` merge (TEE v2, session maintenance loop)
 
 ---
 
