@@ -449,6 +449,26 @@ class _ChatScreenState extends State<ChatScreen> {
     return meta.isEmpty ? null : meta;
   }
 
+  /// Pull finish_reason from a result map, looking at both the top-level
+  /// `finish_reason` field and `provider_response.choices[0].finish_reason`.
+  /// Returns an empty string when no finish_reason is present.
+  String _extractFinishReason(Map<String, dynamic> res) {
+    final top = res['finish_reason'];
+    if (top is String && top.isNotEmpty) return top;
+    final pr = res['provider_response'];
+    if (pr is Map) {
+      final choices = pr['choices'];
+      if (choices is List && choices.isNotEmpty) {
+        final first = choices.first;
+        if (first is Map) {
+          final fr = first['finish_reason'] ?? first['finishReason'];
+          if (fr is String && fr.isNotEmpty) return fr;
+        }
+      }
+    }
+    return '';
+  }
+
   void _loadTuningForConversation(String conversationId) {
     try {
       final raw = GoBridge().getConversationTuning(conversationId);
@@ -637,18 +657,48 @@ class _ChatScreenState extends State<ChatScreen> {
         final wasCancelled = res['cancelled'] == true;
         final meta = _extractMetadata(res);
         if (!mounted) return;
+        final finishReason = _extractFinishReason(res);
         setState(() {
           if (streamBubbleIdx >= 0 && streamBubbleIdx < _messages.length) {
             if (reply.isEmpty && !wasCancelled) {
-              _messages[streamBubbleIdx] = _ChatBubble(
-                role: 'assistant',
-                text: 'No response received — the provider may be busy.',
-                isError: true,
-                onRetry: () async {
-                  _input.text = text;
-                  _send();
-                },
-              );
+              if (thinkingAccumulated.isNotEmpty) {
+                // Provider streamed everything via reasoning_content (or
+                // <think>...</think>) and the content channel was empty.
+                // The reasoning IS the answer for the user — promote it to
+                // the answer body so the bubble renders normally. Append a
+                // factual footer ONLY when finish_reason is something other
+                // than "stop" so we never invent a cause.
+                final cleanStop = finishReason == 'stop';
+                final footer = cleanStop
+                    ? ''
+                    : '\n\n_Stream ended (finish_reason: ${finishReason.isEmpty ? "unknown" : finishReason}) — tap retry to request more._';
+                _messages[streamBubbleIdx] = _ChatBubble(
+                  role: 'assistant',
+                  text: thinkingAccumulated + footer,
+                  metadata: meta,
+                  wasTruncated: !cleanStop,
+                  onRetry: cleanStop
+                      ? null
+                      : () async {
+                          _input.text = text;
+                          _send();
+                        },
+                );
+              } else {
+                final reasonStr =
+                    finishReason.isEmpty ? 'unknown' : finishReason;
+                _messages[streamBubbleIdx] = _ChatBubble(
+                  role: 'assistant',
+                  text:
+                      'Provider returned no content (finish_reason: $reasonStr).',
+                  isError: true,
+                  metadata: meta,
+                  onRetry: () async {
+                    _input.text = text;
+                    _send();
+                  },
+                );
+              }
             } else {
               _messages[streamBubbleIdx] = _ChatBubble(
                 role: 'assistant',
@@ -675,13 +725,18 @@ class _ChatScreenState extends State<ChatScreen> {
         );
         final reply = res['response'] as String? ?? '';
         final meta = _extractMetadata(res);
+        final finishReason = _extractFinishReason(res);
         if (!mounted) return;
         setState(() {
           if (reply.isEmpty) {
+            final reasonStr =
+                finishReason.isEmpty ? 'unknown' : finishReason;
             _messages.add(_ChatBubble(
               role: 'assistant',
-              text: 'No response received — the provider may be busy.',
+              text:
+                  'Provider returned no content (finish_reason: $reasonStr).',
               isError: true,
+              metadata: meta,
               onRetry: () async {
                 _input.text = text;
                 _send();
@@ -1583,7 +1638,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ],
                               ),
                             ],
-                            if (b.isError && b.onRetry != null) ...[
+                            if (b.onRetry != null && b.onReconnect == null) ...[
                               const SizedBox(height: 10),
                               Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -1595,7 +1650,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                             setState(() => _messages.remove(b));
                                             b.onRetry!();
                                           },
-                                    child: const Text('Tap to retry'),
+                                    child: Text(
+                                      b.wasTruncated ? 'Retry' : 'Tap to retry',
+                                    ),
                                   ),
                                   const SizedBox(width: 8),
                                   TextButton(
@@ -2026,6 +2083,7 @@ class _ChatBubble {
   final String text;
   final bool isError;
   final bool isStopped;
+  final bool wasTruncated;
   final String? thinkingText;
   final Duration? thinkingDuration;
   final bool isThinkingLive;
@@ -2038,6 +2096,7 @@ class _ChatBubble {
     required this.text,
     this.isError = false,
     this.isStopped = false,
+    this.wasTruncated = false,
     this.thinkingText,
     this.thinkingDuration,
     this.isThinkingLive = false,
