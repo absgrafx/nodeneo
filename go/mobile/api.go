@@ -71,6 +71,13 @@ func Init(dataDir, ethNodeURL string, chainID int64, diamondAddr, morTokenAddr, 
 	savedRPC = ethNodeURL
 	logger.Info("SDK init: dataDir=%s chainID=%d", dataDir, chainID)
 
+	// Route the Sigstore TUF cache into the app's writable data directory.
+	// Without this, TEE attestation's golden-value fetch calls into
+	// sigstore-go's default of `$HOME/.sigstore/root` — on iOS that resolves
+	// to the sandboxed app container root which is read-only at the top
+	// level, yielding: `mkdir …/.sigstore: operation not permitted`.
+	sdk.SetSigstoreCacheDir(dataDir)
+
 	activeModelsURL := "https://active.mor.org/active_models.json"
 
 	cfg := sdk.Config{

@@ -13,7 +13,7 @@ class SessionDurationStore {
   static const _prefKey = 'session_duration_seconds';
   static const _legacyFileName = 'default_session_duration_seconds.txt';
 
-  static const int defaultSeconds = 3600;
+  static const int defaultSeconds = 600;
   static const int minSeconds = 600;
   static const int maxSeconds = 86400;
 
