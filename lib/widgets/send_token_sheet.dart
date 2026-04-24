@@ -57,11 +57,56 @@ class _SendTokenSheetBodyState extends State<_SendTokenSheetBody> {
   final _amtCtrl = TextEditingController();
   bool _busy = false;
 
+  /// Gas reserve left in the wallet when MAX-ing an ETH send. Base L2
+  /// transfers typically cost a few thousand gwei; 0.0002 ETH (~200k gwei)
+  /// is a comfortable safety margin that also leaves room for a follow-up
+  /// MOR transfer or session open.
+  static final BigInt _ethGasReserveWei = BigInt.from(2) * BigInt.from(10).pow(14);
+
   @override
   void dispose() {
     _toCtrl.dispose();
     _amtCtrl.dispose();
     super.dispose();
+  }
+
+  /// Populate the amount field with the user's full sendable balance. For MOR
+  /// that's the entire balance (gas is paid in ETH). For ETH we subtract a
+  /// small reserve so the transfer itself still has gas plus headroom for the
+  /// user's next action.
+  Future<void> _onMaxTap() async {
+    try {
+      final bridge = GoBridge();
+      final summary = bridge.getWalletSummary();
+      final rawStr = widget.sendMor
+          ? (summary['mor_balance'] as String? ?? '0')
+          : (summary['eth_balance'] as String? ?? '0');
+      final balance = BigInt.tryParse(rawStr) ?? BigInt.zero;
+      BigInt sendable;
+      if (widget.sendMor) {
+        sendable = balance;
+      } else {
+        sendable = balance - _ethGasReserveWei;
+      }
+      if (sendable <= BigInt.zero) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(widget.sendMor
+                ? 'No ${NetworkTokens.morSymbol} to send.'
+                : 'Not enough ${NetworkTokens.ethSymbol} to cover gas reserve.'),
+          ),
+        );
+        return;
+      }
+      setState(() {
+        _amtCtrl.text = formatWeiAsEthDecimal(sendable.toString(), maxFractionDigits: 18);
+      });
+    } on GoBridgeException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
   }
 
   Future<void> _submit() async {
@@ -248,18 +293,44 @@ class _SendTokenSheetBodyState extends State<_SendTokenSheetBody> {
               style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 13),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _amtCtrl,
-              decoration: InputDecoration(
-                labelText: 'Amount ($sym)',
-                hintText: widget.sendMor ? 'e.g. 0.05' : 'e.g. 0.005',
-                border: const OutlineInputBorder(),
-              ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _amtCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'Amount ($sym)',
+                      hintText: widget.sendMor ? 'e.g. 0.05' : 'e.g. 0.005',
+                      border: const OutlineInputBorder(),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                    ],
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 56,
+                  child: OutlinedButton(
+                    onPressed: _busy ? null : _onMaxTap,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: NeoTheme.green,
+                      side: BorderSide(color: NeoTheme.green.withValues(alpha: 0.6)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    child: const Text(
+                      'MAX',
+                      style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1.0),
+                    ),
+                  ),
+                ),
               ],
-              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 8),
             SendAmountPreview(

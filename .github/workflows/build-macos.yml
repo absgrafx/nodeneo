@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: "3.41.5"
+  FLUTTER_VERSION: "3.41.7"
   GO_VERSION: "1.26"
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
       - name: Compute next version
         id: semver
         run: |
-          VMAJ_NEW=2
+          VMAJ_NEW=3
           VMIN_NEW=0
           VPAT_NEW=0
 

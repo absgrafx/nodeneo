@@ -42,7 +42,27 @@ Response: { "success": true }
 
 ---
 
-### 2. File Attachments for Chat Context
+### 2. App Lock UX: Biometrics-First, Auto-Prompt
+
+**Priority:** High (mobile UX — first impression on every app launch)
+
+#### Problem
+The lock screen shows a password field and an "Use biometrics" button. On iOS with Face ID enabled, the user must manually tap the biometrics button — it doesn't auto-trigger. Additionally, biometrics requires setting a password first, which feels backwards on mobile where Face ID is the primary auth method.
+
+#### Requirements
+- **Auto-prompt biometrics on lock screen appear**: If biometrics are enabled, immediately trigger Face ID/Touch ID when the lock screen mounts (in `initState` or after first frame). No user tap required.
+- **Biometrics-only mode**: Allow enabling biometrics without requiring a password. Face ID becomes the sole unlock method.
+- **Password as optional fallback**: If the user wants both, password is the fallback when biometrics fail (e.g. "Face not recognized — enter password"). If biometrics-only, the fallback is the recovery phrase / factory reset path already in place.
+- **Lock screen layout**: When biometrics are primary, de-emphasize the password field (show it only after a failed biometric attempt or via "Use password instead" link).
+- **Settings flow**: Simplify: single toggle "Lock with Face ID" (or Touch ID). Optional "Also set a backup password" toggle underneath.
+
+#### Open Questions
+- Should we support PIN (4-6 digit) as a lighter alternative to full password?
+- On desktop (macOS), should Touch ID on Magic Keyboard auto-trigger too?
+
+---
+
+### 3. File Attachments for Chat Context
 
 **Priority:** Medium (usability)
 
@@ -66,7 +86,7 @@ Users can't attach files (documents, code, images, etc.) to provide context for 
 
 ---
 
-### 3. Rich Media Rendering (Images, Video from LLMs)
+### 4. Rich Media Rendering (Images, Video from LLMs)
 
 **Priority:** Medium (future models)
 
@@ -91,7 +111,7 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### 4. Platform Expansion
+### 5. Platform Expansion
 
 **Priority:** High (reach / distribution)
 
@@ -99,32 +119,35 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 | # | Platform | Status | Notes |
 |---|----------|--------|-------|
-| 1 | **macOS** (desktop) | Done — refining | Signed, notarized, DMG distribution via GitHub Releases |
-| 2 | **iOS — iPhone** | **In progress** | Running on device + simulator. PlatformCaps gating, pull-to-refresh, collapsible wallet, compact privacy toggle, safe area fixes done. Needs TestFlight + App Store submission. |
+| 1 | **macOS** (desktop) | **Shipping** | Signed, notarized, DMG distribution via GitHub Releases |
+| 2 | **iOS — iPhone** | **Shipping** | Running on device + simulator. PlatformCaps gating, pull-to-refresh, collapsible wallet, TEE attestation, Sigstore cache fix, provider-endpoint redaction, pre-session confirmation — all done. TestFlight + App Store submission next. |
 | 3 | **iOS — iPad** | Planned | Adaptive layout (split-view chat + sidebar). Leverage iPad multitasking APIs. |
-| 4 | **App Store publishing** | Planned | First-time submission. Requires App Store Connect setup, review guidelines compliance, privacy nutrition labels, and in-app purchase considerations (if any). |
-| 5 | **Linux** | Planned | Flutter Linux desktop runner. CI cross-compile for x86_64 (AppImage or .deb). Go CGO cross-compile or pre-built .so. |
-| 6 | **Windows** | Maybe | Flutter Windows runner. MSIX or Inno Setup installer. Lowest priority — evaluate demand. |
+| 4 | **App Store publishing** | In progress | First-time submission. App Store Connect setup, review guidelines compliance, privacy nutrition labels, and in-app purchase considerations. |
+| 5 | **Android** | Planned | Flutter side builds; Go `gomobile` target exists in the Makefile. Needs UI polish pass, Keystore integration, and CI runner. |
+| 6 | **Linux** | Planned | Flutter Linux desktop runner. CI cross-compile for x86_64 (AppImage or .deb). Go CGO cross-compile or pre-built .so. |
+| 7 | **Windows** | Maybe | Flutter Windows runner. MSIX or Inno Setup installer. Lowest priority — evaluate demand. |
 
 #### Key Technical Considerations
 
-**iOS (iPhone + iPad)**
-- Go SDK needs to be compiled as an xcframework (arm64) instead of a dylib
-- Keychain entitlements are already registered (`com.absgrafx.nodeneo`)
-- UI is mostly Flutter — should adapt well, but needs review for safe area insets, notch/dynamic island, and smaller screens
-- App Transport Security (ATS) — all HTTP calls must be HTTPS or have exceptions declared
-- Background execution limits — sessions/blockchain polling may need background modes or push notifications
-- App Store review: crypto wallet + blockchain interaction will likely trigger extra review scrutiny; prepare clear descriptions of what the app does and doesn't do (not an exchange, not custodial, etc.)
+**iPad**
+- Adaptive layout: leverage the `medium`/`expanded` form factors already defined in `lib/services/form_factor.dart` for split-view conversation lists + chat pane
+- Slide Over / Split View support from day one
+- Same Go static library as iPhone — no separate build needed
 
 **App Store Publishing Checklist**
 - [ ] App Store Connect account linked to Apple Developer Program
-- [ ] App ID already registered (`com.absgrafx.nodeneo`)
+- [x] App ID registered (`com.absgrafx.nodeneo`)
 - [ ] Privacy policy URL required
 - [ ] App privacy "nutrition labels" (data collection declarations)
 - [ ] Screenshots for all required device sizes
 - [ ] Review notes explaining blockchain/crypto functionality
 - [ ] TestFlight beta distribution first
 - [ ] Consider age rating implications
+
+**Android**
+- Keystore integration via `flutter_secure_storage` (already used by macOS/iOS)
+- `make go-android` target builds the `.aar` — needs wiring into Flutter plugin registration
+- Tall form factors (foldables) — ensure `FormFactor` policy holds
 
 **Linux**
 - No Keychain equivalent — need `libsecret` or file-based encrypted storage
@@ -138,16 +161,9 @@ When multimodal/generative models become available on the Morpheus network, the 
 - MSIX (Microsoft Store) or Inno Setup / WiX (standalone installer)
 - Go CGO builds fine on Windows; needs MinGW or MSVC toolchain in CI
 
-#### Open Questions
-- What's the minimum iOS version to target? (iOS 16+ covers ~95% of active devices)
-- Should iPad support Split View / Slide Over from day one?
-- Is the plan to distribute macOS via App Store too, or keep GitHub Releases only?
-- For Linux, which distros to officially support? Ubuntu LTS + Fedora covers most users.
-- Any interest in Android? Flutter supports it natively, but Go cross-compilation to ARM Android is more involved.
-
 ---
 
-### 5. AI Gateway — Next Iteration (v0.2+)
+### 6. AI Gateway — Next Iteration (v0.2+)
 
 **Priority:** Medium (ecosystem)
 
@@ -193,150 +209,7 @@ When multimodal/generative models become available on the Morpheus network, the 
 
 ---
 
-### 6. ~~Thinking / Reasoning Model Support~~ DONE
-
-Implemented two-zone streaming display with `reasoning_content` field support and `<think>` tag fallback. Purple thinking zone with live scroll, collapsible "Thought for Xs" after completion.
-
-~~**Priority:** High (correctness — currently broken for reasoning models)~~
-
-#### Problem
-When chatting with reasoning models (e.g. GLM-4.7, DeepSeek-R1, Qwen-3 Thinking), the model's internal chain-of-thought "thinking" tokens stream directly into the chat bubble alongside the final answer. The result is a scrambled wall of text where reasoning artifacts (hallucinated code snippets, self-dialogue, planning notes) are indistinguishable from the actual response. Observed with Venice `venice-glm-47` — the model's reasoning about Terraform/AWS config leaked into visible output.
-
-#### Root Cause
-The entire streaming pipeline — from proxy-router SDK through Go FFI to Flutter — only reads `choices[0].delta.content`. The `reasoning_content` field on the delta (the industry-standard convention for separating thinking from answer) is silently dropped at every layer:
-- `ChunkStreaming.String()` in `proxy-router` → reads `Delta.Content` only
-- `ChatCompletionDelta` struct → has `Content` and `Role` fields only, no `ReasoningContent`
-- Go mobile `api.go` → accumulates a single `fullResponse` string
-- Flutter `chat_screen.dart` → accumulates a single `accumulated` string from all deltas
-
-#### Conventions to Support
-Two patterns exist in the wild — we need to handle both:
-
-| Pattern | Used by | How it works |
-|---------|---------|--------------|
-| `delta.reasoning_content` field | Venice, DeepSeek API, OpenAI o-series, GLM-4.7, Qwen-3 | Separate field on the streaming delta; `content` is clean |
-| `<think>...</think>` tags in `content` | Self-hosted models (vLLM, ollama), some proxies | Reasoning wrapped in XML-style tags inside the content string |
-
-Venice also provides `reasoning_effort` parameter (low/medium/high) and `reasoning.enabled: false` to control/disable reasoning.
-
-#### Requirements
-
-**Go / proxy-router layer:**
-- Extend `ChatCompletionDelta` and `ChatCompletionStreamResponseExtra` to parse `reasoning_content` from the delta JSON
-- Extend `ChunkStreaming` to expose both `Content()` and `ReasoningContent()` (or a typed enum: thinking vs answer)
-- Extend the mobile SDK `StreamCallback` to carry a chunk type (thinking vs content) — e.g. `StreamCallback func(text string, isThinking bool, isLast bool) error`
-- Go mobile `api.go`: accumulate two separate buffers (`fullResponse` for content, `thinkingResponse` for reasoning); store both in SQLite metadata
-- FFI signal: extend the delta store to include chunk type so Dart knows whether each piece is thinking or content
-- Fallback: if `reasoning_content` is absent, check for `<think>...</think>` tags in `content` and split them out
-
-**Flutter UI:**
-- Two-zone streaming display:
-  - **Thinking zone** — A compact (3–5 line) scrolling window above the main response bubble, with a muted/dimmed style (e.g. smaller font, italic, 60% opacity). Shows reasoning tokens scrolling by in real time. Auto-collapses when thinking is done and content begins.
-  - **Answer zone** — The normal chat bubble, renders only `content` tokens (the actual answer)
-- Thinking zone should have a "Thinking…" label and a subtle animation while active
-- After completion, the thinking zone collapses to a single "Thought for Xs" row (tap to expand full reasoning)
-- For non-streaming mode: parse the final response and split thinking from answer before rendering
-
-**Conversation history:**
-- When building message history for multi-turn conversations, strip `reasoning_content` from prior assistant messages (per DeepSeek/Venice best practice — reasoning tokens should NOT be fed back as context)
-- Store reasoning separately in message metadata for review but don't include in prompt history
-
-#### Open Questions
-- Should we expose `reasoning_effort` as a tuning parameter in the Chat Tuning drawer? Venice supports low/medium/high for GLM-4.7.
-- Should we add a per-model flag to `active_models.json` cache indicating `supportsReasoning` / `supportsReasoningEffort`? Venice's `/v1/models` endpoint includes these fields.
-- Should the thinking zone be opt-in (hidden by default) or visible by default?
-- How to handle models that sometimes reason and sometimes don't (reasoning is task-dependent)?
-
----
-
-### 7. ~~Stop / Cancel Generation Button~~ DONE
-
-Amber stop button replaces send during streaming. Full cancellation plumbing through FFI → Go → proxy-router context. Partial responses preserved with "Generation stopped" indicator.
-
-~~**Priority:** High (usability — no way to interrupt runaway responses)~~
-
-#### Problem
-There is no way to stop a response once it starts generating. The send button (`Icons.send_rounded`) simply disables while `_sending` is true. If a model goes off the rails (as observed with GLM-4.7's reasoning leak), produces an unexpectedly long response, or the user simply changes their mind, they must wait for the full response to complete or kill the app.
-
-#### Current State
-- Send button: `IconButton.filled` with `Icons.send_rounded`, `onPressed: _sending ? null : _send` — disabled (greyed out) during generation
-- No cancel token or `context.CancelFunc` is threaded through the FFI → Go → SDK path
-- The Go SDK's `SendPromptWithMessagesAndParams` accepts a `context.Context` (currently `context.Background()`) — so cancellation is architecturally possible but unwired
-- The `StreamCallback` in Go can return an error to abort streaming, but the c-shared wrapper's chunk function always returns `nil`
-
-#### Requirements
-
-**Flutter UI:**
-- While `_sending` is true, replace the send button icon from `Icons.send_rounded` (paper airplane) to `Icons.stop_rounded` (filled square) — standard "stop generation" convention
-- Button color: change from green to amber/red while in stop mode
-- `onPressed` while sending → calls `_stopGeneration()` instead of `_send()`
-- Keep the tuning button disabled while sending (unchanged)
-
-**Cancellation plumbing (FFI → Go → SDK):**
-- Add a new FFI export: `CancelPrompt()` (or `AbortCurrentPrompt()`) that cancels the active streaming context
-- In Go mobile `api.go`: store a `context.CancelFunc` for the in-flight prompt; `CancelPrompt()` calls it
-- Pass the cancellable `context.Context` to `SendPromptWithMessagesAndParams` instead of `context.Background()`
-- When cancelled: the SDK's HTTP streaming reader should close, the goroutine should return, and the `done` callback should fire with a result indicating cancellation
-- Dart bridge: add `cancelPrompt()` method that calls the FFI `CancelPrompt` export
-- Chat screen: on cancel, finalize the streaming bubble with whatever has accumulated so far (don't discard partial responses), mark as "(stopped)" or similar, set `_sending = false`
-
-**Edge cases:**
-- Cancel during session opening (blockchain tx) — should we allow cancelling during the `_reopeningSession` phase? Probably not (tx is already submitted). Disable stop button during session open, enable once streaming starts.
-- Cancel with no streaming started yet (waiting for first token) — should work, just show empty/cancelled state
-- Multiple rapid cancel/send — debounce or disable send for a brief period after cancel
-- Non-streaming mode — cancel should also work (abort the HTTP request via context)
-
-#### Open Questions
-- Should cancelled responses be saved to conversation history? (Probably yes — the partial response is useful context)
-- Should there be a "Regenerate" button after cancellation (re-send the same prompt)?
-- Haptic feedback on stop tap?
-
----
-
-### 8. ~~Collapsible Wallet Card on Home Screen~~ DONE
-
-Collapsed by default on all platforms. Compact inline row with address + MOR/ETH balances. Privacy toggle slimmed to single row with TEE explainer link.
-
----
-
-### 9. App Lock UX: Biometrics-First, Auto-Prompt
-
-**Priority:** High (mobile UX — first impression on every app launch)
-
-#### Problem
-The lock screen shows a password field and an "Use biometrics" button. On iOS with Face ID enabled, the user must manually tap the biometrics button — it doesn't auto-trigger. Additionally, biometrics requires setting a password first, which feels backwards on mobile where Face ID is the primary auth method.
-
-#### Requirements
-- **Auto-prompt biometrics on lock screen appear**: If biometrics are enabled, immediately trigger Face ID/Touch ID when the lock screen mounts (in `initState` or after first frame). No user tap required.
-- **Biometrics-only mode**: Allow enabling biometrics without requiring a password. Face ID becomes the sole unlock method.
-- **Password as optional fallback**: If the user wants both, password is the fallback when biometrics fail (e.g. "Face not recognized — enter password"). If biometrics-only, the fallback is the recovery phrase / factory reset path already in place.
-- **Lock screen layout**: When biometrics are primary, de-emphasize the password field (show it only after a failed biometric attempt or via "Use password instead" link).
-- **Settings flow**: Simplify: single toggle "Lock with Face ID" (or Touch ID). Optional "Also set a backup password" toggle underneath.
-
-#### Open Questions
-- Should we support PIN (4-6 digit) as a lighter alternative to full password?
-- On desktop (macOS), should Touch ID on Magic Keyboard auto-trigger too?
-
----
-
-### 10. ~~Bug: MOR Scanner Doesn't Reflect Active Session Stakes~~ FIXED
-
-**Priority:** Medium (accounting accuracy)
-
-#### Problem
-The "Where's My MOR" wallet breakdown shows 0 MOR in "Active (Staked)" even when sessions are open with staked MOR. Observed on both macOS and iOS — the scanner reports "Scanned 20 of 41 sessions (newest only)" and the staked amount for the active session is missing from the total. The gap between expected balance (e.g. 105 MOR deposited) and displayed "In Wallet" (e.g. 96.7956 MOR) is unaccounted.
-
-#### Likely Cause
-The Go SDK `MorScanner` caps scanning to the 20 newest sessions. If the active session's on-chain staking data falls outside that window, or if the scanner reads `approvedAmount` rather than actual locked stake, the active stake won't appear.
-
-#### Requirements
-- Active session stakes must always appear in the "Active (Staked)" total
-- The gap between deposited and spendable MOR should be fully accounted (staked + on-hold + gas spent)
-- Consider scanning all sessions with open status, not just the newest N
-
----
-
-### 9. Automated Regression Testing
+### 7. Automated Regression Testing
 
 **Priority:** Medium (engineering velocity)
 
@@ -358,71 +231,51 @@ Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Andr
 
 ---
 
-### 12. Bug: TEE Attestation Fails on iOS (Sigstore Cache Path)
+### 8. iOS Release Regression Checklist
 
-**Priority:** High (blocks Secure/TEE models on iPhone)
+**Priority:** High (pre-release gate for every iOS build)
 
-#### Problem
-TEE attestation fails on iOS with `mkdir .sigstore: operation not permitted`. The Sigstore library used for TEE golden value verification tries to create a `.sigstore` cache directory in the app container root, which iOS sandboxing prohibits. Non-TEE models work fine.
-
-#### Error
-```
-TEE attestation failed: failed to fetch golden values for version v6.2.0:
-failed to fetch Sigstore trusted root: mkdir /private/var/mobile/Containers/
-Data/Application/.../.sigstore: operation not permitted
-```
-
-#### Root Cause
-The proxy-router's attestation module (or the underlying Sigstore Go library) defaults to creating its cache in the current working directory or the process root. On macOS this is writable; on iOS it's the sandboxed container root which only allows writes to `Documents/`, `Library/`, and `tmp/`.
-
-#### Fix
-Configure the Sigstore library's cache/root path to use the `dataDir` passed during SDK `Init` (which is already under `Library/Application Support/nodeneo/`). This may be an environment variable (`SIGSTORE_ROOT_DIR` or similar) or a library initialization parameter in the Go attestation code.
-
-#### Workaround
-Use non-TEE model variants on iOS until fixed. 50+ models available without TEE.
-
----
-
-### 13. Bug: Provider IP/Port Exposed in Error Messages on iOS
-
-**Priority:** High (security — leaks provider infrastructure)
-
-#### Problem
-When a provider request fails on iOS, the raw error message is displayed to the user including the provider's internal IP and port (e.g. `Post "http://216.81.245.17:15856/chat/completions": EOF`). This leaks provider infrastructure details that should never be shown to end users.
-
-This also happened with a non-TEE thinking model (Arcee-Trinity-Large-Thinking) — the first attempt failed with this error, then a retry with "Reconnect session" worked and thinking mode displayed correctly. The initial failure may be related to the iOS sandbox environment or ATS restrictions on plain HTTP connections to provider IPs.
-
-#### Requirements
-- Sanitize all provider error messages before displaying to users — strip IPs, ports, and internal URLs
-- Show user-friendly messages: "Provider temporarily unavailable — tap to retry" instead of raw HTTP errors
-- Investigate whether iOS ATS (App Transport Security) blocks plain HTTP to provider IPs — may need `NSAllowsArbitraryLoads` or the existing `NSAllowsLocalNetworking` may be insufficient for external provider endpoints
-- Log the full error details to the app log (viewable in Version & Logs) for debugging, but don't surface them in the chat UI
+- [x] Onboarding: create wallet, import PK, import mnemonic
+- [x] Home screen: wallet card (collapse + expand), model list, pull-to-refresh
+- [x] Chat: non-TEE model send/receive/stream
+- [x] Chat: TEE model (sigstore cache fix verified on device)
+- [x] Chat: thinking model — thinking zone + answer zone
+- [x] Chat: stop/cancel generation
+- [x] Chat: provider error messages redacted (no IP/host:port/URL leakage)
+- [x] Pre-session confirmation modal (model, TEE badge, duration, MOR stake)
+- [x] Wallet: Where's My MOR scan, active sessions, staked MOR visible on home card
+- [x] Settings: Network (Blockchain Connection only; no API/Gateway on mobile)
+- [x] Settings: Preferences, Backup & Reset (export/import `.nnbak`)
+- [x] App lock: password, Face ID, factory reset (DELETE ALL)
+- [x] Safe areas: notch, Dynamic Island, keyboard overlap
+- [x] Release build: symbols exported (`-rdynamic`), no debug dylib issues
+- [ ] Background/foreground: long-idle resume (>30 min) without session loss
+- [ ] Airplane mode → offline toast, no crash
+- [ ] Wallet switching: import second wallet, confirm DB isolation
 
 ---
 
-### 14. iOS Full Regression Test Checklist
-
-**Priority:** High (pre-release gate)
-
-#### Problem
-Several iOS-specific issues surfaced during initial testing that wouldn't occur on macOS: TEE sigstore path, ATS/HTTP restrictions, provider error message exposure. A systematic iOS regression checklist is needed before each release.
-
-#### Checklist
-- [ ] Onboarding: create wallet, import PK, import mnemonic
-- [ ] Home screen: wallet card, model list, pull-to-refresh
-- [ ] Chat: non-TEE model send/receive/stream
-- [ ] Chat: TEE model (verify sigstore fix when done)
-- [ ] Chat: thinking model — thinking zone + answer zone
-- [ ] Chat: stop/cancel generation
-- [ ] Chat: error handling (provider busy, session expired, reconnect)
-- [ ] Wallet: Where's My MOR scan, active sessions
-- [ ] Settings: Network (Blockchain Connection only, no API/Gateway)
-- [ ] Settings: Preferences, Backup & Reset (export/import)
-- [ ] App lock: password, Face ID, factory reset (DELETE ALL)
-- [ ] Safe areas: notch, Dynamic Island, keyboard overlap
-- [ ] Background/foreground: app survives backgrounding and resume
-- [ ] Release build: symbols exported (-rdynamic), no debug dylib issues
+*Last updated: 2026-04-24 (v3.0.0 ship)*
 
 ---
 
-*Last updated: 2026-04-16*
+## Recently Shipped (for the short-term memory)
+
+### v3.0.0 — 2026-04
+- Pre-session confirmation modal with live stake preview and duration presets
+- In-place affordability (greyed models, no re-sort, `X of Y affordable` counter)
+- TEE attestation on iPhone (Sigstore TUF cache path fix via `SetSigstoreCacheDir`)
+- Wallet card redesign (single-line address, right-aligned balances, full-width helpers)
+- Provider endpoint redaction (`lib/utils/error_redaction.dart`)
+- "Fund Your Wallet" overlay scoped — no more covering active chats
+- Chain correction: "Arbitrum" → "Base" across UI + docs (chainID 8453)
+- RPC failover: expanded `shouldRetryRPCError` in the fork for public-node rate limits
+- Flutter upgrade to 3.41.7 (local + CI)
+
+### v2.7.0 — 2026-04
+- iOS (iPhone) first light: full flows on device + simulator, TestFlight track open
+- Two-zone streaming for reasoning/thinking models (`reasoning_content` + `<think>` fallback)
+- Stop/Cancel generation (amber stop button, full cancellation plumbing)
+- MOR scanner: ABI decode fix, full session scan, isolate-backed
+- Collapsible wallet card, slimmed privacy toggle, pull-to-refresh
+- Factory reset uses "DELETE ALL" confirmation phrase

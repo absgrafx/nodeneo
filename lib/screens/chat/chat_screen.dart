@@ -10,6 +10,7 @@ import '../../services/chat_streaming_preference_store.dart';
 import '../../services/default_tuning_store.dart';
 import '../../services/session_duration_store.dart';
 import '../../theme.dart';
+import '../../utils/error_redaction.dart';
 import '../../utils/session_cost_estimate.dart';
 import '../../utils/session_open_errors.dart';
 import '../../utils/token_amount.dart';
@@ -42,6 +43,11 @@ class ChatScreen extends StatefulWidget {
   final String? resumeConversationId;
   final String? resumeSessionId;
 
+  /// Per-chat override for the on-chain session length (seconds). When set,
+  /// bypasses the stored default — used by the pre-session confirmation modal
+  /// so the choice made there carries through to session open.
+  final int? sessionDurationSecondsOverride;
+
   const ChatScreen({
     super.key,
     required this.modelId,
@@ -49,6 +55,7 @@ class ChatScreen extends StatefulWidget {
     required this.isTEE,
     this.resumeConversationId,
     this.resumeSessionId,
+    this.sessionDurationSecondsOverride,
   });
 
   @override
@@ -99,7 +106,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _boot() async {
-    final sec = await SessionDurationStore.instance.readSeconds();
+    final override = widget.sessionDurationSecondsOverride;
+    final sec = override != null
+        ? SessionDurationStore.snapToNearestPreset(override)
+        : await SessionDurationStore.instance.readSeconds();
     if (!mounted) return;
     setState(() => _sessionDurationSeconds = sec);
     await _loadStreamingPreference();
@@ -694,7 +704,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _messages.add(
           _ChatBubble(
             role: 'assistant',
-            text: 'Error: ${e.message}\n\nIf the on-chain session expired, tap Reconnect session below.',
+            text:
+                'Error: ${redactProviderEndpoints(e.message)}\n\nIf the on-chain session expired, tap Reconnect session below.',
             isError: true,
             onReconnect: _recoverSession,
           ),
@@ -709,7 +720,13 @@ class _ChatScreenState extends State<ChatScreen> {
             _messages.last.role == 'assistant') {
           _messages.removeLast();
         }
-        _messages.add(_ChatBubble(role: 'assistant', text: 'Error: $e', isError: true));
+        _messages.add(
+          _ChatBubble(
+            role: 'assistant',
+            text: 'Error: ${redactProviderEndpoints(e.toString())}',
+            isError: true,
+          ),
+        );
         _sending = false;
       });
     }
