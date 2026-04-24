@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/bridge.dart';
+import '../../services/form_factor.dart';
 import '../../theme.dart';
 import '../../utils/session_open_errors.dart';
 import '../../widgets/section_card.dart';
@@ -13,7 +14,13 @@ Map<String, dynamic> _scanWalletMorSync(void _) => GoBridge().scanWalletMOR();
 
 /// Wallet screen: key management + active on-chain sessions.
 class WalletScreen extends StatefulWidget {
-  const WalletScreen({super.key});
+  /// When true, kick off the "Where's My MOR?" scan immediately on open
+  /// instead of waiting for the user to tap the section. Used by the wallet
+  /// card's purple deep-link pill on the home screen so the user lands
+  /// directly in a running scan.
+  final bool autoRunScan;
+
+  const WalletScreen({super.key, this.autoRunScan = false});
 
   @override
   State<WalletScreen> createState() => _WalletScreenState();
@@ -38,23 +45,40 @@ class _WalletScreenState extends State<WalletScreen> {
   void initState() {
     super.initState();
     _refreshSessions();
+    if (widget.autoRunScan) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _runScan();
+      });
+    }
   }
 
   // ── MOR scanner ──────────────────────────────────────────────
 
   Future<void> _runScan() async {
-    setState(() { _scanning = true; _scanError = null; });
+    setState(() {
+      _scanning = true;
+      _scanError = null;
+    });
     try {
       final result = await compute(_scanWalletMorSync, null);
       if (!mounted) return;
       if (result['error'] != null) {
-        setState(() { _scanError = result['error'] as String; _scanning = false; });
+        setState(() {
+          _scanError = result['error'] as String;
+          _scanning = false;
+        });
       } else {
-        setState(() { _scanResult = result; _scanning = false; });
+        setState(() {
+          _scanResult = result;
+          _scanning = false;
+        });
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _scanError = e.toString(); _scanning = false; });
+      setState(() {
+        _scanError = e.toString();
+        _scanning = false;
+      });
     }
   }
 
@@ -91,9 +115,11 @@ class _WalletScreenState extends State<WalletScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(txHash.isNotEmpty
-                ? 'Transaction sent: ${txHash.substring(0, 10)}...'
-                : 'Recovery transaction submitted'),
+            content: Text(
+              txHash.isNotEmpty
+                  ? 'Transaction sent: ${txHash.substring(0, 10)}...'
+                  : 'Recovery transaction submitted',
+            ),
             duration: const Duration(seconds: 4),
           ),
         );
@@ -172,8 +198,10 @@ class _WalletScreenState extends State<WalletScreen> {
   String _endsSummary(String endsAtUnix) {
     final sec = int.tryParse(endsAtUnix.trim());
     if (sec == null || sec <= 0) return '—';
-    final end =
-        DateTime.fromMillisecondsSinceEpoch(sec * 1000, isUtc: true).toLocal();
+    final end = DateTime.fromMillisecondsSinceEpoch(
+      sec * 1000,
+      isUtc: true,
+    ).toLocal();
     final left = end.difference(DateTime.now());
     if (left.isNegative) return 'Ended (close to reclaim stake)';
     if (left.inHours >= 1) {
@@ -198,10 +226,12 @@ class _WalletScreenState extends State<WalletScreen> {
       await _refreshSessions();
     } on GoBridgeException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(sessionCloseErrorMessage(e.message)),
-          duration: const Duration(seconds: 8),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(sessionCloseErrorMessage(e.message)),
+            duration: const Duration(seconds: 8),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _closing.remove(sid));
@@ -255,7 +285,9 @@ class _WalletScreenState extends State<WalletScreen> {
         GoBridge().closeSession(sid);
         closed++;
       } on GoBridgeException catch (e) {
-        errors.add('${sid.substring(0, 8)}…: ${sessionCloseErrorMessage(e.message)}');
+        errors.add(
+          '${sid.substring(0, 8)}…: ${sessionCloseErrorMessage(e.message)}',
+        );
       } catch (e) {
         errors.add('${sid.substring(0, 8)}…: $e');
       } finally {
@@ -271,8 +303,9 @@ class _WalletScreenState extends State<WalletScreen> {
         final msg = errors.isEmpty
             ? 'Closed $closed session${closed != 1 ? 's' : ''} successfully.'
             : 'Closed $closed of ${sessionsCopy.length}. ${errors.length} failed.';
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
     }
   }
@@ -289,79 +322,86 @@ class _WalletScreenState extends State<WalletScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _sessionsLoading || _closingAll ? null : _refreshSessions,
+            onPressed: _sessionsLoading || _closingAll
+                ? null
+                : _refreshSessions,
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        children: [
-          SectionCard(
-            icon: Icons.key_outlined,
-            title: 'Key Management',
-            accentColor: NeoTheme.amber,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _SettingsCard(
-                  icon: Icons.key_outlined,
-                  iconColor: NeoTheme.amber,
-                  title: 'Export Private Key',
-                  subtitle: 'For use with MetaMask, Rabby, or other wallets',
-                  onTap: () => showExportPrivateKeyFlow(context),
-                ),
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        size: 14,
-                        color: NeoTheme.amber.withValues(alpha: 0.8),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          'Never share your private key with anyone.',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: NeoTheme.amber.withValues(alpha: 0.8),
-                            height: 1.3,
+      body: MaxContentWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            SectionCard(
+              icon: Icons.key_outlined,
+              title: 'Key Management',
+              accentColor: NeoTheme.amber,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _SettingsCard(
+                    icon: Icons.key_outlined,
+                    iconColor: NeoTheme.amber,
+                    title: 'Export Private Key',
+                    subtitle: 'For use with MetaMask, Rabby, or other wallets',
+                    onTap: () => showExportPrivateKeyFlow(context),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 14,
+                          color: NeoTheme.amber.withValues(alpha: 0.8),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Never share your private key with anyone.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: NeoTheme.amber.withValues(alpha: 0.8),
+                              height: 1.3,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.account_balance_outlined,
-            title: "Where's My MOR",
-            status: _scanResult != null
-                ? StatusPill(active: true, label: '${_scanResult!['total']} MOR')
-                : const StatusPill(active: false, label: 'Tap to scan'),
-            onExpand: _scanResult == null && !_scanning ? _runScan : null,
-            child: _buildMorScannerBody(theme),
-          ),
-          const SizedBox(height: 12),
-          SectionCard(
-            icon: Icons.link_rounded,
-            title: 'Active Sessions',
-            status: StatusPill(
-              active: _sessions.isNotEmpty,
-              label: _sessionsLoading
-                  ? '...'
-                  : _sessions.isEmpty
-                      ? 'None'
-                      : '${_sessions.length} active',
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.account_balance_outlined,
+              title: "Where's My MOR",
+              status: _scanResult != null
+                  ? StatusPill(
+                      active: true,
+                      label: '${_scanResult!['total']} MOR',
+                    )
+                  : const StatusPill(active: false, label: 'Tap to scan'),
+              onExpand: _scanResult == null && !_scanning ? _runScan : null,
+              child: _buildMorScannerBody(theme),
             ),
-            child: _buildSessionsBody(theme),
-          ),
-        ],
+            const SizedBox(height: 12),
+            SectionCard(
+              icon: Icons.link_rounded,
+              title: 'Active Sessions',
+              status: StatusPill(
+                active: _sessions.isNotEmpty,
+                label: _sessionsLoading
+                    ? '...'
+                    : _sessions.isEmpty
+                    ? 'None'
+                    : '${_sessions.length} active',
+              ),
+              child: _buildSessionsBody(theme),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -374,16 +414,26 @@ class _WalletScreenState extends State<WalletScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const CircularProgressIndicator(color: NeoTheme.green, strokeWidth: 2.5),
+              const CircularProgressIndicator(
+                color: NeoTheme.green,
+                strokeWidth: 2.5,
+              ),
               const SizedBox(height: 14),
               const Text(
                 'Scanning on-chain sessions…',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFFD1D5DB)),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFFD1D5DB),
+                ),
               ),
               const SizedBox(height: 6),
               Text(
                 'Checking balances, active stakes, and on-hold positions',
-                style: TextStyle(fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.6)),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: NeoTheme.green.withValues(alpha: 0.6),
+                ),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -395,7 +445,10 @@ class _WalletScreenState extends State<WalletScreen> {
     if (_scanError != null) {
       return Column(
         children: [
-          Text(_scanError!, style: const TextStyle(color: Color(0xFFF87171), fontSize: 12)),
+          Text(
+            _scanError!,
+            style: const TextStyle(color: Color(0xFFF87171), fontSize: 12),
+          ),
           const SizedBox(height: 12),
           FilledButton(
             onPressed: _runScan,
@@ -414,7 +467,9 @@ class _WalletScreenState extends State<WalletScreen> {
             'Read-only on-chain scan showing your MOR across three buckets: '
             'in your wallet, staked in active sessions, and on hold after early closes.',
             style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.hintColor, fontSize: 11, height: 1.4,
+              color: theme.hintColor,
+              fontSize: 11,
+              height: 1.4,
             ),
           ),
           const SizedBox(height: 12),
@@ -450,21 +505,32 @@ class _WalletScreenState extends State<WalletScreen> {
             children: [
               Text(
                 'Total accounted',
-                style: TextStyle(fontSize: 10, color: NeoTheme.green.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w600, letterSpacing: 1),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: NeoTheme.green.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
                 '${r['total']} MOR',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
-                    fontFamily: 'JetBrains Mono', color: Colors.white),
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  fontFamily: 'JetBrains Mono',
+                  color: Colors.white,
+                ),
               ),
               if (r['incomplete'] == true)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     'Scanned ${r['scanned']} of ${r['total_sessions']} sessions (newest only)',
-                    style: TextStyle(fontSize: 10, color: NeoTheme.amber.withValues(alpha: 0.8)),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: NeoTheme.amber.withValues(alpha: 0.8),
+                    ),
                   ),
                 ),
             ],
@@ -473,21 +539,25 @@ class _WalletScreenState extends State<WalletScreen> {
         const SizedBox(height: 12),
         Row(
           children: [
-            Expanded(child: _morBucket(
-              theme,
-              label: 'In Wallet',
-              value: r['wallet_balance'] as String? ?? '—',
-              color: NeoTheme.green,
-              subtitle: 'Spendable',
-            )),
+            Expanded(
+              child: _morBucket(
+                theme,
+                label: 'In Wallet',
+                value: r['wallet_balance'] as String? ?? '—',
+                color: NeoTheme.green,
+                subtitle: 'Spendable',
+              ),
+            ),
             const SizedBox(width: 8),
-            Expanded(child: _morBucket(
-              theme,
-              label: 'Active (Staked)',
-              value: r['active_stake'] as String? ?? '—',
-              color: const Color(0xFFA855F7),
-              subtitle: '${r['open_sessions'] ?? 0} open sessions',
-            )),
+            Expanded(
+              child: _morBucket(
+                theme,
+                label: 'Active (Staked)',
+                value: r['active_stake'] as String? ?? '—',
+                color: const Color(0xFFA855F7),
+                subtitle: '${r['open_sessions'] ?? 0} open sessions',
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -500,14 +570,16 @@ class _WalletScreenState extends State<WalletScreen> {
                 label: 'On Hold',
                 value: r['on_hold_total'] as String? ?? '—',
                 color: const Color(0xFFEAB308),
-                subtitle: 'Claimable: ${r['on_hold_available'] ?? '0'} · Locked: ${r['on_hold_locked'] ?? '0'}',
+                subtitle:
+                    'Claimable: ${r['on_hold_available'] ?? '0'} · Locked: ${r['on_hold_locked'] ?? '0'}',
               ),
             ),
             const SizedBox(width: 6),
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Tooltip(
-                message: 'When you close a session early (before its scheduled end),\n'
+                message:
+                    'When you close a session early (before its scheduled end),\n'
                     'the contract may hold back part of your stake until the\n'
                     'next UTC day boundary. After that unlock time, tap\n'
                     '"Recover" to withdraw it to your wallet.\n\n'
@@ -516,7 +588,11 @@ class _WalletScreenState extends State<WalletScreen> {
                 preferBelow: false,
                 triggerMode: TooltipTriggerMode.tap,
                 showDuration: const Duration(seconds: 8),
-                child: Icon(Icons.info_outline, size: 16, color: const Color(0xFF6B7280)),
+                child: Icon(
+                  Icons.info_outline,
+                  size: 16,
+                  color: const Color(0xFF6B7280),
+                ),
               ),
             ),
           ],
@@ -531,10 +607,21 @@ class _WalletScreenState extends State<WalletScreen> {
               disabledBackgroundColor: NeoTheme.green.withValues(alpha: 0.15),
             ),
             icon: _withdrawing
-                ? const SizedBox(width: 16, height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : Icon(Icons.arrow_downward, size: 16,
-                    color: hasClaimable ? Colors.white : const Color(0xFF6B7280)),
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(
+                    Icons.arrow_downward,
+                    size: 16,
+                    color: hasClaimable
+                        ? Colors.white
+                        : const Color(0xFF6B7280),
+                  ),
             label: Text(
               _withdrawing ? 'Recovering…' : 'Recover claimable MOR',
               style: TextStyle(
@@ -555,13 +642,21 @@ class _WalletScreenState extends State<WalletScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.warning_amber_rounded, size: 14, color: NeoTheme.amber.withValues(alpha: 0.9)),
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 14,
+                  color: NeoTheme.amber.withValues(alpha: 0.9),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     '${r['expired_unclosed']} session(s) are past their end time but still open. '
                     'Close them from Active Sessions to reclaim stake.',
-                    style: TextStyle(fontSize: 10, color: NeoTheme.amber.withValues(alpha: 0.85), height: 1.3),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: NeoTheme.amber.withValues(alpha: 0.85),
+                      height: 1.3,
+                    ),
                   ),
                 ),
               ],
@@ -573,17 +668,27 @@ class _WalletScreenState extends State<WalletScreen> {
           children: [
             InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => launchUrl(Uri.parse('https://tech.mor.org/session.html'), mode: LaunchMode.externalApplication),
+              onTap: () => launchUrl(
+                Uri.parse('https://tech.mor.org/session.html'),
+                mode: LaunchMode.externalApplication,
+              ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.open_in_new, size: 13, color: NeoTheme.green.withValues(alpha: 0.7)),
+                    Icon(
+                      Icons.open_in_new,
+                      size: 13,
+                      color: NeoTheme.green.withValues(alpha: 0.7),
+                    ),
                     const SizedBox(width: 5),
                     Text(
                       'Session staking details',
-                      style: TextStyle(fontSize: 11, color: NeoTheme.green.withValues(alpha: 0.7)),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: NeoTheme.green.withValues(alpha: 0.7),
+                      ),
                     ),
                   ],
                 ),
@@ -601,7 +706,8 @@ class _WalletScreenState extends State<WalletScreen> {
     );
   }
 
-  Widget _morBucket(ThemeData theme, {
+  Widget _morBucket(
+    ThemeData theme, {
     required String label,
     required String value,
     required Color color,
@@ -618,16 +724,30 @@ class _WalletScreenState extends State<WalletScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                color: color.withValues(alpha: 0.8), letterSpacing: 0.5)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: color.withValues(alpha: 0.8),
+              letterSpacing: 0.5,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text('$value MOR',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
-                fontFamily: 'JetBrains Mono', color: Colors.white)),
+          Text(
+            '$value MOR',
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'JetBrains Mono',
+              color: Colors.white,
+            ),
+          ),
           const SizedBox(height: 2),
-          Text(subtitle,
-            style: TextStyle(fontSize: 10, color: theme.hintColor)),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 10, color: theme.hintColor),
+          ),
         ],
       ),
     );
@@ -652,8 +772,7 @@ class _WalletScreenState extends State<WalletScreen> {
                       ),
                     )
                   : TextButton(
-                      onPressed:
-                          _closing.isNotEmpty ? null : _confirmCloseAll,
+                      onPressed: _closing.isNotEmpty ? null : _confirmCloseAll,
                       child: Text(
                         'Close All (${_sessions.length})',
                         style: TextStyle(
@@ -720,8 +839,7 @@ class _WalletScreenState extends State<WalletScreen> {
             final sid = row['id'] as String? ?? '';
             final modelHex = row['model_agent_id'] as String? ?? '';
             final modelKey = _normId(modelHex);
-            final modelName =
-                _modelNames[modelKey] ?? _shortHex(modelHex);
+            final modelName = _modelNames[modelKey] ?? _shortHex(modelHex);
             final ends = row['ends_at'] as String? ?? '0';
             final busy = _closing.contains(sid);
             final endText = _endsSummary(ends);
@@ -755,8 +873,9 @@ class _WalletScreenState extends State<WalletScreen> {
                         children: [
                           Text(
                             modelName,
-                            style: theme.textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w600),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           const SizedBox(height: 2),
                           Text(
@@ -785,8 +904,7 @@ class _WalletScreenState extends State<WalletScreen> {
                     ),
                     const SizedBox(width: 8),
                     TextButton(
-                      onPressed:
-                          busy ? null : () => _confirmClose(row),
+                      onPressed: busy ? null : () => _confirmClose(row),
                       style: TextButton.styleFrom(
                         foregroundColor: NeoTheme.red,
                       ),
@@ -794,9 +912,7 @@ class _WalletScreenState extends State<WalletScreen> {
                           ? const SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Text('Close'),
                     ),

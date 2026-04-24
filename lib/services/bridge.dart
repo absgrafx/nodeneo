@@ -170,6 +170,10 @@ class GoBridge {
       Pointer<Utf8> Function(),
       Pointer<Utf8> Function()>('ScanWalletMOR');
 
+  late final _sumActiveSessionStakes = _lib.lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)>('SumActiveSessionStakes');
+
   late final _withdrawUserStakes = _lib.lookupFunction<
       Pointer<Utf8> Function(Int32),
       Pointer<Utf8> Function(int)>('WithdrawUserStakes');
@@ -673,6 +677,27 @@ class GoBridge {
     final json = jsonDecode(result) as Map<String, dynamic>;
     _throwIfError(json);
     return json;
+  }
+
+  /// Targeted scan that sums on-chain stake for the supplied session IDs
+  /// (typically the local "Continue Chatting" list). Cheap — one eth_call
+  /// per ID — so it's safe to run on the home card. Does NOT discover
+  /// sessions opened on other devices; use [scanWalletMOR] for the
+  /// authoritative full-wallet breakdown.
+  ///
+  /// Returns `{ stake_wei, stake, open_count, scanned, skipped }`.
+  Map<String, dynamic> sumActiveSessionStakes(List<String> sessionIds) {
+    final payload = jsonEncode(sessionIds).toNativeUtf8();
+    try {
+      final ptr = _sumActiveSessionStakes(payload);
+      final result = ptr.toDartString();
+      _freeString(ptr);
+      final json = jsonDecode(result) as Map<String, dynamic>;
+      _throwIfError(json);
+      return json;
+    } finally {
+      calloc.free(payload);
+    }
   }
 
   /// Sends a transaction to recover claimable on-hold MOR from the Inference Contract.
