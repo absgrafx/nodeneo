@@ -3,7 +3,7 @@ module github.com/absgrafx/nodeneo
 go 1.26
 
 require (
-	github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router v0.0.0-00010101000000-000000000000
+	github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260430164234-697c3b596059
 	github.com/btcsuite/btcd v0.22.1
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
 	github.com/ethereum/go-ethereum v1.17.1
@@ -13,20 +13,12 @@ require (
 	modernc.org/sqlite v1.29.6
 )
 
-// Local development override — points at the sibling MorpheusAIs/Morpheus-Lumerin-Node
-// checkout (origin/dev) so changes to proxy-router/mobile (e.g. SendChatCompletion,
-// SendEmbeddings) are picked up without a publish round-trip.
+// SDK pinned to a real pseudo-version of upstream `dev` so CI (which has no
+// sibling clone) can resolve it from the public module proxy. For active SDK
+// iteration uncomment the local replace below — it shadows the require line
+// — and re-pin on the next release per .cursor/rules/proxy-router-workflow.mdc.
 //
-// WORKFLOW (no fork — see .cursor/rules/proxy-router-workflow.mdc):
-//   1. Iterate locally with this replace pointing at ../../Morpheus-Lumerin-Node.
-//   2. PR the SDK change to MorpheusAIs/Morpheus-Lumerin-Node `dev` from a
-//      `mobile/<feature>` branch.
-//   3. Once merged into `dev`, drop this replace and pin the real pseudo-version:
-//        go get github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router@<dev-commit>
-//        go mod tidy
-//      The pinned form looks like:
-//        github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router v0.0.0-<date>-<commit>
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => ../../Morpheus-Lumerin-Node/proxy-router
+// replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => ../../Morpheus-Lumerin-Node/proxy-router
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
