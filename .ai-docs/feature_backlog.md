@@ -255,13 +255,13 @@ Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Andr
 
 ---
 
-*Last updated: 2026-04-30 (v3.1.0 ship)*
+*Last updated: 2026-04-30 (v3.2.0 ship)*
 
 ---
 
 ## Recently Shipped (for the short-term memory)
 
-### v3.1.0 — 2026-04
+### v3.2.0 — 2026-04-30
 - **Cursor/Zed-class AI Gateway** — full OpenAI Chat Completions parity: `tools`/`tool_choice`/`parallel_tool_calls`, `tool_calls` deltas, `reasoning_content`, `MultiContent`, `response_format`, `seed`, `logit_bias`, `stream_options.include_usage`
 - **`/v1/embeddings` and `/v1/completions`** endpoints added; both persist `source="api"` conversation rows in the local DB so gateway activity shows up in the history
 - **`/v1/models`** advertises `supports_tools` / `supports_vision` / `supports_reasoning` capability flags
@@ -270,6 +270,9 @@ Manual regression testing across macOS, iOS (iPhone + iPad), and eventually Andr
 - **UX polish** — affordability "Show all" hides when no models filtered (with `(N hidden)` label when active); session reuse skips stake modal in favour of "Continue / Start Fresh"; gateway "Copy" emits bare URL; Preferences screen banner clarifies UI-only scope
 - **Engineering** — `X-Request-Id` correlation, OpenAI error envelope on all error paths, raised `ReadTimeout`, `.cursor/rules/proxy-router-workflow.mdc` documents the no-fork SDK workflow
 - **iOS build unaffected** — gateway gated by `PlatformCaps.supportsGateway = isDesktop`; symbols compile clean for `ios/arm64` and are dead code at runtime on mobile
+
+### v3.1.0 — 2026-04-24
+- Chat reliability patch: handle reasoning-only stream completions honestly so a `finish_reason: stop` with no `content` no longer surfaces as a false error in the chat UI ([#66](https://github.com/absgrafx/nodeneo/pull/66))
 
 ### v3.0.0 — 2026-04
 - **Full TEE compliance with proxy-router v7.0.0** — upstream merge, TDX attestation with cosign-verified golden values, TLS-fingerprint-bound `reportdata`, per-provider quick-attestation cache, end-to-end verified on iPhone
