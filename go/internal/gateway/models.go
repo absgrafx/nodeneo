@@ -32,14 +32,28 @@ type activeModel struct {
 
 // openAIModelEntry is the per-model response in /v1/models, matching the
 // Marketplace API format (OpenAI envelope with Morpheus-specific fields).
+//
+// The capability flags (supports_tools, supports_vision, supports_reasoning)
+// are best-effort hints derived from the model name and tags. They mirror
+// fields some clients (LangChain templates, Open WebUI, OpenRouter consumers)
+// look for to auto-configure features. Zed and Cursor read capabilities from
+// their own settings.json, so the flags are advisory there.
+//
+// The flags are always serialised — `false` is emitted explicitly rather than
+// elided — so consumers can distinguish "this gateway does not advertise the
+// capability" (field missing) from "this model does not support it" (field
+// present and false).
 type openAIModelEntry struct {
-	ID           string   `json:"id"`
-	Object       string   `json:"object"`
-	Created      int64    `json:"created"`
-	OwnedBy      string   `json:"owned_by"`
-	BlockchainID string   `json:"blockchainID,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	ModelType    string   `json:"modelType,omitempty"`
+	ID                string   `json:"id"`
+	Object            string   `json:"object"`
+	Created           int64    `json:"created"`
+	OwnedBy           string   `json:"owned_by"`
+	BlockchainID      string   `json:"blockchainID,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	ModelType         string   `json:"modelType,omitempty"`
+	SupportsTools     bool     `json:"supports_tools"`
+	SupportsVision    bool     `json:"supports_vision"`
+	SupportsReasoning bool     `json:"supports_reasoning"`
 }
 
 type modelsListResponse struct {
@@ -161,15 +175,7 @@ func (g *Gateway) fetchModelsFromSDK(ctx context.Context) ([]openAIModelEntry, e
 
 	entries := make([]openAIModelEntry, 0, len(models))
 	for _, m := range models {
-		entries = append(entries, openAIModelEntry{
-			ID:           m.Name,
-			Object:       "model",
-			Created:      m.CreatedAt,
-			OwnedBy:      "morpheus",
-			BlockchainID: m.ID,
-			Tags:         m.Tags,
-			ModelType:    m.ModelType,
-		})
+		entries = append(entries, newModelEntry(m.Name, m.ID, m.ModelType, m.Tags, m.CreatedAt))
 	}
 	return entries, nil
 }
@@ -177,15 +183,7 @@ func (g *Gateway) fetchModelsFromSDK(ctx context.Context) ([]openAIModelEntry, e
 func (g *Gateway) activeModelsToOpenAI(models []activeModel) []openAIModelEntry {
 	entries := make([]openAIModelEntry, 0, len(models))
 	for _, m := range models {
-		entries = append(entries, openAIModelEntry{
-			ID:           m.Name,
-			Object:       "model",
-			Created:      m.CreatedAt,
-			OwnedBy:      "morpheus",
-			BlockchainID: m.ID,
-			Tags:         m.Tags,
-			ModelType:    m.ModelType,
-		})
+		entries = append(entries, newModelEntry(m.Name, m.ID, m.ModelType, m.Tags, m.CreatedAt))
 	}
 	return entries
 }
@@ -196,17 +194,101 @@ func (g *Gateway) findModelByName(name string) (openAIModelEntry, bool) {
 		lower := strings.ToLower(name)
 		for _, m := range cached {
 			if strings.ToLower(m.Name) == lower {
-				return openAIModelEntry{
-					ID:           m.Name,
-					Object:       "model",
-					Created:      m.CreatedAt,
-					OwnedBy:      "morpheus",
-					BlockchainID: m.ID,
-					Tags:         m.Tags,
-					ModelType:    m.ModelType,
-				}, true
+				return newModelEntry(m.Name, m.ID, m.ModelType, m.Tags, m.CreatedAt), true
 			}
 		}
 	}
 	return openAIModelEntry{}, false
+}
+
+// newModelEntry builds an openAIModelEntry, including best-effort capability
+// flags inferred from the model name + tags. Centralising this keeps the
+// per-source converters (active.mor.org, SDK fallback, by-name lookup) in sync.
+func newModelEntry(name, id, modelType string, tags []string, createdAt int64) openAIModelEntry {
+	return openAIModelEntry{
+		ID:                name,
+		Object:            "model",
+		Created:           createdAt,
+		OwnedBy:           "morpheus",
+		BlockchainID:      id,
+		Tags:              tags,
+		ModelType:         modelType,
+		SupportsTools:     supportsTools(name, tags),
+		SupportsVision:    supportsVision(name, tags),
+		SupportsReasoning: supportsReasoning(name, tags),
+	}
+}
+
+// Capability inference is intentionally conservative — we'd rather under-report
+// a capability than have an IDE attempt a feature against a model that doesn't
+// support it. Patterns reflect the families known to ship native tool-call /
+// vision / chain-of-thought parsers in the major inference servers (vLLM,
+// SGLang, llama.cpp, TGI) as of 2026.
+
+var (
+	toolCapableSubstrings = []string{
+		"glm-4.5", "glm-4.6", "glm-4.7", "glm-4.8", "glm-4.9", "glm-5",
+		"llama-3.1", "llama-3.2", "llama-3.3", "llama-4",
+		"qwen2.5", "qwen-2.5", "qwen3", "qwen-3",
+		"mistral-nemo", "mistral-large", "mixtral-8x22",
+		"deepseek-v3", "deepseek-r1", "deepseek-coder-v2",
+		"hermes-3", "hermes-4",
+		"command-r", "command-a",
+		"granite-3", "granite-4",
+		"phi-4", "phi-3.5",
+		"firefunction",
+	}
+	visionCapableSubstrings = []string{
+		"vision", "-vl", "vl-", "llava", "internvl", "qwen-vl", "qwen2-vl", "qwen2.5-vl",
+		"pixtral", "molmo", "minicpm-v", "florence", "cogvlm", "kimi-vl",
+		"gpt-4o", "gpt-4-turbo", "gpt-4-vision", "gemini",
+	}
+	reasoningCapableSubstrings = []string{
+		"o1", "o3", "o4", "deepseek-r1", "qwen-qwq", "qwq",
+		"glm-z1", "glm-5", // GLM-5.x ships with reasoning_content streaming on by default
+		"gemini-2.0-flash-thinking", "marco-o1", "skywork-o1",
+	}
+)
+
+func supportsTools(name string, tags []string) bool {
+	if hasTag(tags, "tools", "function_calling", "function-calling", "functions") {
+		return true
+	}
+	return matchAny(name, toolCapableSubstrings)
+}
+
+func supportsVision(name string, tags []string) bool {
+	if hasTag(tags, "vision", "multimodal", "vlm") {
+		return true
+	}
+	return matchAny(name, visionCapableSubstrings)
+}
+
+func supportsReasoning(name string, tags []string) bool {
+	if hasTag(tags, "reasoning", "thinking", "cot") {
+		return true
+	}
+	return matchAny(name, reasoningCapableSubstrings)
+}
+
+func hasTag(tags []string, candidates ...string) bool {
+	for _, t := range tags {
+		lt := strings.ToLower(strings.TrimSpace(t))
+		for _, c := range candidates {
+			if lt == c {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchAny(name string, substrings []string) bool {
+	lower := strings.ToLower(name)
+	for _, s := range substrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
 }

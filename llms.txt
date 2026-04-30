@@ -338,7 +338,7 @@ Makefile                Build targets for Go, Flutter, branding
 
 - **Embedded SDK**: Node Neo does NOT run a separate proxy-router process. The Go library imports `proxy-router/mobile` directly.
 - **Consumer-only**: No provider code, no IPFS, no Docker, no local LLM hosting.
-- **Companion repo**: The proxy-router SDK lives in a fork at [absgrafx/Morpheus-Lumerin-Node](https://github.com/absgrafx/Morpheus-Lumerin-Node) (branch `feat-external_embedding`). Both repos should be in sibling directories; the Go module uses a `replace` directive.
+- **Companion repo**: The proxy-router SDK lives upstream at [MorpheusAIs/Morpheus-Lumerin-Node](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node) on the `dev` branch (promotes to `main`). For active SDK development, place a sibling clone next to Node Neo and use a local `replace` directive in `go/go.mod`; for release builds, depend on a pinned pseudo-version with no `replace`.
 - **Gateway + MCP**: The app exposes an OpenAI-compatible HTTP API locally. The MCP server bridges AI agents to this gateway via stdio, keeping all traffic on localhost.
 - **Privacy**: No analytics, no telemetry, no crash reporting. Traffic is direct from device to Base RPC + Morpheus providers.
 - **Encryption at rest**: Chat messages, metadata, and conversation titles are AES-256-GCM encrypted in SQLite using a key derived from the wallet's private key.

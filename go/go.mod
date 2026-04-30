@@ -3,7 +3,7 @@ module github.com/absgrafx/nodeneo
 go 1.26
 
 require (
-	github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router v0.0.0-00010101000000-000000000000
+	github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260430164234-697c3b596059
 	github.com/btcsuite/btcd v0.22.1
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce
 	github.com/ethereum/go-ethereum v1.17.1
@@ -13,7 +13,12 @@ require (
 	modernc.org/sqlite v1.29.6
 )
 
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260424184531-6f9a7648750c
+// SDK pinned to a real pseudo-version of upstream `dev` so CI (which has no
+// sibling clone) can resolve it from the public module proxy. For active SDK
+// iteration uncomment the local replace below — it shadows the require line
+// — and re-pin on the next release per .cursor/rules/proxy-router-workflow.mdc.
+//
+// replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => ../../Morpheus-Lumerin-Node/proxy-router
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect

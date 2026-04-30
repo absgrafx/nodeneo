@@ -466,6 +466,70 @@ func (s *Store) ListConversations(limit int) ([]Conversation, error) {
 	return out, rows.Err()
 }
 
+// TouchConversation bumps `updated_at` on the row so it floats to the top of
+// the history list. The gateway calls this when an existing api-source
+// conversation is reused (e.g. another embedding request on the same on-chain
+// session) so the user can see recency in the conversation list.
+func (s *Store) TouchConversation(conversationID string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(`UPDATE conversations SET updated_at = ? WHERE id = ?`, now, conversationID)
+	return err
+}
+
+// GetConversationByID returns the conversation row for the given id. Returns
+// (zero, false, nil) when no row exists.
+func (s *Store) GetConversationByID(id string) (Conversation, bool, error) {
+	var c Conversation
+	var isTee, pinned int
+	err := s.db.QueryRow(
+		`SELECT id, model_id, COALESCE(model_name,''), COALESCE(title,''), is_tee, COALESCE(pinned,0), updated_at, COALESCE(session_id,''), COALESCE(source,'ui')
+		 FROM conversations WHERE id = ?`,
+		id,
+	).Scan(&c.ID, &c.ModelID, &c.ModelName, &c.Title, &isTee, &pinned, &c.UpdatedAt, &c.SessionID, &c.Source)
+	if err == sql.ErrNoRows {
+		return Conversation{}, false, nil
+	}
+	if err != nil {
+		return Conversation{}, false, err
+	}
+	c.IsTEE = isTee != 0
+	c.Pinned = pinned != 0
+	c.Title = s.decrypt(c.Title)
+	return c, true, nil
+}
+
+// FindLatestConversationBySessionID returns the most-recently-touched
+// conversation that is bound to the given on-chain session id, if any. The
+// gateway uses this to re-attach API-driven sessions (chat / embeddings /
+// legacy completions) to their existing local row across gateway restarts —
+// without it the in-memory chatID/sessID cache would orphan rows on restart
+// and we'd accumulate one duplicate row per gateway run.
+func (s *Store) FindLatestConversationBySessionID(sessionID string) (string, bool, error) {
+	target := normalizeSessionIDKey(sessionID)
+	if target == "" {
+		return "", false, nil
+	}
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(session_id,'') FROM conversations
+		 WHERE session_id IS NOT NULL AND TRIM(session_id) != ''
+		 ORDER BY updated_at DESC`,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, sid string
+		if err := rows.Scan(&id, &sid); err != nil {
+			return "", false, err
+		}
+		if normalizeSessionIDKey(sid) == target {
+			return id, true, nil
+		}
+	}
+	return "", false, rows.Err()
+}
+
 // SetConversationSession stores the on-chain MOR session id for resume-after-unlock UX.
 func (s *Store) SetConversationSession(conversationID, sessionID string) error {
 	now := time.Now().Unix()
@@ -650,6 +714,12 @@ func (s *Store) createConversation(id, modelID, modelName, provider string, isTE
 
 // LatestEmptyConversationForModel returns the most recently touched conversation for this model
 // that has no rows in messages (user opened chat then left before sending).
+//
+// Restricted to source='ui' so the gateway's API-driven conversation rows
+// (chat / embeddings / completions) can never be hijacked by the UI's
+// "claim empty draft" path and inherit a UI title / re-bound session.
+// API rows are an audit trail keyed off on-chain session id; merging them
+// into ad-hoc UI threads silently rewrites that history.
 func (s *Store) LatestEmptyConversationForModel(modelID string) (Conversation, bool, error) {
 	var c Conversation
 	var isTee, pinned int
@@ -657,6 +727,7 @@ func (s *Store) LatestEmptyConversationForModel(modelID string) (Conversation, b
 		`SELECT c.id, c.model_id, COALESCE(c.model_name,''), COALESCE(c.title,''), c.is_tee, COALESCE(c.pinned,0), c.updated_at, COALESCE(c.session_id,''), COALESCE(c.source,'ui')
 		 FROM conversations c
 		 WHERE c.model_id = ?
+		   AND COALESCE(c.source,'ui') = 'ui'
 		   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
 		 ORDER BY c.updated_at DESC
 		 LIMIT 1`,
@@ -674,7 +745,9 @@ func (s *Store) LatestEmptyConversationForModel(modelID string) (Conversation, b
 }
 
 // DeleteOtherEmptyConversationsForModel removes other message-less conversations for the same model
-// (dedupe after re-opening a model from the list).
+// (dedupe after re-opening a model from the list). Source='api' rows are
+// preserved unconditionally — they're the audit trail for gateway-driven
+// sessions and must never be deleted by the UI's empty-draft cleanup.
 func (s *Store) DeleteOtherEmptyConversationsForModel(modelID, keepID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -684,6 +757,7 @@ func (s *Store) DeleteOtherEmptyConversationsForModel(modelID, keepID string) er
 	rows, err := tx.Query(
 		`SELECT id FROM conversations
 		 WHERE model_id = ? AND id != ?
+		   AND COALESCE(source,'ui') = 'ui'
 		   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id)`,
 		modelID, keepID,
 	)
