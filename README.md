@@ -91,7 +91,7 @@ Full architecture docs: [.ai-docs/architecture.md](.ai-docs/architecture.md)
 
 Requires **Go 1.26+**, **Flutter 3.41.7+**, **Xcode** (macOS/iOS), and **Python 3** with `cairosvg` (`pip install cairosvg`).
 
-Node Neo pins a specific pseudo-version of the [absgrafx fork of Morpheus-Lumerin-Node](https://github.com/absgrafx/Morpheus-Lumerin-Node) via `go/go.mod` — you do **not** need a sibling clone for a release build. If you want to hack on the fork alongside Node Neo, add a local `replace` directive to `go/go.mod` pointing at your checkout.
+Node Neo pins a specific pseudo-version of [`MorpheusAIs/Morpheus-Lumerin-Node`](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node) (`dev` branch) via `go/go.mod` — you do **not** need a sibling clone for a release build. If you want to iterate on the proxy-router SDK alongside Node Neo, clone `Morpheus-Lumerin-Node` next to this repo and add a local `replace` directive in `go/go.mod` pointing at `../../Morpheus-Lumerin-Node/proxy-router`.
 
 ```bash
 git clone git@github.com:absgrafx/nodeneo.git

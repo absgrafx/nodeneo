@@ -101,6 +101,79 @@ func TestConversationSource(t *testing.T) {
 	}
 }
 
+// TestLatestEmptyConversationForModel_SkipsAPISource is a regression guard
+// for the bug where a model-tile tap could "claim" an empty api-source
+// conversation as a UI draft, silently rebinding the gateway's audit row to
+// a UI thread (renaming it, attaching a different system prompt, etc.). The
+// SQL filter must keep api rows invisible to the UI's empty-draft path.
+func TestLatestEmptyConversationForModel_SkipsAPISource(t *testing.T) {
+	s := tempStore(t)
+
+	if err := s.CreateConversationWithSource("conv-api-empty", "model-x", "M", "", false, "api"); err != nil {
+		t.Fatalf("create api conv: %v", err)
+	}
+	// API row is empty (no messages saved). It must NOT be returned.
+	if _, ok, err := s.LatestEmptyConversationForModel("model-x"); err != nil {
+		t.Fatalf("query: %v", err)
+	} else if ok {
+		t.Error("api-source empty conversation must not be returned to the UI's empty-draft path")
+	}
+
+	// A UI-source empty conv should still be returned.
+	if err := s.CreateConversation("conv-ui-empty", "model-x", "M", "", false); err != nil {
+		t.Fatalf("create ui conv: %v", err)
+	}
+	got, ok, err := s.LatestEmptyConversationForModel("model-x")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if !ok || got.ID != "conv-ui-empty" {
+		t.Errorf("expected UI conv-ui-empty, got ok=%v id=%q", ok, got.ID)
+	}
+}
+
+// TestDeleteOtherEmptyConversationsForModel_SkipsAPISource ensures the UI's
+// empty-draft dedupe never deletes an api-source row even when it has no
+// messages — embeddings sessions in particular may have a brief empty
+// window between conversation creation and the first audit message write.
+func TestDeleteOtherEmptyConversationsForModel_SkipsAPISource(t *testing.T) {
+	s := tempStore(t)
+
+	if err := s.CreateConversationWithSource("conv-api", "model-y", "M", "", false, "api"); err != nil {
+		t.Fatalf("create api conv: %v", err)
+	}
+	if err := s.CreateConversation("conv-ui-keep", "model-y", "M", "", false); err != nil {
+		t.Fatalf("create ui keep: %v", err)
+	}
+	if err := s.CreateConversation("conv-ui-other", "model-y", "M", "", false); err != nil {
+		t.Fatalf("create ui other: %v", err)
+	}
+
+	if err := s.DeleteOtherEmptyConversationsForModel("model-y", "conv-ui-keep"); err != nil {
+		t.Fatalf("DeleteOtherEmptyConversationsForModel: %v", err)
+	}
+
+	// Re-list. api conv must survive; the empty UI sibling should be gone;
+	// the kept UI conv should remain.
+	convos, err := s.ListConversations(10)
+	if err != nil {
+		t.Fatalf("ListConversations: %v", err)
+	}
+	survivors := map[string]bool{}
+	for _, c := range convos {
+		survivors[c.ID] = true
+	}
+	if !survivors["conv-api"] {
+		t.Error("api-source row was deleted by UI dedupe — must be preserved")
+	}
+	if !survivors["conv-ui-keep"] {
+		t.Error("kept UI row was deleted")
+	}
+	if survivors["conv-ui-other"] {
+		t.Error("other UI empty row should have been deleted")
+	}
+}
+
 func TestMigrationIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "idem.db")

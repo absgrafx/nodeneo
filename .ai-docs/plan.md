@@ -169,7 +169,7 @@ Goal: Running on a real iPhone. Same app, native feel.
 | go-ethereum            | `github.com/ethereum/go-ethereum`                           | Key derivation, Ethereum addresses     |
 | go-bip39               | `github.com/tyler-smith/go-bip39`                           | BIP-39 mnemonic generation             |
 | btcsuite               | `github.com/btcsuite/btcd`, `btcutil`                       | HD key derivation (BIP-32)             |
-| proxy-router SDK       | `github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile` | Embedded blockchain, sessions, chat (direct, no HTTP). Go **import path** stays upstream; `go.mod` **`replace`** → local **absgrafx** fork. |
+| proxy-router SDK       | `github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/mobile` | Embedded blockchain, sessions, chat (direct, no HTTP). Consumed from upstream `dev` (promotes to `main`); active SDK iteration uses a local `replace` to a sibling clone, releases use a pinned pseudo-version. |
 | modernc.org/sqlite     | Pure-Go SQLite                                              | Embedded DB, no CGo                    |
 | Flutter SDK            | flutter.dev                                                 | Cross-platform UI                      |
 | gomobile               | `golang.org/x/mobile/cmd/gomobile`                          | Compile Go → native libraries          |

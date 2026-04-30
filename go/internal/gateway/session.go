@@ -38,10 +38,12 @@ func (g *Gateway) resolveSession(ctx context.Context, modelNameOrID string) (ses
 		return sessionResult{SessionID: sessID, ModelID: modelID, ModelName: modelName}, nil
 	}
 
-	sessID, err = g.sdk.OpenSession(ctx, modelID, g.sessionDuration, false)
+	dur := g.resolveSessionDuration()
+	sessID, err = g.sdk.OpenSession(ctx, modelID, dur, false)
 	if err != nil {
-		return sessionResult{}, fmt.Errorf("open session for model %q: %w", modelNameOrID, err)
+		return sessionResult{}, fmt.Errorf("open session for model %q (duration %ds): %w", modelNameOrID, dur, err)
 	}
+	g.log("opened session %s for model %q (duration %ds)", sessID, modelNameOrID, dur)
 
 	return sessionResult{SessionID: sessID, ModelID: modelID, ModelName: modelName}, nil
 }

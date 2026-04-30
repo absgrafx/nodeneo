@@ -28,7 +28,7 @@ These are complementary projects in the Morpheus ecosystem. Node Neo is the **co
 
 ## Integration Strategy (current)
 
-Node Neo embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-router/mobile/`) as a Go module (`replace` to a local fork). There is **no separate proxy-router process** and **no HTTP hop** for consumer operations.
+Node Neo embeds the **proxy-router mobile SDK** (`Morpheus-Lumerin-Node/proxy-router/mobile/`) as a Go module from upstream [`MorpheusAIs/Morpheus-Lumerin-Node`](https://github.com/MorpheusAIs/Morpheus-Lumerin-Node) (`dev` branch, promotes to `main`). For active SDK iteration a local `replace` directive in `go/go.mod` points at a sibling clone; for releases the dependency is pinned to a clean pseudo-version. There is **no separate proxy-router process** and **no HTTP hop** for consumer operations.
 
 ### What the embedded SDK covers
 - **Wallet** — create / import mnemonic or private key, address, balances (same crypto stack as upstream: `go-ethereum`, `go-bip39`, etc.)

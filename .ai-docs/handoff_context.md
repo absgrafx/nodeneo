@@ -1,9 +1,9 @@
 # Node Neo — Handoff Context
 
-> Snapshot of project state as of **2026-03-20** (evening).
+> Snapshot of project state as of **2026-04-30**.
 > Use this to bootstrap a new AI chat session in a fresh workspace.
 
-**Repos:** Push targets are **`absgrafx/nodeneo`** and **`absgrafx/Morpheus-Lumerin-Node`** (fork). There is **no plan to merge the fork into MorpheusAIs upstream**; treat the fork as the long-lived SDK + mobile embedding branch (`feat-external_embedding`).
+**Repos:** Push target for app code is **`absgrafx/nodeneo`** (this repo). The proxy-router SDK lives in upstream **`MorpheusAIs/Morpheus-Lumerin-Node`** on the `dev` branch (promotes to `main`). SDK changes flow through PRs to upstream `dev` from `mobile/<feature>` branches — never direct push. See `.cursor/rules/proxy-router-workflow.mdc` for the cross-repo workflow.
 
 ---
 
@@ -23,10 +23,10 @@ A mobile-first client for the **Morpheus** decentralized AI network. Think "Sign
 
 | Repo | Purpose | Branch |
 |------|---------|--------|
-| `absgrafx/Node Neo` | This app — Flutter UI + Go backend | `main` |
-| `absgrafx/Morpheus-Lumerin-Node` | Fork of proxy-router — contains `proxy-router/mobile/` SDK | `feat-external_embedding` |
+| `absgrafx/nodeneo` | This app — Flutter UI + Go backend | `dev` (promotes to `main`) |
+| `MorpheusAIs/Morpheus-Lumerin-Node` | Upstream proxy-router — contains `proxy-router/mobile/` SDK | `dev` (promotes to `main`) |
 
-These two repos should be in the same workspace. The Node Neo go module uses a `replace` directive pointing to the local fork.
+For active SDK iteration both repos sit side-by-side and Node Neo's `go/go.mod` carries a `replace` directive pointing at the sibling clone. For release builds the `replace` is dropped and the SDK is pinned to a clean pseudo-version of upstream `dev` (or `main` after promotion).
 
 **Git SSH host:** `github.com-vader` (vader@rogueone.life / @morpheusrogue)
 **gh CLI:** `gh auth switch -u morpheusrogue` for this project
@@ -266,13 +266,22 @@ Node Neo/
 ├── .gitignore
 └── pubspec.yaml                   # ffi, path_provider deps
 
-Morpheus-Lumerin-Node/                    # Fork (branch: feat-external_embedding)
+Morpheus-Lumerin-Node/                    # Upstream MorpheusAIs (branch: dev → main)
 └── proxy-router/
-    ├── mobile/
-    │   ├── sdk.go                        # SDK + active models HTTP + TEE attestation.Verifier
-    │   ├── types.go
-    │   └── storage.go
+    ├── mobile/                           # Embedded SDK consumed by Node Neo
+    │   ├── sdk.go                        # SDK lifecycle, NewSDK, version
+    │   ├── sdk_chat.go                   # SendChatCompletion, SendEmbeddings, reasoning
+    │   ├── sdk_sessions.go               # Open/Close/Get session(s)
+    │   ├── sdk_models.go                 # Model cache, ratings, stake estimate
+    │   ├── sdk_wallet.go                 # Wallet ops, balances, transfers
+    │   ├── sdk_maintenance.go            # Background session maintenance
+    │   ├── sdk_helpers.go                # Shared helpers (JSON, big.Int, URLs)
+    │   ├── attestation_config.go         # TEE / sigstore config
+    │   ├── httpserver.go                 # Optional embedded HTTP server
+    │   ├── redact.go                     # Provider-endpoint redaction at SDK boundary
+    │   ├── storage.go                    # In-memory KV
+    │   └── types.go                      # Public DTOs (Session, Balance, ...)
     └── internal/blockchainapi/
-        ├── service.go                    # stake estimate helper, OpenSession TEE path
+        ├── service.go                    # Stake estimate helper, OpenSession TEE path
         └── structs/res.go                # OpenSessionStakeEstimate
 ```

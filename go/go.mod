@@ -13,7 +13,20 @@ require (
 	modernc.org/sqlite v1.29.6
 )
 
-replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => github.com/absgrafx/Morpheus-Lumerin-Node/proxy-router v0.0.0-20260424184531-6f9a7648750c
+// Local development override — points at the sibling MorpheusAIs/Morpheus-Lumerin-Node
+// checkout (origin/dev) so changes to proxy-router/mobile (e.g. SendChatCompletion,
+// SendEmbeddings) are picked up without a publish round-trip.
+//
+// WORKFLOW (no fork — see .cursor/rules/proxy-router-workflow.mdc):
+//   1. Iterate locally with this replace pointing at ../../Morpheus-Lumerin-Node.
+//   2. PR the SDK change to MorpheusAIs/Morpheus-Lumerin-Node `dev` from a
+//      `mobile/<feature>` branch.
+//   3. Once merged into `dev`, drop this replace and pin the real pseudo-version:
+//        go get github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router@<dev-commit>
+//        go mod tidy
+//      The pinned form looks like:
+//        github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router v0.0.0-<date>-<commit>
+replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => ../../Morpheus-Lumerin-Node/proxy-router
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
