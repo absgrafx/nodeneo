@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../services/app_lock_service.dart';
@@ -11,6 +12,7 @@ import '../../services/wallet_vault.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
 import '../security/app_lock_autofill.dart';
+import '../security/app_lock_setup_choice_screen.dart';
 import '../security/app_lock_setup_screen.dart';
 
 /// Preferences screen: system prompt, default tuning, session duration, security.
@@ -41,6 +43,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
   bool _lockOn = false;
   bool _bioOn = false;
   bool _bioAvailable = false;
+  LockMode _lockMode = LockMode.off;
   bool _icloudSync = false;
   bool _icloudSyncChanging = false;
 
@@ -147,12 +150,14 @@ class _SessionsScreenState extends State<SessionsScreen> {
     final can = dev && await auth.canCheckBiometrics;
     final lock = await AppLockService.instance.isLockEnabled;
     final bio = await AppLockService.instance.biometricEnabled;
+    final mode = await AppLockService.instance.mode;
     final sync = await KeychainSyncStore.instance.isEnabled();
     if (!mounted) return;
     setState(() {
       _lockOn = lock;
       _bioOn = bio;
       _bioAvailable = can;
+      _lockMode = mode;
       _icloudSync = sync;
       _securityLoading = false;
     });
@@ -161,7 +166,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
   Future<void> _openEnableLock() async {
     final ok = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const AppLockSetupScreen(changingPassword: false),
+        builder: (_) => const AppLockSetupChoiceScreen(),
       ),
     );
     if (ok == true && mounted) await _loadSecurity();
@@ -177,6 +182,30 @@ class _SessionsScreenState extends State<SessionsScreen> {
   }
 
   Future<void> _confirmDisableLock() async {
+    // Biometric-only mode: confirm the user is physically present with a
+    // Face ID prompt instead of asking for a password we never stored.
+    if (_lockMode == LockMode.biometricOnly) {
+      final auth = LocalAuthentication();
+      try {
+        final ok = await auth.authenticate(
+          localizedReason: 'Confirm to turn off app lock',
+          options: const AuthenticationOptions(
+            stickyAuth: true,
+            biometricOnly: true,
+          ),
+        );
+        if (!mounted || !ok) return;
+        await AppLockService.instance.disableLock();
+        if (mounted) await _loadSecurity();
+      } on PlatformException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message ?? 'Biometric check failed.')),
+        );
+      }
+      return;
+    }
+
     final ctrl = TextEditingController();
     final userCtrl = TextEditingController(text: kAppLockAutofillUsername);
     final pwFocus = FocusNode();
@@ -254,8 +283,65 @@ class _SessionsScreenState extends State<SessionsScreen> {
       );
       return;
     }
+    // Refuse to turn biometrics off in biometric-only mode — that would
+    // effectively disable the lock through a side door without the user
+    // ever confirming. Send them through "Turn off app lock" instead.
+    if (!v && _lockMode == LockMode.biometricOnly) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Add a backup password first, or turn off app lock to remove biometrics.',
+          ),
+        ),
+      );
+      return;
+    }
     await AppLockService.instance.setBiometricEnabled(v);
     if (mounted) await _loadSecurity();
+  }
+
+  Future<void> _addBackupPassword() async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => const AppLockSetupScreen(changingPassword: false),
+      ),
+    );
+    if (ok == true && mounted) await _loadSecurity();
+  }
+
+  Future<void> _removeBackupPassword() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove backup password?'),
+        content: const Text(
+          'You\'ll only be able to unlock with Face ID / Touch ID. Your wallet '
+          'recovery phrase still works as a fallback if biometrics fail.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final removed = await AppLockService.instance.removePasswordKeepBiometric();
+    if (!mounted) return;
+    if (!removed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enable biometrics first before removing the password.'),
+        ),
+      );
+      return;
+    }
+    await _loadSecurity();
   }
 
   Future<void> _setICloudSync(bool v) async {
@@ -334,7 +420,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
               title: 'Security',
               status: StatusPill(
                 active: _lockOn,
-                label: _lockOn ? 'Locked' : 'Off',
+                label: _lockStatusPillLabel(),
               ),
               child: _buildSecurityBody(theme),
             ),
@@ -748,6 +834,38 @@ class _SessionsScreenState extends State<SessionsScreen> {
     );
   }
 
+  String _lockStatusPillLabel() {
+    switch (_lockMode) {
+      case LockMode.off:
+        return 'Off';
+      case LockMode.biometricOnly:
+        return 'Face ID';
+      case LockMode.passwordOnly:
+        return 'Password';
+      case LockMode.passwordWithBiometric:
+        return 'Face ID + password';
+    }
+  }
+
+  String _lockBodyDescription() {
+    switch (_lockMode) {
+      case LockMode.off:
+        return 'Require Face ID, Touch ID, or a password before using the app. '
+            'Separate from your wallet seed.';
+      case LockMode.biometricOnly:
+        return 'Unlocking with Face ID / Touch ID. Add a backup password to '
+            'unlock when biometrics fail (e.g. mask, sunglasses).';
+      case LockMode.passwordOnly:
+        return _bioAvailable
+            ? 'Unlocking with a password. Turn on Face ID / Touch ID below for '
+                  'a faster unlock.'
+            : 'Unlocking with a password. Biometrics are not available on '
+                  'this device.';
+      case LockMode.passwordWithBiometric:
+        return 'Unlocking with Face ID / Touch ID, password as fallback.';
+    }
+  }
+
   Widget _buildSecurityBody(ThemeData theme) {
     if (_securityLoading) {
       return const Center(
@@ -757,12 +875,13 @@ class _SessionsScreenState extends State<SessionsScreen> {
         ),
       );
     }
+    final hasPw = _lockMode == LockMode.passwordOnly ||
+        _lockMode == LockMode.passwordWithBiometric;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Adds a password (and optional biometrics) before using the app. '
-          'This is not your seed phrase — use a unique app password.',
+          _lockBodyDescription(),
           style: theme.textTheme.bodySmall?.copyWith(
             color: theme.hintColor,
             fontSize: 11,
@@ -781,23 +900,35 @@ class _SessionsScreenState extends State<SessionsScreen> {
             ),
           )
         else ...[
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: _openChangePassword,
-              child: const Text('Change app password'),
+          if (hasPw)
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _openChangePassword,
+                child: const Text('Change app password'),
+              ),
+            )
+          else
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _addBackupPassword,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add backup password'),
+              ),
             ),
-          ),
           const SizedBox(height: 8),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
             title: const Text(
-              'Unlock with biometrics',
+              'Unlock with Face ID / Touch ID',
               style: TextStyle(fontSize: 13),
             ),
             subtitle: Text(
               _bioAvailable
-                  ? 'Face ID, Touch ID, or fingerprint.'
+                  ? (_lockMode == LockMode.biometricOnly
+                        ? 'Add a backup password before turning this off.'
+                        : 'Face ID, Touch ID, or fingerprint.')
                   : 'Not available on this device.',
               style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
@@ -807,6 +938,19 @@ class _SessionsScreenState extends State<SessionsScreen> {
                 : (v) => _setBiometric(v),
             activeThumbColor: NeoTheme.green,
           ),
+          if (_lockMode == LockMode.passwordWithBiometric) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: _removeBackupPassword,
+                child: Text(
+                  'Remove backup password',
+                  style: TextStyle(fontSize: 12, color: theme.hintColor),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerLeft,

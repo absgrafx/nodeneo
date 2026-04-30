@@ -29,6 +29,30 @@ class _AppLockScreenState extends State<AppLockScreen> {
   String? _error;
   bool _busy = false;
   bool _obscure = true;
+  // Guard so a user-cancelled biometric prompt doesn't immediately re-fire
+  // when the framework rebuilds (e.g. orientation, keyboard insets). One
+  // auto-fire per mount; the manual button stays available for retries.
+  bool _autoFiredBiometric = false;
+  LockMode _mode = LockMode.passwordOnly;
+  bool _modeLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeAutoTriggerBiometric();
+    });
+  }
+
+  Future<void> _loadMode() async {
+    final m = await AppLockService.instance.mode;
+    if (!mounted) return;
+    setState(() {
+      _mode = m;
+      _modeLoaded = true;
+    });
+  }
 
   @override
   void dispose() {
@@ -36,6 +60,24 @@ class _AppLockScreenState extends State<AppLockScreen> {
     _pw.dispose();
     _pwFocus.dispose();
     super.dispose();
+  }
+
+  /// Fire Face ID / Touch ID automatically when the lock screen mounts so
+  /// biometrics are the primary unlock path on devices that support them.
+  /// Cancellation falls through silently — the password field stays as a
+  /// usable fallback without flashing an error.
+  Future<void> _maybeAutoTriggerBiometric() async {
+    if (!mounted || _autoFiredBiometric || _busy) return;
+    if (!await AppLockService.instance.biometricEnabled) return;
+    try {
+      final supported = await _auth.isDeviceSupported();
+      final can = supported && await _auth.canCheckBiometrics;
+      if (!mounted || !can) return;
+    } catch (_) {
+      return;
+    }
+    _autoFiredBiometric = true;
+    await _unlockWithBiometrics(silentOnCancel: true);
   }
 
   Future<void> _unlockWithPassword() async {
@@ -75,17 +117,19 @@ class _AppLockScreenState extends State<AppLockScreen> {
     }
   }
 
-  Future<void> _unlockWithBiometrics() async {
+  Future<void> _unlockWithBiometrics({bool silentOnCancel = false}) async {
     if (!await AppLockService.instance.biometricEnabled) return;
     setState(() {
       _busy = true;
-      _error = null;
+      if (!silentOnCancel) _error = null;
     });
     try {
       final supported = await _auth.isDeviceSupported();
       final can = await _auth.canCheckBiometrics;
       if (!supported || !can) {
-        if (mounted) setState(() => _error = 'Biometrics not available on this device.');
+        if (mounted && !silentOnCancel) {
+          setState(() => _error = 'Biometrics not available on this device.');
+        }
         return;
       }
       final ok = await _auth.authenticate(
@@ -100,7 +144,9 @@ class _AppLockScreenState extends State<AppLockScreen> {
         AppLockService.instance.markUnlocked();
       }
     } on PlatformException catch (e) {
-      if (mounted) setState(() => _error = e.message ?? 'Biometric authentication failed.');
+      if (mounted && !silentOnCancel) {
+        setState(() => _error = e.message ?? 'Biometric authentication failed.');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -109,6 +155,13 @@ class _AppLockScreenState extends State<AppLockScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // While we resolve the mode, show the most defensive layout (password +
+    // biometric button) so the screen never flashes empty.
+    final mode = _modeLoaded ? _mode : LockMode.passwordWithBiometric;
+    final showBiometric = mode == LockMode.biometricOnly ||
+        mode == LockMode.passwordWithBiometric;
+    final showPassword = mode == LockMode.passwordOnly ||
+        mode == LockMode.passwordWithBiometric;
 
     return Scaffold(
       body: SafeArea(
@@ -134,74 +187,75 @@ class _AppLockScreenState extends State<AppLockScreen> {
                   ),
                 ),
                 const SizedBox(height: 32),
-                AppLockHiddenUsernameForAutofill(controller: _user),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _pw,
-                  focusNode: _pwFocus,
-                  obscureText: _obscure,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  enableIMEPersonalizedLearning: false,
-                  smartDashesType: SmartDashesType.disabled,
-                  smartQuotesType: SmartQuotesType.disabled,
-                  textInputAction: TextInputAction.done,
-                  autofillHints: const [AutofillHints.password],
-                  keyboardType: TextInputType.visiblePassword,
-                  onSubmitted: (_) => _unlockWithPassword(),
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: NeoTheme.mainPanelFill,
-                    hintText: 'Password',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.4)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.4)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.85)),
-                    ),
-                    suffixIcon: IconButton(
-                      icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                      onPressed: () => setState(() => _obscure = !_obscure),
+                if (showBiometric)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: showPassword ? 20 : 0),
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _unlockWithBiometrics,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: NeoTheme.green,
+                        minimumSize: const Size(double.infinity, 48),
+                      ),
+                      icon: const Icon(Icons.fingerprint, size: 22),
+                      label: const Text('Use Face ID / Touch ID'),
                     ),
                   ),
-                ),
+                if (showPassword) ...[
+                  AppLockHiddenUsernameForAutofill(controller: _user),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _pw,
+                    focusNode: _pwFocus,
+                    obscureText: _obscure,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    enableIMEPersonalizedLearning: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    textInputAction: TextInputAction.done,
+                    autofillHints: const [AutofillHints.password],
+                    keyboardType: TextInputType.visiblePassword,
+                    onSubmitted: (_) => _unlockWithPassword(),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: NeoTheme.mainPanelFill,
+                      hintText: 'Password',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.4)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.4)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: NeoTheme.mainPanelOutline(0.85)),
+                      ),
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                        onPressed: () => setState(() => _obscure = !_obscure),
+                      ),
+                    ),
+                  ),
+                ],
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   Text(_error!, style: const TextStyle(color: Color(0xFFF87171), fontSize: 13)),
                 ],
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _busy ? null : _unlockWithPassword,
-                  style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-                  child: _busy
-                      ? const SizedBox(
-                          height: 22,
-                          width: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Unlock'),
-                ),
-                FutureBuilder<bool>(
-                  future: AppLockService.instance.biometricEnabled,
-                  builder: (context, snap) {
-                    final bio = snap.data == true;
-                    if (!bio) return const SizedBox.shrink();
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: OutlinedButton.icon(
-                        onPressed: _busy ? null : _unlockWithBiometrics,
-                        icon: const Icon(Icons.fingerprint, size: 22),
-                        label: const Text('Use biometrics'),
-                      ),
-                    );
-                  },
-                ),
+                if (showPassword) ...[
+                  const SizedBox(height: 20),
+                  OutlinedButton(
+                    onPressed: _busy ? null : _unlockWithPassword,
+                    child: _busy
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text('Unlock with password'),
+                  ),
+                ],
                 const Spacer(),
                 TextButton(
                   onPressed: _busy
@@ -210,7 +264,9 @@ class _AppLockScreenState extends State<AppLockScreen> {
                           showAppLockRecoverySheet(context);
                         },
                   child: Text(
-                    'Forgot password? Recover with phrase or key',
+                    showPassword
+                        ? 'Forgot password? Recover with phrase or key'
+                        : 'Can\'t use Face ID? Recover with phrase or key',
                     style: TextStyle(color: theme.hintColor, fontSize: 13),
                   ),
                 ),
