@@ -30,6 +30,13 @@ import '../../widgets/session_close_flow.dart';
 import '../../widgets/send_token_sheet.dart';
 
 
+/// User intent returned by the "active session for this model" dialog
+/// shown from the home screen when tapping a model tile while an open
+/// on-chain session for that model already exists. The dialog short-
+/// circuits the standard fresh-session confirmation when the user just
+/// wants to ride the existing stake.
+enum _ReuseAction { continueExisting, openFresh }
+
 /// Primary line for history / continue cards: saved topic, else model name.
 String conversationHeadline(Map<String, dynamic> c) {
   final t = (c['title'] as String?)?.trim() ?? '';
@@ -595,6 +602,29 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     return _models;
   }
 
+  /// How many models would be hidden by the affordability filter at the
+  /// currently-configured default duration. Cached calibration (supply +
+  /// budget + wallet balance) makes this pure BigInt math per model — no
+  /// FFI — so it's safe to call from build().
+  int _unaffordableCount() {
+    if (!_affordabilityResolved) return 0;
+    var n = 0;
+    for (final m in _models) {
+      if (!_isAffordable(m)) n++;
+    }
+    return n;
+  }
+
+  /// Whether to render the affordability toggle. Hidden when nothing
+  /// could be filtered (everything affordable) AND the user hasn't
+  /// already flipped it on — flipping it on with no filtered rows would
+  /// be a no-op. We also keep it visible while affordability is still
+  /// being calibrated so it doesn't pop in/out during the first frames.
+  bool _shouldShowAffordabilityToggle() {
+    if (!_affordabilityResolved) return _showUnaffordable;
+    return _unaffordableCount() > 0 || _showUnaffordable;
+  }
+
   /// Affordability verdict at render time. Optimistic when stake is unknown
   /// (Go fallback path models, missing calibration) so the tile stays
   /// tappable — the modal will do the authoritative check on tap.
@@ -643,12 +673,49 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final name = m.name;
     final tags = m.tags;
     final isTEE = tags.any((t) => t.toUpperCase().contains('TEE'));
+    final navigator = Navigator.of(context);
+
+    // Reuse-first short-circuit: if there's already an active on-chain
+    // session for this model (opened by either a previous UI chat OR the
+    // AI Gateway via curl/Cursor/Zed), tapping the tile shouldn't lead to
+    // a "stake new MOR" modal — that's misleading because the chat screen
+    // would have reused the existing session anyway, just after the user
+    // already mentally committed to a fresh stake. Show a lightweight
+    // "Continue / Start Fresh" prompt instead so the user can SEE the
+    // existing time-left and only spend MOR if they explicitly want a new
+    // session. _activeResumeChats is already populated by GetConversations
+    // and includes session_ends_at, so this is zero additional FFI cost.
+    final reusable = _findReusableSessionForModel(id);
+    if (reusable != null) {
+      final action = await _showReuseOrFreshDialog(
+        context: context,
+        modelName: name,
+        endsAtUnix: (reusable['session_ends_at'] as num?)?.toInt() ?? 0,
+      );
+      if (action == null || !mounted) return;
+      if (action == _ReuseAction.continueExisting) {
+        await navigator.push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => ChatScreen(
+              modelId: id,
+              modelName: name,
+              isTEE: isTEE,
+            ),
+          ),
+        );
+        if (mounted) {
+          _loadWallet();
+          _loadConversations();
+        }
+        return;
+      }
+      // Fall through to the standard fresh-session flow.
+    }
 
     // Pre-chat confirmation: model + duration + stake preview. We pass the
     // hourly stake we already computed on the home screen so the modal's
     // numbers match the tile's label by construction (lowest-price bid ×
     // supply ÷ budget), and so there's zero additional FFI on tap.
-    final navigator = Navigator.of(context);
     final decision = await showSessionConfirmation(
       context: context,
       modelId: id,
@@ -675,6 +742,88 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _loadWallet();
       _loadConversations();
     }
+  }
+
+  /// Walks the active resume list (already loaded with session_ends_at
+  /// populated from GetConversations' chain snapshot) and returns the
+  /// freshest row whose model_id matches and whose session is still
+  /// in-window. Used by [_openModelChat] to skip the new-session modal
+  /// when there's already an active stake the user can ride.
+  Map<String, dynamic>? _findReusableSessionForModel(String modelId) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    Map<String, dynamic>? best;
+    int bestEnds = 0;
+    for (final c in _activeResumeChats) {
+      final mid = c['model_id'] as String? ?? '';
+      if (mid != modelId) continue;
+      final sid = c['session_id'];
+      if (sid is! String || sid.isEmpty) continue;
+      final ends = (c['session_ends_at'] as num?)?.toInt() ?? 0;
+      if (ends > 0 && ends <= nowSec) continue;
+      if (ends > bestEnds) {
+        bestEnds = ends;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  /// Lightweight modal shown when a reusable session exists for the
+  /// tapped model. Three intents: continue with the existing session
+  /// (free), open a fresh session (will cost stake — falls through to the
+  /// normal confirmation modal), or cancel. Returns null on cancel.
+  Future<_ReuseAction?> _showReuseOrFreshDialog({
+    required BuildContext context,
+    required String modelName,
+    required int endsAtUnix,
+  }) {
+    final minutesLeftLabel = _formatMinutesLeft(endsAtUnix);
+    return showDialog<_ReuseAction>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Active session for $modelName'),
+        content: Text(
+          minutesLeftLabel == null
+              ? 'You already have an open on-chain session for this model. '
+                  'Continue chatting on it (no extra MOR), or start a fresh '
+                  'session?'
+              : 'You have about $minutesLeftLabel left on an open on-chain '
+                  'session for this model. Continue on it (no extra MOR), '
+                  'or start a fresh session?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(_ReuseAction.openFresh),
+            child: const Text('Start Fresh'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(_ReuseAction.continueExisting),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "~14 min" / "~2 hr 5 min" / null when ends_at is missing.
+  String? _formatMinutesLeft(int endsAtUnix) {
+    if (endsAtUnix <= 0) return null;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final remaining = endsAtUnix - nowSec;
+    if (remaining <= 0) return null;
+    if (remaining < 60) return '<1 min';
+    final mins = remaining ~/ 60;
+    if (mins < 60) return '$mins min';
+    final hours = mins ~/ 60;
+    final remMin = mins % 60;
+    if (remMin == 0) return hours == 1 ? '1 hr' : '$hours hr';
+    return '$hours hr $remMin min';
   }
 
   void _openResumeChat(BuildContext context, Map<String, dynamic> c) {
@@ -1083,14 +1232,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                               },
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: _ShowAllToggle(
-                              enabled: _showUnaffordable,
-                              onChanged: (val) =>
-                                  setState(() => _showUnaffordable = val),
+                          // The affordability filter toggle is only useful
+                          // when at least one model is currently being
+                          // filtered out by it. If the user can afford every
+                          // model at the current default duration, "Show all"
+                          // would be a control that visibly does nothing —
+                          // confusing per the Apple/Jobs intuitive test.
+                          // Hide it entirely in that case; it'll reappear
+                          // automatically the moment a longer session
+                          // duration or a lower wallet balance pushes a model
+                          // out of reach.
+                          if (_shouldShowAffordabilityToggle()) ...[
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _ShowAllToggle(
+                                enabled: _showUnaffordable,
+                                hiddenCount: _unaffordableCount(),
+                                onChanged: (val) => setState(
+                                  () => _showUnaffordable = val,
+                                ),
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                       const SizedBox(height: 20),
@@ -1434,11 +1597,22 @@ class _PrivacyToggle extends StatelessWidget {
 /// of the list so the user only sees what they can start right now; on
 /// shows everything alphabetical, with unaffordable rows rendered muted in
 /// place. Lives next to [_PrivacyToggle] on the models header row.
+///
+/// The label changes shape based on [hiddenCount] so the user knows
+/// exactly what flipping the switch will do without having to flip it.
+/// When the count is positive and the toggle is OFF (filter active), the
+/// label reads "Show all (N hidden)" — answering the Apple/Jobs intuitive
+/// test by stating both the action and its consequence in five words.
 class _ShowAllToggle extends StatelessWidget {
   final bool enabled;
+  final int hiddenCount;
   final ValueChanged<bool> onChanged;
 
-  const _ShowAllToggle({required this.enabled, required this.onChanged});
+  const _ShowAllToggle({
+    required this.enabled,
+    required this.hiddenCount,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1463,7 +1637,7 @@ class _ShowAllToggle extends StatelessWidget {
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
-                    enabled ? 'SHOW ALL' : 'Show all',
+                    _label(),
                     overflow: TextOverflow.fade,
                     maxLines: 1,
                     softWrap: false,
@@ -1489,6 +1663,16 @@ class _ShowAllToggle extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _label() {
+    if (enabled) {
+      return 'SHOW ALL';
+    }
+    if (hiddenCount > 0) {
+      return 'Show all ($hiddenCount hidden)';
+    }
+    return 'Show all';
   }
 }
 

@@ -297,6 +297,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
+            const _GatewayScopeNotice(),
+            const SizedBox(height: 12),
             SectionCard(
               icon: Icons.psychology_outlined,
               title: 'System Prompt',
@@ -875,6 +877,71 @@ class _SessionsScreenState extends State<SessionsScreen> {
             ),
         ],
       ],
+    );
+  }
+}
+
+/// Inline notice that explains the scope of these preferences vs requests
+/// that flow through the local AI Gateway. Sits at the top of the
+/// Preferences list because the most common user mistake is assuming the
+/// system prompt / tuning saved here will follow them into Cursor / Zed /
+/// curl sessions.
+///
+/// We keep this static and visually quieter than a SectionCard so it reads
+/// as context, not another configurable surface.
+class _GatewayScopeNotice extends StatelessWidget {
+  const _GatewayScopeNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: NeoTheme.green.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: NeoTheme.green.withValues(alpha: 0.25),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.info_outline_rounded,
+            size: 16,
+            color: NeoTheme.green.withValues(alpha: 0.85),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFFD1D5DB),
+                  height: 1.4,
+                ),
+                children: [
+                  TextSpan(
+                    text: 'These preferences apply to chats started in '
+                        'Node Neo only.',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  TextSpan(
+                    text:
+                        '  Requests that flow through the AI Gateway '
+                        '(Cursor, Zed, curl, or any OpenAI-compatible '
+                        'client) are passed through verbatim — the calling '
+                        'application controls its own system prompt, tools, '
+                        'temperature, and max_tokens. Override them on the '
+                        'caller side, not here.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
