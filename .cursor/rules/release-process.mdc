@@ -7,12 +7,19 @@ alwaysApply: false
 
 Follow this top-to-bottom when the user says "start the release process",
 "cut a release", "ship vX", or anything similar. Every step has an explicit
-command. Don't skip validation or the version check — both have bitten us.
+command. Don't skip validation, the version check, or the SDK pin — all
+three have bitten us.
 
 CI shape to keep in mind: `.github/workflows/build-macos.yml` runs on push
 to `dev` (artifact only) and `main` (sign + notarize + GitHub Release). On
 `main` the entire `RELEASE_NOTES.md` becomes the Release body, so we keep
 that file from growing unbounded.
+
+**Step 5 may block on a human.** If `proxy-router/mobile/` was touched in
+this cycle, those changes have to ride the upstream
+`MorpheusAIs/Morpheus-Lumerin-Node` PR-to-`dev` workflow first. Stop and
+report when the upstream PR is open; resume from step 5c after a human
+merges it.
 
 ## 1. Inventory + decide the next version
 
@@ -81,7 +88,114 @@ Look at every file below and update only what reflects current state today:
 Bundle IDs like `com.absgrafx.nodeneo` and the `github.com/absgrafx/nodeneo`
 module path are correct — leave them.
 
-## 5. RELEASE_NOTES.md ritual (the important one)
+## 5. Lock the SDK pseudo-version to upstream dev
+
+CI runs `go build` from a clean checkout with **no sibling clone**, so the
+local `replace github.com/.../proxy-router => ../../Morpheus-Lumerin-Node/proxy-router`
+must be commented out and the `require` line must hold a real
+pseudo-version that the public Go module proxy can resolve. If you skip
+this, both the dev artifact build and the main release build die on
+`replacement directory does not exist`.
+
+### 5a. If `proxy-router/mobile/` changed this cycle
+
+Per `.cursor/rules/proxy-router-workflow.mdc`, SDK changes go upstream
+**before** the Node Neo release pin. Do this in `../Morpheus-Lumerin-Node`,
+not in nodeneo:
+
+```bash
+cd /Volumes/moon/repo/personal_mor/Morpheus-Lumerin-Node
+git fetch origin
+git checkout -b mobile/<feature> origin/dev
+# ...the SDK changes are already in your working tree from local iteration...
+git add proxy-router/mobile/...
+git commit -m "feat(proxy-router/mobile): <what>"
+git push -u origin mobile/<feature>
+gh pr create --base dev --repo MorpheusAIs/Morpheus-Lumerin-Node \
+  --title "feat(proxy-router/mobile): <what>" \
+  --body  "<why + testing>"
+```
+
+**Stop and wait for a human merge to upstream `dev`.** Don't pin against
+the feature branch — that defeats the point of the review gate. When the
+merge lands, capture the new HEAD:
+
+```bash
+cd /Volumes/moon/repo/personal_mor/Morpheus-Lumerin-Node
+git fetch origin
+git log -1 --format='%cI %H' origin/dev    # capture both timestamp and hash
+```
+
+### 5b. If no SDK changes this cycle
+
+Still re-pin. Other people may have merged into upstream `dev` since the
+last release, and shipping with a stale pseudo-version means the embedded
+`proxy-router/internal/config.Commit` ldflag in the dylib lies about what's
+actually running.
+
+### 5c. Apply the pin in `nodeneo/go/go.mod`
+
+Two states matter:
+
+| `replace` line | `require` version             | Mode                        |
+|----------------|-------------------------------|-----------------------------|
+| Active         | `v0.0.0-00010101000000-...`   | Local iteration (mid-cycle) |
+| Commented      | `v0.0.0-<date>-<commit12>`    | Pinned (release-ready)      |
+
+To transition from "local iteration" to "pinned":
+
+```bash
+cd /Volumes/moon/repo/personal_mor/nodeneo/go
+
+# 1. Comment out the replace line in go.mod (it shadows require — kills CI)
+#    Use StrReplace; the line currently reads:
+#    replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => ../../Morpheus-Lumerin-Node/proxy-router
+#    Change to:
+#    // replace github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router => ../../Morpheus-Lumerin-Node/proxy-router
+
+# 2. Pin the require line to upstream dev HEAD
+go get github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router@<commit12>
+go mod tidy
+```
+
+⚠ **First-time-from-placeholder escape hatch.** If `go get` fails with
+`invalid version: unknown revision 000000000000`, the require line still
+holds the placeholder and Go can't bootstrap. Compute the pseudo-version
+manually and write it directly:
+
+```
+v0.0.0-<UTC commit time as YYYYMMDDHHMMSS>-<commit12>
+```
+
+Example: commit `697c3b596059` made at `2026-04-30T16:42:34Z` →
+`v0.0.0-20260430164234-697c3b596059`. Then:
+
+```bash
+go mod download github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router
+go mod tidy
+```
+
+### 5d. Sanity check the build pipeline scrapes the right hash
+
+The Makefile/CI extract the embedded version with:
+
+```
+grep 'MorpheusAIs/Morpheus-Lumerin-Node/proxy-router' go.mod | grep -oE '[0-9a-f]{12}$'
+```
+
+Run that locally — it should return the new commit hash, **not** anything
+from the commented-out replace line. The commented `replace` ends with
+`proxy-router` (no 12-char hex), so it's filtered out automatically, but
+verify before pushing.
+
+### 5e. Re-uncomment is for the NEXT cycle, not this PR
+
+Don't re-uncomment the replace before merging. The release PR must merge
+in pinned mode. Uncommenting belongs in a **separate** post-release commit
+when active SDK iteration resumes — typically rolled into the first
+`mobile/<feature>` PR of the next cycle.
+
+## 6. RELEASE_NOTES.md ritual (the important one)
 
 The CI release step does:
 ```
@@ -109,7 +223,7 @@ Also bump:
   of the section. The backlog can keep longer-form running history; the
   RELEASE_NOTES table is just the user-facing summary.
 
-## 6. Validate before pushing
+## 7. Validate before pushing
 
 Always all three (don't skip Flutter just because Go passed):
 
@@ -132,7 +246,7 @@ The `dsymutil … operation not permitted` error on `cmd/cshared` linking is
 a known macOS sandbox issue, not a code problem — `go vet` is the canonical
 check.
 
-## 7. Commit, push, open PR
+## 8. Commit, push, open PR
 
 ```bash
 git add -A
@@ -185,7 +299,7 @@ EOF
 )"
 ```
 
-## 8. After dev merge — promote to main
+## 9. After dev merge — promote to main
 
 Wait for the user to merge the PR to `dev` and validate the build (DMG
 artifact, smoke tests). Only then:
@@ -214,5 +328,10 @@ DMG, and publishes the GitHub Release with `RELEASE_NOTES.md` as the body.
 - **Never** label the new release before checking `git tag -l`. We've
   burned a cycle on this — v3.1.0 had already shipped when we were calling
   the new work v3.1.0.
-- **Never** call SDK changes part of the Node Neo release flow. Those
-  follow the cross-repo PR path in `.cursor/rules/proxy-router-workflow.mdc`.
+- **Never** ship a release with the local SDK `replace` line still active.
+  The release commit must be in pinned mode (real pseudo-version, replace
+  commented). The release-process step 5 enforces this; CI cannot resolve
+  the local sibling path.
+- **Never** pin against an SDK feature branch. Pin only against a merged
+  commit on upstream `dev`. SDK code changes themselves follow the
+  cross-repo PR path in `.cursor/rules/proxy-router-workflow.mdc`.
