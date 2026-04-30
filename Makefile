@@ -1,5 +1,6 @@
 .PHONY: go-test go-macos go-ios go-ios-sim go-android flutter-macos flutter-ios flutter-android \
-	run-macos run-ios run-ios-sim clean brand-assets check-brand-tools dev-macos
+	run-macos run-ios run-ios-sim clean brand-assets check-brand-tools dev-macos \
+	sim-grab sim-give
 
 # ── Go builds ──
 
@@ -99,8 +100,49 @@ run-ios-sim: go-ios-sim
 	@echo "==> Symlinking simulator lib for Xcode..."
 	@mkdir -p build/go/ios
 	@cp build/go/ios-sim/libnodeneo.a build/go/ios/libnodeneo.a
+	@# Boot the chosen sim if it isn't already (Flutter only sees booted sims).
+	@if ! xcrun simctl list devices booted | grep -q "$(SIM_DEVICE)"; then \
+	  echo "==> Booting $(SIM_DEVICE)..."; \
+	  xcrun simctl boot "$(SIM_DEVICE)" 2>/dev/null || true; \
+	  open -a Simulator; \
+	  printf "    waiting for boot"; \
+	  for i in 1 2 3 4 5 6 7 8 9 10; do \
+	    if xcrun simctl list devices booted | grep -q "$(SIM_DEVICE)"; then echo " ✓"; break; fi; \
+	    printf "."; sleep 1; \
+	  done; \
+	fi
 	flutter run -d "$(SIM_DEVICE)"
 
 clean:
 	rm -rf build/
 	flutter clean 2>/dev/null || true
+
+# ── Simulator clipboard helpers ──
+# macOS Simulator's "Edit → Automatically Sync Pasteboard" only fires on focus
+# change, which is flaky during a copy-paste-into-Cursor workflow. These two
+# targets force the transfer explicitly using xcrun simctl pb{copy,paste}.
+#
+#   make sim-grab    Sim clipboard → Mac clipboard (e.g. after tapping
+#                    "Copy Key" inside the running app on the simulator).
+#   make sim-give    Mac clipboard → Sim clipboard (e.g. paste your real
+#                    wallet private key into an iOS text field on the sim).
+#
+# Auto-detects the first booted iOS simulator. Override with SIM_UDID=<udid>.
+SIM_UDID ?= $(shell xcrun simctl list devices booted -j 2>/dev/null | \
+	python3 -c "import json,sys; d=json.load(sys.stdin).get('devices',{}); \
+uds=[v['udid'] for k in d for v in d[k] if v.get('state')=='Booted' and ('iPhone' in v.get('name','') or 'iPad' in v.get('name',''))]; \
+print(uds[0] if uds else '')" 2>/dev/null)
+
+sim-grab:
+	@if [ -z "$(SIM_UDID)" ]; then echo "==> No booted iOS simulator. Boot one with 'xcrun simctl boot <udid>' first."; exit 1; fi
+	@xcrun simctl pbpaste $(SIM_UDID) | pbcopy
+	@printf "==> Sim → Mac clipboard ✓  ("
+	@pbpaste | tr -d '\n' | head -c 60
+	@LEN=$$(pbpaste | wc -c | tr -d ' '); printf "%s\n" "  · $$LEN bytes)"
+
+sim-give:
+	@if [ -z "$(SIM_UDID)" ]; then echo "==> No booted iOS simulator. Boot one with 'xcrun simctl boot <udid>' first."; exit 1; fi
+	@pbpaste | xcrun simctl pbcopy $(SIM_UDID)
+	@printf "==> Mac → Sim clipboard ✓  ("
+	@pbpaste | tr -d '\n' | head -c 60
+	@LEN=$$(pbpaste | wc -c | tr -d ' '); printf "%s\n" "  · $$LEN bytes — long-press an iOS text field and tap Paste)"
