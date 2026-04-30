@@ -1237,20 +1237,19 @@ class _ExpertScreenState extends State<ExpertScreen> {
                   ),
                   const Spacer(),
                   IconButton(
-                    tooltip: 'Copy config',
+                    tooltip: 'Copy base URL',
                     icon: const Icon(Icons.copy_rounded, size: 14),
                     style: IconButton.styleFrom(
                       minimumSize: const Size(28, 28),
                       padding: const EdgeInsets.all(4),
                     ),
                     onPressed: () {
-                      final snippet = 'Base URL: $gatewayBaseUrl';
-                      Clipboard.setData(ClipboardData(text: snippet));
+                      Clipboard.setData(ClipboardData(text: gatewayBaseUrl));
                       ScaffoldMessenger.of(context)
                         ..clearSnackBars()
                         ..showSnackBar(
                           const SnackBar(
-                            content: Text('Copied'),
+                            content: Text('Base URL copied'),
                             behavior: SnackBarBehavior.floating,
                             duration: Duration(seconds: 2),
                           ),

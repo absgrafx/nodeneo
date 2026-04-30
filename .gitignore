@@ -32,8 +32,10 @@ android/local.properties
 *.apk
 *.aab
 
-# Cursor IDE (per-developer config, may contain secrets)
-.cursor/
+# Cursor IDE (per-developer config, may contain secrets) — except shared
+# project rules under .cursor/rules/ which we ship to all contributors.
+.cursor/*
+!.cursor/rules/
 
 # Secrets
 *.env
