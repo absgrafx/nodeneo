@@ -1492,15 +1492,13 @@ func StartGateway(address string, cloudflaredQuickTunnel bool) string {
 		return errJSON(fmt.Errorf("gateway already running on %s", gw.Addr()))
 	}
 
-	dur, _ := db.GetPreference("gateway_session_duration")
-	durationSec := int64(3600)
-	if dur != "" {
-		fmt.Sscanf(dur, "%d", &durationSec)
-	}
-
+	// Pass a sensible fallback; the gateway re-reads the active
+	// `session_duration_seconds` preference (the same key the chat UI uses)
+	// on every session open so the user's Settings → Preferences slider
+	// applies immediately without restarting the gateway.
 	gw = gateway.New(client, db, func(format string, args ...interface{}) {
 		logger.Info("[GATEWAY] "+format, args...)
-	}, durationSec)
+	}, int64(3600))
 
 	if err := gw.Start(address); err != nil {
 		return errJSON(err)

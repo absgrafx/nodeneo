@@ -6,12 +6,13 @@
 go-test:
 	cd go && go test ./...
 
-# Proxy-router version: if PROXY_ROUTER_DIR points at a local clone of the fork
-# (with upstream tags fetched), git describe gives e.g. "v6.0.1-test-12-g00562be9"
-# — base upstream tag + fork commit count + hash. Falls back to the go.mod commit hash.
+# Proxy-router version: if PROXY_ROUTER_DIR points at a local clone of
+# Morpheus-Lumerin-Node (with tags fetched), git describe gives e.g.
+# "v7.0.0-12-g00562be9" — base release tag + commits since + hash. Falls back
+# to the pseudo-version hash already encoded in go.mod.
 PROXY_ROUTER_DIR ?= $(realpath ../Morpheus-Lumerin-Node)
 PR_VERSION ?= $(shell git -C "$(PROXY_ROUTER_DIR)" describe --tags --always --match 'v*' 2>/dev/null || echo "unknown")
-PR_COMMIT  ?= $(shell cd go && grep 'absgrafx/Morpheus-Lumerin-Node/proxy-router' go.mod | grep -oE '[0-9a-f]{12}$$' || echo "unknown")
+PR_COMMIT  ?= $(shell cd go && grep 'MorpheusAIs/Morpheus-Lumerin-Node/proxy-router' go.mod | grep -oE '[0-9a-f]{12}$$' || echo "unknown")
 GO_LDFLAGS  = -s -w \
   -X github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/internal/config.BuildVersion=$(PR_VERSION) \
   -X github.com/MorpheusAIs/Morpheus-Lumerin-Node/proxy-router/internal/config.Commit=$(PR_COMMIT)

@@ -172,12 +172,56 @@ func TestConversationReuse(t *testing.T) {
 		t.Errorf("expected same conv id, got %q vs %q", id1, id2)
 	}
 
+	// No chatID: should fall back to session-id keyed reuse so subsequent
+	// non-chat endpoints (embeddings / legacy completions) on the same
+	// on-chain session pin to one conversation row instead of spamming the
+	// history list with a fresh row per request.
 	id3, new3 := gw.getOrCreateConversation("", sess)
-	if !new3 {
-		t.Error("empty chatID should always create new")
+	if new3 {
+		t.Error("empty chatID with known session should reuse existing row")
 	}
-	if id3 == id1 {
-		t.Error("different chatID (empty) should produce different conv id")
+	if id3 != id1 {
+		t.Errorf("session-id fallback should match prior chat row: got %q vs %q", id3, id1)
+	}
+
+	// Different session id with no chatID: must produce a brand-new row.
+	otherSess := sessionResult{SessionID: "0xdeadbeef", ModelID: "m1", ModelName: "Test"}
+	id4, new4 := gw.getOrCreateConversation("", otherSess)
+	if !new4 {
+		t.Error("unseen session id should produce a new row")
+	}
+	if id4 == id1 {
+		t.Error("different session ids must not collide")
+	}
+}
+
+// TestConversationReuse_StoreFallback verifies that getOrCreateConversation
+// re-attaches to an existing api-source conversation in SQLite even after the
+// in-memory cache is cold (e.g. across a gateway restart). Without this the
+// gateway would fork a duplicate row for the same on-chain session every time
+// it restarts.
+func TestConversationReuse_StoreFallback(t *testing.T) {
+	st := testStore(t)
+	gw := New(nil, st, func(string, ...interface{}) {}, 3600)
+
+	const sessID = "0xfeedface"
+	const convID = "api-pre-existing"
+	if err := st.CreateConversationWithSource(convID, "m1", "Test", "", false, "api"); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	if err := st.SetConversationSession(convID, sessID); err != nil {
+		t.Fatalf("seed session id: %v", err)
+	}
+
+	// Clear the in-memory cache to mimic a restart.
+	gw.chatIDMap = make(map[string]string)
+
+	got, isNew := gw.getOrCreateConversation("", sessionResult{SessionID: sessID, ModelID: "m1"})
+	if isNew {
+		t.Error("expected store fallback to mark conversation as not-new")
+	}
+	if got != convID {
+		t.Errorf("expected re-attach to %q, got %q", convID, got)
 	}
 }
 
