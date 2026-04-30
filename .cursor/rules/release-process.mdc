@@ -1,0 +1,218 @@
+---
+description: Node Neo release process — branch, doc updates, RELEASE_NOTES ritual, validation, and PR to dev. Trigger on "start the release process", "cut a release", "ship vX", "release branch", or similar.
+alwaysApply: false
+---
+
+# Node Neo release process
+
+Follow this top-to-bottom when the user says "start the release process",
+"cut a release", "ship vX", or anything similar. Every step has an explicit
+command. Don't skip validation or the version check — both have bitten us.
+
+CI shape to keep in mind: `.github/workflows/build-macos.yml` runs on push
+to `dev` (artifact only) and `main` (sign + notarize + GitHub Release). On
+`main` the entire `RELEASE_NOTES.md` becomes the Release body, so we keep
+that file from growing unbounded.
+
+## 1. Inventory + decide the next version
+
+```bash
+cd /Volumes/moon/repo/personal_mor/nodeneo
+git status --short
+git log --oneline -10
+git tag -l "v[0-9]*" --sort=-v:refname | head -5
+```
+
+The semver script in `.github/workflows/build-macos.yml` (`generate-tag` job)
+is the source of truth. On `main` push it bumps `VMIN++` from the latest
+clean semver tag — UNLESS the `VMAJ_NEW` floor in the workflow is raised.
+**Always check the actual tags, not an assumption.** Example: if v3.0.0 and
+v3.1.0 are already tagged, the next `main` release is v3.2.0.
+
+## 2. Scan for stale references
+
+Before touching docs, grep for repo names, branch names, or paths that
+shouldn't appear in current-state material:
+
+```bash
+# Adjust patterns to whatever the prior naming was
+rg "absgrafx/Morpheus|feat-external_embedding|absgrafx fork" -l
+```
+
+Distinguish current-state docs (README, llms.txt, .ai-docs/architecture.md,
+.ai-docs/plan.md, .ai-docs/handoff_context.md, Makefile, CI workflow) from
+historical material (older RELEASE_NOTES sections, plan.md decision log).
+**Only update current-state.** Historical entries describe what was true
+at the time and should not be retconned.
+
+## 3. Create the feature branch
+
+Branch off `dev`. Naming follows existing convention — pick the closest:
+
+| Prefix    | Use for                                |
+|-----------|----------------------------------------|
+| `feat/`   | New capability or behaviour            |
+| `fix/`    | Bug fix                                |
+| `docs/`   | Docs/release-notes only                |
+| `chore/`  | Tooling, deps, internal cleanup        |
+| `cicd/`   | CI/CD pipeline changes                 |
+
+```bash
+git checkout dev
+git pull
+git checkout -b <type>/<short-topic>
+```
+
+Keep the branch name version-agnostic (e.g. `feat/gateway-cursor-zed`, not
+`feat/v3.2.0-gateway`). If the version retargets later, the branch survives.
+
+## 4. Update current-state docs
+
+Look at every file below and update only what reflects current state today:
+
+- `README.md` — install/build paragraphs, platform table, dependency line
+- `llms.txt` — companion repo and links sections
+- `.ai-docs/architecture.md` — integration strategy paragraph
+- `.ai-docs/plan.md` — dependencies table (don't edit historical decision log)
+- `.ai-docs/handoff_context.md` — top metadata, repos table, file-tree comment, date stamp
+- `Makefile` — any `grep` patterns that scrape `go.mod`
+- `.github/workflows/*.yml` — clone URLs, regex patterns, env carve-outs
+
+Bundle IDs like `com.absgrafx.nodeneo` and the `github.com/absgrafx/nodeneo`
+module path are correct — leave them.
+
+## 5. RELEASE_NOTES.md ritual (the important one)
+
+The CI release step does:
+```
+cat RELEASE_NOTES.md >> /tmp/release-notes.md      # full file
+printf '\n---\n\n' >> /tmp/release-notes.md
+cat <asset-table>   >> /tmp/release-notes.md
+gh release create "$TAG_NAME" "$DMG_PATH" --notes-file /tmp/release-notes.md
+```
+
+So the entire file becomes every future Release page body. Keep one section
+fully expanded; everything older lives in a table.
+
+**Each release:**
+1. Add a new top section `## What's New in vX.Y.Z` with the full breakdown
+   (sections like Gateway / UX Polish / Engineering / iOS impact, etc.)
+2. Demote the previously-top section to a one-line row in the
+   `## Previous Releases` table. Each row needs a link to
+   `https://github.com/absgrafx/nodeneo/releases/tag/vX.Y.Z` plus optional
+   PR links `[#NN](.../pull/NN)`. Full detail stays pinned to that tag's
+   GitHub Release page.
+
+Also bump:
+- `.ai-docs/feature_backlog.md` "Recently Shipped" — add a new vX.Y.Z section
+  above the previous one and update the `*Last updated:*` stamp at the top
+  of the section. The backlog can keep longer-form running history; the
+  RELEASE_NOTES table is just the user-facing summary.
+
+## 6. Validate before pushing
+
+Always all three (don't skip Flutter just because Go passed):
+
+```bash
+cd go && go vet ./... && go test ./internal/gateway/... ./internal/store/... && cd ..
+flutter analyze lib/<files-you-touched>
+```
+
+Filter pre-existing Flutter findings against `dev`:
+```bash
+git diff dev -- <file> | grep -E '^@@'   # confirm hunks don't include the linted line
+```
+
+If the Morpheus-Lumerin-Node SDK was touched, cross-compile for iOS:
+```bash
+cd go && GOOS=ios GOARCH=arm64 CGO_ENABLED=1 go vet ./...
+```
+
+The `dsymutil … operation not permitted` error on `cmd/cshared` linking is
+a known macOS sandbox issue, not a code problem — `go vet` is the canonical
+check.
+
+## 7. Commit, push, open PR
+
+```bash
+git add -A
+git status --short                         # sanity
+```
+
+Always use a HEREDOC for the commit body so formatting survives:
+
+```bash
+git commit -m "$(cat <<'EOF'
+<type>(<scope>): vX.Y.Z — <headline>
+
+<2-3 sentence summary of why>
+
+<bullet list of grouped changes by area>
+
+<closing line: validation status, iOS impact note>
+EOF
+)"
+git push -u origin <branch>                # first push
+```
+
+**Switch gh account before opening the PR** — `abs2023` is not a collaborator
+on `absgrafx/nodeneo`. The repo expects `morpheusrogue`:
+
+```bash
+gh auth switch -u morpheusrogue
+gh pr create --base dev --head <branch> \
+  --title "<type>(<scope>): vX.Y.Z — <headline>" \
+  --body "$(cat <<'EOF'
+## Summary
+<1-2 sentences>
+
+### <Section per area>
+- bullet
+- bullet
+
+## iOS impact
+<gateway/SDK is gated, etc.>
+
+## Test plan
+- [x] go vet ./... clean
+- [x] go test ./internal/gateway/... ./internal/store/... green
+- [x] flutter analyze on touched files (no new findings)
+- [ ] Smoke: <manual checks user will do>
+
+## Follow-up
+After merge to dev and validation, open dev → main PR to ship vX.Y.Z.
+EOF
+)"
+```
+
+## 8. After dev merge — promote to main
+
+Wait for the user to merge the PR to `dev` and validate the build (DMG
+artifact, smoke tests). Only then:
+
+```bash
+gh pr create --base main --head dev \
+  --title "Release vX.Y.Z" \
+  --body "Promotes dev → main to ship vX.Y.Z. See RELEASE_NOTES.md for the full breakdown.
+
+Validation on dev:
+- [ ] CI build succeeded (DMG artifact present)
+- [ ] Manual smoke tests passed
+"
+```
+
+When that PR lands on `main`, CI auto-tags `vX.Y.Z`, signs + notarizes the
+DMG, and publishes the GitHub Release with `RELEASE_NOTES.md` as the body.
+
+## Hard rules
+
+- **Never** push directly to `dev` or `main`. PR everything.
+- **Never** `--amend` a commit that has already been pushed. New commit on
+  the branch is correct — the PR auto-updates.
+- **Never** rewrite historical RELEASE_NOTES sections. They describe what
+  was true at the time; collapse them, don't edit the substance.
+- **Never** label the new release before checking `git tag -l`. We've
+  burned a cycle on this — v3.1.0 had already shipped when we were calling
+  the new work v3.1.0.
+- **Never** call SDK changes part of the Node Neo release flow. Those
+  follow the cross-repo PR path in `.cursor/rules/proxy-router-workflow.mdc`.
