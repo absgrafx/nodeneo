@@ -1,6 +1,6 @@
 .PHONY: go-test go-macos go-ios go-ios-sim go-android flutter-macos flutter-ios flutter-android \
 	run-macos run-ios run-ios-sim clean brand-assets check-brand-tools dev-macos \
-	sim-grab sim-give
+	sim-grab sim-give ios-clean _ios-stamp-device _ios-stamp-sim
 
 # ── Go builds ──
 
@@ -92,11 +92,37 @@ _copy-dylib-macos:
 	@mkdir -p build/macos/Build/Products/Debug/Node Neo.app/Contents/Frameworks 2>/dev/null || true
 	@cp build/go/libnodeneo.dylib build/macos/Build/Products/Debug/Node Neo.app/Contents/Frameworks/ 2>/dev/null || true
 
-run-ios: go-ios
+# Tracks the last iOS slice we built for so switching between device and
+# simulator auto-wipes the cross-arch caches Flutter shares between targets.
+# Without this, native asset hooks (e.g. objective_c.framework, used by Dart
+# FFI plugins) silently keep the wrong slice — a device install then fails
+# with "code signature 0xe8008014 / invalid signature" on a simulator binary,
+# and a simulator install fails with "linking object built for iOS-simulator"
+# on a device binary. Symptom showed up the first time we bounced between
+# `make run-ios-sim` (iPad) and `make run-ios` (Phlame) on the same checkout.
+IOS_ARCH_STAMP := build/.last-ios-arch
+
+_ios-stamp-device:
+	@mkdir -p build
+	@if [ -f $(IOS_ARCH_STAMP) ] && [ "$$(cat $(IOS_ARCH_STAMP))" != "device" ]; then \
+	  echo "==> iOS arch switched (sim → device): wiping cross-arch caches..."; \
+	  rm -rf build/native_assets/ios build/ios; \
+	fi
+	@echo device > $(IOS_ARCH_STAMP)
+
+_ios-stamp-sim:
+	@mkdir -p build
+	@if [ -f $(IOS_ARCH_STAMP) ] && [ "$$(cat $(IOS_ARCH_STAMP))" != "sim" ]; then \
+	  echo "==> iOS arch switched (device → sim): wiping cross-arch caches..."; \
+	  rm -rf build/native_assets/ios build/ios; \
+	fi
+	@echo sim > $(IOS_ARCH_STAMP)
+
+run-ios: _ios-stamp-device go-ios
 	flutter run -d Phlame
 
 SIM_DEVICE ?= iPhone 16 Pro
-run-ios-sim: go-ios-sim
+run-ios-sim: _ios-stamp-sim go-ios-sim
 	@echo "==> Symlinking simulator lib for Xcode..."
 	@mkdir -p build/go/ios
 	@cp build/go/ios-sim/libnodeneo.a build/go/ios/libnodeneo.a
@@ -116,6 +142,15 @@ run-ios-sim: go-ios-sim
 clean:
 	rm -rf build/
 	flutter clean 2>/dev/null || true
+
+# Manual escape hatch when the iOS build state is wedged (codesign errors,
+# stale Pods, "Could not find Runner.app" because Flutter's expected output
+# path drifted). Wipes all iOS-derived artefacts but keeps Go and macOS
+# caches. Run before `make run-ios` / `make run-ios-sim` if anything iOS
+# starts behaving inexplicably.
+ios-clean:
+	rm -rf build/ios build/native_assets/ios build/.last-ios-arch ios/Pods ios/Podfile.lock ios/.symlinks
+	@echo "==> iOS build state cleaned (Pods, frameworks, native_assets, arch stamp)"
 
 # ── Simulator clipboard helpers ──
 # macOS Simulator's "Edit → Automatically Sync Pasteboard" only fires on focus
