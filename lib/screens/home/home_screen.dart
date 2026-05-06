@@ -11,6 +11,7 @@ import '../../constants/network_tokens.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/bridge.dart';
 import '../../services/model_status_api.dart';
+import '../../services/network_reachability.dart';
 import '../../services/platform_caps.dart';
 import '../../services/rpc_endpoint_validator.dart';
 import '../../services/rpc_settings_store.dart';
@@ -18,6 +19,7 @@ import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../../utils/token_amount.dart';
 import '../../widgets/crypto_token_icons.dart';
+import '../../widgets/offline_banner.dart';
 import '../../widgets/session_confirmation_sheet.dart';
 import '../chat/chat_screen.dart';
 import '../chat/conversation_transcript_screen.dart';
@@ -164,11 +166,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _refreshRpcReachability();
     _loadModels();
     _loadConversations();
+    // Surface a one-shot snackbar whenever the global online state flips
+    // false (e.g. user toggled airplane mode while in-app). The wallet
+    // card's RPC pill already turns red; the snackbar is the active nudge
+    // so the user understands long stalls aren't the app being slow.
+    NetworkReachability.onlineNotifier.addListener(_onOnlineStateChanged);
     // Idle refresh: conversations (for expiry/closed reconciliation) plus
     // wallet balance so the model list's affordability verdicts don't go
     // stale after off-screen balance changes (e.g. direct on-chain transfers).
-    _sessionRefreshTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+    // Each tick re-probes reachability first — that's how we catch the
+    // "user toggled airplane mode while sitting on the home screen" case
+    // without forcing them to interact (the banner / pill / snackbar wire
+    // up to the same notifier so visual feedback is automatic). The DNS
+    // canary is cheap on online (<50ms) and bounded on offline (~3s).
+    _sessionRefreshTimer = Timer.periodic(const Duration(seconds: 45), (_) async {
       if (!mounted) return;
+      final online = await NetworkReachability.recheck();
+      if (!mounted || !online) return;
       _loadConversations();
       _loadWallet();
     });
@@ -187,16 +201,111 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   @override
   void dispose() {
     _sessionRefreshTimer?.cancel();
+    NetworkReachability.onlineNotifier.removeListener(_onOnlineStateChanged);
     neoRouteObserver.unsubscribe(this);
     super.dispose();
   }
 
+  /// Convenience: was the most recent reachability probe a "no internet"?
+  /// `null` (never probed) is treated as **online** so cold-start renders
+  /// don't false-suppress legitimate first loads.
+  bool get _isKnownOffline =>
+      NetworkReachability.onlineNotifier.value == false;
+
+  void _onOnlineStateChanged() {
+    if (!mounted) return;
+    final online = NetworkReachability.onlineNotifier.value;
+    if (online != false) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: NeoTheme.amber.withValues(alpha: 0.95),
+          duration: const Duration(seconds: 4),
+          content: const Row(
+            children: [
+              Icon(Icons.wifi_off_rounded, color: Colors.black87, size: 18),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'You\'re offline. Some data may be out of date until you reconnect.',
+                  style: TextStyle(color: Colors.black87, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    // Also flip the RPC pill straight to red so users see the indicator
+    // change without waiting for the per-RPC backoff to time out.
+    setState(() {
+      _rpcReachable = false;
+      _rpcChecking = false;
+    });
+  }
+
   @override
   void didPopNext() {
+    // Always re-pull the local SQLite-backed conversations list; that's a
+    // pure local read and harmless offline. The wallet/models loads will
+    // self-skip via _isKnownOffline if the device went offline while we
+    // were on a sub-screen.
     _loadConversations();
-    _loadWallet();
     _refreshRpcReachability();
+    _loadWallet();
     _loadModels();
+  }
+
+  /// Pull-to-refresh on the home screen. Probes the network with a quick
+  /// DNS canary BEFORE kicking off the wallet/models/conversations loads —
+  /// otherwise an offline pull-to-refresh stalls for ~120s while the Go
+  /// RPC fallback list times out per host before eventually surfacing
+  /// "could not load models". A snackbar tells the user to fix their
+  /// connection; the loads are skipped so we don't burn a wall-clock minute
+  /// on an already-known-bad request.
+  Future<void> _onPullToRefresh() async {
+    final online = await NetworkReachability.recheck();
+    if (!mounted) return;
+    if (!online) {
+      // Listener fires on transitions only, but we want the snackbar even
+      // when the user pulls while already-known-offline; show it directly.
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger
+        ?..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: NeoTheme.amber.withValues(alpha: 0.95),
+            duration: const Duration(seconds: 3),
+            content: const Row(
+              children: [
+                Icon(Icons.wifi_off_rounded, color: Colors.black87, size: 18),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'You\'re offline. Reconnect and try again.',
+                    style: TextStyle(color: Colors.black87, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      // Keep the wallet card's status pill in sync so visual feedback is
+      // immediate even if the prior _refreshRpcReachability already passed.
+      setState(() {
+        _rpcReachable = false;
+        _rpcChecking = false;
+      });
+      return;
+    }
+    _loadWallet();
+    _loadModels();
+    _loadConversations();
+    _refreshRpcReachability();
   }
 
   Future<void> _refreshRpcReachability() async {
@@ -204,6 +313,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     setState(() {
       _rpcChecking = true;
     });
+    // Fast-fail when the device has no internet — otherwise we'd spend
+    // ~120s walking the RPC fallback list before reporting unreachable.
+    // The DNS canary times out in <3s on airplane mode.
+    final online = await NetworkReachability.recheck();
+    if (!mounted) return;
+    if (!online) {
+      setState(() {
+        _rpcReachable = false;
+        _rpcChecking = false;
+      });
+      return;
+    }
     try {
       final raw = await RpcSettingsStore.instance.effectiveRpcUrl();
       final ok = await RpcEndpointValidator.anyReachable(raw);
@@ -332,6 +453,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       (BigInt.tryParse(_rawEthWei) ?? BigInt.zero) == BigInt.zero;
 
   Future<void> _loadWallet() async {
+    // Skip when the device is known-offline — Go's `GetBalance()` would
+    // otherwise walk the entire RPC fallback list (~120s on airplane mode)
+    // before returning an error, occupying a compute isolate for that
+    // whole window and burning battery. The 45s timer / pull-to-refresh /
+    // app-resume hook will all retry once we're back online.
+    if (_isKnownOffline) return;
     // Wrapped in compute() so that the synchronous FFI → Go →
     // `client.GetBalance()` RPC round trip runs off the UI isolate. On
     // slow RPC responses (or cold-start, first-hop failover) this call
@@ -393,6 +520,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _loadModels() async {
+    // Skip on known-offline — `fetchModelStatus` would attempt the public
+    // status API (HTTP) and `_computeAffordability` would synchronously
+    // call `bridge.estimateOpenSessionStake` per model (each one hits Go's
+    // RPC). On airplane mode these stack up to multi-minute UI freezes. The
+    // cached model list / calibration stays put so the user sees the last
+    // known-good rendering until reconnect.
+    if (_isKnownOffline) return;
     // Only flip into the muted "loading" state on the very first load (when
     // we have no cached calibration yet). Subsequent refreshes preserve the
     // last known-good supply/budget so tiles don't flicker and — more
@@ -481,6 +615,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// refresh, everything else is pure math, affordability re-renders
   /// automatically whenever the wallet balance changes.
   Future<void> _computeAffordability() async {
+    // The per-model `bridge.estimateOpenSessionStake` is a synchronous FFI
+    // call that internally hits Go's RPC client. With ~5 models offline
+    // this iterates through 5 × ~30s RPC retry cycles on the UI isolate
+    // — that's the multi-minute "app appears to hang" symptom users hit
+    // when toggling airplane mode mid-session. Bail early when offline;
+    // the cached affordability verdicts stay put.
+    if (_isKnownOffline) return;
     final runId = ++_affordabilityComputationId;
     final seconds = await SessionDurationStore.instance.readSeconds();
     if (!mounted || runId != _affordabilityComputationId) return;
@@ -669,11 +810,48 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       );
       return;
     }
+    // Capture context-derived handles BEFORE any await so the analyzer's
+    // `use_build_context_synchronously` rule is satisfied for the messenger
+    // and navigator uses below. The dialog helpers still receive `context`
+    // directly (showDialog needs a live BuildContext) and are guarded by
+    // `context.mounted` checks at each await boundary.
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    // Offline guard: opening a fresh chat session triggers `openSession`
+    // (Go RPC → on-chain stake) which would otherwise hang for ~120s on
+    // airplane mode. Re-probe so a user who flipped Wi-Fi back on isn't
+    // stuck on a stale `false` cached state.
+    final online = await NetworkReachability.recheck();
+    if (!context.mounted) return;
+    if (!online) {
+      messenger
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: NeoTheme.amber.withValues(alpha: 0.95),
+            duration: const Duration(seconds: 4),
+            content: const Row(
+              children: [
+                Icon(Icons.wifi_off_rounded, color: Colors.black87, size: 18),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'You\'re offline. Reconnect to start a new chat.',
+                    style: TextStyle(color: Colors.black87, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      return;
+    }
     final id = m.id;
     final name = m.name;
     final tags = m.tags;
     final isTEE = tags.any((t) => t.toUpperCase().contains('TEE'));
-    final navigator = Navigator.of(context);
 
     // Reuse-first short-circuit: if there's already an active on-chain
     // session for this model (opened by either a previous UI chat OR the
@@ -692,7 +870,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         modelName: name,
         endsAtUnix: (reusable['session_ends_at'] as num?)?.toInt() ?? 0,
       );
-      if (action == null || !mounted) return;
+      if (action == null || !context.mounted) return;
       if (action == _ReuseAction.continueExisting) {
         await navigator.push<void>(
           MaterialPageRoute<void>(
@@ -1123,13 +1301,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ],
       ),
       body: SafeArea(
-        child: RefreshIndicator(
-          color: NeoTheme.green,
-          onRefresh: () async {
-            _loadWallet();
-            _loadModels();
-            _loadConversations();
-          },
+        child: Column(
+          children: [
+            // Pinned ABOVE the scroll view so pull-to-refresh / scroll
+            // doesn't hide the persistent indicator while the user is
+            // offline.
+            const OfflineBanner(),
+            Expanded(
+              child: RefreshIndicator(
+                color: NeoTheme.green,
+                onRefresh: _onPullToRefresh,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: ScrollConfiguration(
@@ -1307,15 +1488,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     ],
                   ),
                 ),
-                SliverFillRemaining(
-                  hasScrollBody: true,
-                  child: _buildModelList(),
-                ),
+                _buildModelsSliver(),
               ],
             ],
           ),
         ),
         ),
+        ),
+            ),
+          ],
         ),
       ),
     );
@@ -1464,47 +1645,70 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
-  Widget _buildModelList() {
+  /// Returns a Sliver so the model list participates in the outer
+  /// CustomScrollView's scroll position. Wrapping a ListView in
+  /// SliverFillRemaining(hasScrollBody: true) creates a nested scroll view —
+  /// the inner list eats vertical gestures and the outer scroll cannot pull
+  /// the wallet card / privacy toggle back into view (regression caught on
+  /// TestFlight build 3.3.0+3).
+  ///
+  /// Loading / error / empty states use SliverFillRemaining(hasScrollBody:
+  /// false) so they fill the remaining viewport for layout but do NOT
+  /// capture scroll gestures — pull-to-refresh and scroll-to-wallet keep
+  /// working.
+  Widget _buildModelsSliver() {
     if (_loadingModels) {
-      return const Center(
-        child: CircularProgressIndicator(color: NeoTheme.green),
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: CircularProgressIndicator(color: NeoTheme.green),
+        ),
       );
     }
     if (_modelsError != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text('⚠️', style: TextStyle(fontSize: 48)),
-            const SizedBox(height: 16),
-            Text(
-              'Could not load models',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.8),
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('⚠️', style: TextStyle(fontSize: 48)),
+              const SizedBox(height: 16),
+              Text(
+                'Could not load models',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _modelsError!,
-              style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
-              textAlign: TextAlign.center,
-            ),
-          ],
+              const SizedBox(height: 8),
+              Text(
+                _modelsError!,
+                style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       );
     }
     if (_models.isEmpty) {
-      return _EmptyState(maxPrivacy: _maxPrivacy);
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: _EmptyState(maxPrivacy: _maxPrivacy),
+      );
     }
     final visible = _visibleModels();
     if (visible.isEmpty) {
-      return _NoAffordableState(
-        onShowAll: () => setState(() => _showUnaffordable = true),
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: _NoAffordableState(
+          onShowAll: () => setState(() => _showUnaffordable = true),
+        ),
       );
     }
-    return ListView.builder(
+    return SliverList.builder(
       itemCount: visible.length,
       itemBuilder: (ctx, i) {
         final m = visible[i];
@@ -2895,7 +3099,7 @@ class _BalanceChip extends StatelessWidget {
                       Flexible(child: amountColumn),
                   ],
                 ),
-                if (helperRow != null) helperRow,
+                ?helperRow,
               ],
             ),
           ),

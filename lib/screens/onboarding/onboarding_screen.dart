@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,16 +19,14 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  final _mnemonicController = TextEditingController();
   final _privateKeyController = TextEditingController();
   bool _isCreating = false;
+  bool _isImporting = false;
   String? _createdPrivateKey;
   String? _createdAddress;
-  bool _importByMnemonic = false;
 
   @override
   void dispose() {
-    _mnemonicController.dispose();
     _privateKeyController.dispose();
     super.dispose();
   }
@@ -100,30 +97,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  Future<void> _importWalletByMnemonic() async {
-    final mnemonic = _mnemonicController.text.trim();
-    if (mnemonic.split(' ').length < 12) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid 12 or 24-word mnemonic')),
-      );
-      return;
-    }
-    try {
-      final bridge = GoBridge();
-      bridge.importWalletMnemonic(mnemonic);
-      await WalletVault.instance.saveMnemonic(mnemonic);
-      _openScopedDbAndEncrypt(mnemonic);
-      if (!mounted) return;
-      widget.onComplete();
-    } on GoBridgeException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: ${e.message}')),
-        );
-      }
-    }
-  }
-
   Future<void> _importWalletByPrivateKey() async {
     var hexKey = _privateKeyController.text.trim();
     if (hexKey.startsWith('0x') || hexKey.startsWith('0X')) {
@@ -135,6 +108,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
       return;
     }
+    setState(() => _isImporting = true);
     try {
       final bridge = GoBridge();
       bridge.importWalletPrivateKey(hexKey);
@@ -143,19 +117,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (!mounted) return;
       widget.onComplete();
     } on GoBridgeException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: ${e.message}')),
-        );
-      }
-    }
-  }
-
-  Future<void> _importWallet() async {
-    if (_importByMnemonic) {
-      await _importWalletByMnemonic();
-    } else {
-      await _importWalletByPrivateKey();
+      if (!mounted) return;
+      setState(() => _isImporting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Import failed: ${e.message}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isImporting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Import failed: $e')),
+      );
     }
   }
 
@@ -173,6 +145,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Widget _buildOnboardingForm(BuildContext context) {
     final theme = Theme.of(context);
+    final busy = _isCreating || _isImporting;
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -207,7 +180,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: _isCreating ? null : _createWallet,
+                      onPressed: busy ? null : _createWallet,
                       child: _isCreating
                           ? const SizedBox(
                               width: 20,
@@ -231,55 +204,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Import method toggle — PK is default
-                  Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E293B),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF374151)),
+                  TextField(
+                    controller: _privateKeyController,
+                    maxLines: 2,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    enableIMEPersonalizedLearning: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    decoration: const InputDecoration(
+                      hintText: 'Paste your hex private key (with or without 0x prefix)',
                     ),
-                    padding: const EdgeInsets.all(3),
-                    child: Row(
-                      children: [
-                        _ToggleTab(
-                          label: 'Private Key',
-                          selected: !_importByMnemonic,
-                          onTap: () => setState(() => _importByMnemonic = false),
-                        ),
-                        _ToggleTab(
-                          label: 'Recovery Phrase',
-                          selected: _importByMnemonic,
-                          onTap: () => setState(() => _importByMnemonic = true),
-                        ),
-                      ],
-                    ),
+                    style: const TextStyle(fontSize: 14, fontFamily: 'JetBrains Mono'),
                   ),
-                  const SizedBox(height: 12),
-
-                  if (_importByMnemonic)
-                    TextField(
-                      controller: _mnemonicController,
-                      maxLines: 3,
-                      decoration: const InputDecoration(
-                        hintText: 'Enter your 12 or 24-word recovery phrase...',
-                      ),
-                      style: const TextStyle(fontSize: 14),
-                    )
-                  else
-                    TextField(
-                      controller: _privateKeyController,
-                      maxLines: 2,
-                      decoration: const InputDecoration(
-                        hintText: 'Enter hex private key (with or without 0x prefix)...',
-                      ),
-                      style: const TextStyle(fontSize: 14, fontFamily: 'JetBrains Mono'),
-                    ),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton(
-                      onPressed: _importWallet,
-                      child: const Text('Import Wallet'),
+                      onPressed: busy ? null : _importWalletByPrivateKey,
+                      child: _isImporting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Import Wallet'),
                     ),
                   ),
                   const SizedBox(height: 48),
@@ -315,51 +264,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   const SizedBox(height: 32),
                 ],
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Toggle tab for import method ────────────────────────────────
-
-class _ToggleTab extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ToggleTab({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: selected
-                ? NeoTheme.green.withValues(alpha: 0.15)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-            border: selected
-                ? Border.all(color: NeoTheme.green.withValues(alpha: 0.3))
-                : null,
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: selected ? NeoTheme.green : const Color(0xFF6B7280),
             ),
           ),
         ),

@@ -5,8 +5,27 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Optional app-level lock (password + optional biometrics) for a hot wallet UX.
-/// Password is stored as SHA-256(salt:password); not the same secret as the mnemonic.
+/// Three-state shape of the on-device lock. Drives both the setup flow and
+/// the unlock screen (e.g. whether to show the password fallback at all).
+enum LockMode {
+  /// No lock — app opens straight to the home screen.
+  off,
+
+  /// Face ID / Touch ID only. No password is stored, no fallback field is
+  /// shown on the lock screen. Recovery is via the wallet's private key.
+  biometricOnly,
+
+  /// Password only — biometrics disabled or unavailable on the device.
+  passwordOnly,
+
+  /// Password is set and biometrics are enabled. Face ID is the primary path,
+  /// password is a visible fallback after a biometric cancel / failure.
+  passwordWithBiometric,
+}
+
+/// Optional app-level lock (Face ID / Touch ID and/or password) for a hot
+/// wallet UX. When a password is set it is stored as SHA-256(salt:password);
+/// it is **not** the same secret as the wallet's private key.
 class AppLockService {
   AppLockService._();
   static final AppLockService instance = AppLockService._();
@@ -52,6 +71,29 @@ class AppLockService {
 
   Future<bool> get biometricEnabled async => (await _readKey(_kBiometric)) == '1';
 
+  /// True iff a password is currently stored. False for biometric-only mode
+  /// or when the lock is off entirely.
+  Future<bool> get hasPassword async {
+    final salt = await _readKey(_kSalt);
+    final hash = await _readKey(_kHash);
+    return salt != null && hash != null;
+  }
+
+  /// Derive the current [LockMode] from the underlying secure-storage state.
+  /// Cheap enough to call from a `FutureBuilder` per build; reads are cached
+  /// by the platform Keychain.
+  Future<LockMode> get mode async {
+    if (!await isLockEnabled) return LockMode.off;
+    final pw = await hasPassword;
+    final bio = await biometricEnabled;
+    if (!pw && bio) return LockMode.biometricOnly;
+    if (pw && bio) return LockMode.passwordWithBiometric;
+    if (pw) return LockMode.passwordOnly;
+    // Edge case: enabled flag set but neither password nor biometric — treat
+    // as off so we can never strand the user behind an empty lock screen.
+    return LockMode.off;
+  }
+
   Future<void> setBiometricEnabled(bool v) async {
     await _writeKey(_kBiometric, v ? '1' : '0');
   }
@@ -70,6 +112,35 @@ class AppLockService {
     await _writeKey(_kSalt, salt);
     await _writeKey(_kHash, hash);
     await _writeKey(_kEnabled, '1');
+  }
+
+  /// Turn on the lock in **biometric-only** mode. Clears any pre-existing
+  /// password material and enables the biometric flag. Caller is responsible
+  /// for confirming the device actually supports Face ID / Touch ID first
+  /// (e.g. `LocalAuthentication.canCheckBiometrics`).
+  Future<void> enableBiometricLockOnly() async {
+    await _deleteKey(_kSalt);
+    await _deleteKey(_kHash);
+    await _writeKey(_kBiometric, '1');
+    await _writeKey(_kEnabled, '1');
+  }
+
+  /// Add a password as a fallback to an existing biometric-only lock,
+  /// promoting it to [LockMode.passwordWithBiometric]. Idempotent for the
+  /// password case — if a password is already set this just rotates it.
+  Future<void> addPasswordFallback(String password) async {
+    await enableLock(password);
+  }
+
+  /// Drop the password while keeping biometrics on, demoting from
+  /// [LockMode.passwordWithBiometric] to [LockMode.biometricOnly]. Refuses
+  /// to leave the user locked out: if biometrics are not enabled this is a
+  /// no-op (caller should disable the lock entirely instead).
+  Future<bool> removePasswordKeepBiometric() async {
+    if (!await biometricEnabled) return false;
+    await _deleteKey(_kSalt);
+    await _deleteKey(_kHash);
+    return true;
   }
 
   Future<bool> verifyPassword(String password) async {

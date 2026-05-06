@@ -117,7 +117,7 @@ class _AppLockSetupScreenState extends State<AppLockSetupScreen> {
                 Text(
                   widget.changingPassword
                       ? 'Enter your current password, then a new one. Your password manager can save the new password.'
-                      : 'Choose an app password separate from your wallet seed. Save it in your password manager when prompted.',
+                      : 'Choose an app password separate from your wallet private key. Save it in your password manager when prompted.',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.hintColor,
                     height: 1.4,

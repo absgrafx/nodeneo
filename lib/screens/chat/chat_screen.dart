@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/bridge.dart';
 import '../../widgets/chat_message_body.dart';
+import '../../widgets/offline_banner.dart';
 import '../../services/chat_streaming_preference_store.dart';
 import '../../services/default_tuning_store.dart';
+import '../../services/network_reachability.dart';
 import '../../services/session_duration_store.dart';
 import '../../theme.dart';
 import '../../utils/error_redaction.dart';
@@ -70,7 +72,6 @@ class _ChatScreenState extends State<ChatScreen> {
   _BootstrapPhase _phase = _BootstrapPhase.bootstrapping;
   String? _error;
   final List<_LogEntry> _bootLog = [];
-  bool _showBootLog = true;
   String? _conversationId;
   String? _sessionId;
   final List<_ChatBubble> _messages = [];
@@ -347,7 +348,6 @@ class _ChatScreenState extends State<ChatScreen> {
       _conversationId = convId;
       _sessionId = sessionId;
       _readyBannerMessage = readyMsg;
-      _showBootLog = true;
       _phase = _BootstrapPhase.ready;
     });
   }
@@ -540,8 +540,39 @@ class _ChatScreenState extends State<ChatScreen> {
     final cid = _conversationId;
     if (text.isEmpty || cid == null || _sending) return;
 
+    // Offline guard: an offline send would otherwise stall on the WS
+    // handshake / `openSession` RPC retry chain (~120s) before failing.
+    // Re-probe so a user who just turned Wi-Fi back on isn't stuck on a
+    // stale `false` cached state, then bail with a snackbar that prefills
+    // the input so the message isn't lost.
+    final online = await NetworkReachability.recheck();
+    if (!mounted) return;
+    if (!online) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: NeoTheme.amber.withValues(alpha: 0.95),
+            duration: const Duration(seconds: 4),
+            content: const Row(
+              children: [
+                Icon(Icons.wifi_off_rounded, color: Colors.black87, size: 18),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'You\'re offline. Reconnect to send this message.',
+                    style: TextStyle(color: Colors.black87, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      return;
+    }
+
     setState(() {
-      _showBootLog = false;
       _readyBannerMessage = null;
       _messages.add(_ChatBubble(role: 'user', text: text));
       _input.clear();
@@ -721,7 +752,7 @@ class _ChatScreenState extends State<ChatScreen> {
           text,
           stream: false,
           options: _buildTuningOptions(),
-          onDelta: (_, __, ___) {},
+          onDelta: (_, _, _) {},
         );
         final reply = res['response'] as String? ?? '';
         final meta = _extractMetadata(res);
@@ -942,7 +973,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
                     ),
                     value: _preferStreaming,
-                    activeColor: NeoTheme.green,
+                    activeThumbColor: NeoTheme.green,
                     onChanged: (v) {
                       setState(() => _preferStreaming = v);
                       setSheetState(() {});
@@ -1066,6 +1097,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             await DefaultTuningStore.instance.write(
                               temperature: _temperature,
                               topP: _topP,
@@ -1074,8 +1106,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               presencePenalty: _presencePenalty,
                               systemPrompt: _systemPrompt,
                             );
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            messenger.showSnackBar(
                               const SnackBar(
                                 content: Text('Current settings saved as default for new chats'),
                                 behavior: SnackBarBehavior.floating,
@@ -1224,12 +1255,15 @@ class _ChatScreenState extends State<ChatScreen> {
       // Usage block (works for both streaming and non-streaming shapes)
       final usage = pr['usage'];
       if (usage is Map) {
-        if (usage['prompt_tokens'] != null)
+        if (usage['prompt_tokens'] != null) {
           rows.add(_MetadataRow(label: 'Prompt tokens', value: '${usage['prompt_tokens']}'));
-        if (usage['completion_tokens'] != null)
+        }
+        if (usage['completion_tokens'] != null) {
           rows.add(_MetadataRow(label: 'Completion tokens', value: '${usage['completion_tokens']}'));
-        if (usage['total_tokens'] != null)
+        }
+        if (usage['total_tokens'] != null) {
           rows.add(_MetadataRow(label: 'Total tokens', value: '${usage['total_tokens']}'));
+        }
       }
       // Finish reason from choices
       final choices = pr['choices'];
@@ -1254,19 +1288,24 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } else {
       // Legacy metadata from older DB entries
-      if (metadata['finish_reason'] != null)
+      if (metadata['finish_reason'] != null) {
         rows.add(_MetadataRow(label: 'Finish reason', value: '${metadata['finish_reason']}'));
+      }
       final usage = metadata['usage'];
       if (usage is Map) {
-        if (usage['prompt_tokens'] != null)
+        if (usage['prompt_tokens'] != null) {
           rows.add(_MetadataRow(label: 'Prompt tokens', value: '${usage['prompt_tokens']}'));
-        if (usage['completion_tokens'] != null)
+        }
+        if (usage['completion_tokens'] != null) {
           rows.add(_MetadataRow(label: 'Completion tokens', value: '${usage['completion_tokens']}'));
-        if (usage['total_tokens'] != null)
+        }
+        if (usage['total_tokens'] != null) {
           rows.add(_MetadataRow(label: 'Total tokens', value: '${usage['total_tokens']}'));
+        }
       }
-      if (metadata['model'] != null)
+      if (metadata['model'] != null) {
         rows.add(_MetadataRow(label: 'Model', value: '${metadata['model']}'));
+      }
     }
     return rows;
   }
@@ -1437,6 +1476,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
         _BootstrapPhase.ready => Column(
             children: [
+              const OfflineBanner(),
               if (_readyBannerMessage != null && _messages.isEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -2008,75 +2048,6 @@ class _StakePanelBody extends StatelessWidget {
 }
 
 enum _BootstrapPhase { bootstrapping, error, ready }
-
-class _BootLogBanner extends StatelessWidget {
-  final List<_LogEntry> entries;
-  final bool isTEE;
-  const _BootLogBanner({required this.entries, required this.isTEE});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-      decoration: BoxDecoration(
-        color: NeoTheme.mainPanelFill,
-        border: Border(
-          bottom: BorderSide(
-            color: NeoTheme.green.withValues(alpha: 0.2),
-          ),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final e in entries)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _iconForLevel(e.level),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      e.message,
-                      style: TextStyle(
-                        color: _colorForLevel(e.level),
-                        fontSize: 11,
-                        height: 1.35,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  static Color _colorForLevel(_LogLevel l) => switch (l) {
-        _LogLevel.working => const Color(0xFF9CA3AF),
-        _LogLevel.info => const Color(0xFF6B7280),
-        _LogLevel.warn => const Color(0xFFF59E0B),
-        _LogLevel.error => const Color(0xFFF87171),
-        _LogLevel.ok => NeoTheme.green,
-      };
-
-  static Widget _iconForLevel(_LogLevel l) => switch (l) {
-        _LogLevel.working => const SizedBox(
-            width: 12, height: 12,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF)),
-          ),
-        _LogLevel.info => Icon(Icons.chevron_right_rounded, size: 12, color: _colorForLevel(l)),
-        _LogLevel.warn => Icon(Icons.warning_amber_rounded, size: 12, color: _colorForLevel(l)),
-        _LogLevel.error => Icon(Icons.error_outline_rounded, size: 12, color: _colorForLevel(l)),
-        _LogLevel.ok => Icon(Icons.check_circle_outline_rounded, size: 12, color: _colorForLevel(l)),
-      };
-}
 
 class _ChatBubble {
   final String role;

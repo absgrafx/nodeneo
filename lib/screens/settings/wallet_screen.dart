@@ -939,7 +939,6 @@ class _SettingsCard extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
   final String title;
-  final Color? titleColor;
   final String subtitle;
   final VoidCallback onTap;
 
@@ -947,7 +946,6 @@ class _SettingsCard extends StatelessWidget {
     required this.icon,
     required this.iconColor,
     required this.title,
-    this.titleColor,
     required this.subtitle,
     required this.onTap,
   });
@@ -974,7 +972,6 @@ class _SettingsCard extends StatelessWidget {
                       title,
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
-                        color: titleColor,
                       ),
                     ),
                     const SizedBox(height: 2),

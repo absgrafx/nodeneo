@@ -44,7 +44,7 @@ Future<void> showEraseWalletFlow(
   );
   if (confirmed != true || !context.mounted) return;
 
-  await WalletVault.instance.clearMnemonic();
+  await WalletVault.instance.clearStoredSecret();
   if (context.mounted) {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }

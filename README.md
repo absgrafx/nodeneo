@@ -48,7 +48,7 @@ Under the hood it embeds the **proxy-router mobile SDK** directly via Go FFI. Th
 
 ### Key capabilities
 
-- **Wallet** — Create a new wallet or import via private key / recovery phrase; balances on Base mainnet
+- **Wallet** — Create a new wallet or import via private key (raw 0x-prefixed hex); balances on Base mainnet
 - **Models** — Browse active models with MAX Privacy (TEE-only) filter
 - **Sessions** — Open, reuse, and close on-chain sessions; configurable duration and stake estimation
 - **Chat** — Streaming inference via MOR-RPC to providers; customizable system prompts, per-conversation tuning (temperature, top_p, max_tokens)
