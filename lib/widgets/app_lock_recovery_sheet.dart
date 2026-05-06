@@ -4,7 +4,8 @@ import '../services/app_lock_service.dart';
 import '../services/bridge.dart';
 import '../theme.dart';
 
-/// Re-auth with recovery phrase or private key to clear app lock only (wallet + SQLite + RPC stay).
+/// Re-auth with the wallet's private key to clear app lock only
+/// (wallet + SQLite + RPC stay).
 Future<void> showAppLockRecoverySheet(BuildContext context) async {
   await showModalBottomSheet<void>(
     context: context,
@@ -25,16 +26,13 @@ class _AppLockRecoveryBody extends StatefulWidget {
 }
 
 class _AppLockRecoveryBodyState extends State<_AppLockRecoveryBody> {
-  final _phrase = TextEditingController();
   final _key = TextEditingController();
-  bool _phraseMode = false;
   bool _busy = false;
   bool _obscureKey = true;
   String? _error;
 
   @override
   void dispose() {
-    _phrase.dispose();
     _key.dispose();
     super.dispose();
   }
@@ -45,15 +43,12 @@ class _AppLockRecoveryBodyState extends State<_AppLockRecoveryBody> {
       _error = null;
     });
     try {
-      final bridge = GoBridge();
-      final ok = _phraseMode
-          ? bridge.verifyRecoveryMnemonic(_phrase.text)
-          : bridge.verifyRecoveryPrivateKey(_key.text.trim());
+      final ok = GoBridge().verifyRecoveryPrivateKey(_key.text.trim());
       if (!mounted) return;
       if (!ok) {
         setState(() {
           _busy = false;
-          _error = 'That does not match this wallet. Check spelling and spaces.';
+          _error = 'That private key does not match this wallet.';
         });
         return;
       }
@@ -89,58 +84,34 @@ class _AppLockRecoveryBodyState extends State<_AppLockRecoveryBody> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Unlock with backup',
+              'Unlock with your private key',
               style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the same recovery phrase or private key as this wallet. '
+              'Enter the same private key as this wallet to turn off the app lock. '
               'Your chats and settings stay on this device.',
               style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor, height: 1.35),
             ),
             const SizedBox(height: 16),
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment<bool>(value: true, label: Text('Phrase'), icon: Icon(Icons.notes_outlined, size: 18)),
-                ButtonSegment<bool>(value: false, label: Text('Private key'), icon: Icon(Icons.key_outlined, size: 18)),
-              ],
-              selected: {_phraseMode},
-              onSelectionChanged: (s) {
-                setState(() {
-                  _phraseMode = s.first;
-                  _error = null;
-                });
-              },
-            ),
-            const SizedBox(height: 16),
-            if (_phraseMode)
-              TextField(
-                controller: _phrase,
-                maxLines: 4,
-                minLines: 3,
-                autocorrect: false,
-                enableSuggestions: false,
-                textCapitalization: TextCapitalization.none,
-                decoration: const InputDecoration(
-                  hintText: 'Recovery phrase (12 or 24 words)',
-                  border: OutlineInputBorder(),
-                ),
-              )
-            else
-              TextField(
-                controller: _key,
-                obscureText: _obscureKey,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: InputDecoration(
-                  hintText: '0x… private key',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscureKey ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                    onPressed: () => setState(() => _obscureKey = !_obscureKey),
-                  ),
+            TextField(
+              controller: _key,
+              obscureText: _obscureKey,
+              autocorrect: false,
+              enableSuggestions: false,
+              enableIMEPersonalizedLearning: false,
+              smartDashesType: SmartDashesType.disabled,
+              smartQuotesType: SmartQuotesType.disabled,
+              style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 13),
+              decoration: InputDecoration(
+                hintText: '0x… private key',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(_obscureKey ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                  onPressed: () => setState(() => _obscureKey = !_obscureKey),
                 ),
               ),
+            ),
             if (_error != null) ...[
               const SizedBox(height: 12),
               Text(_error!, style: const TextStyle(color: Color(0xFFF87171), fontSize: 13)),
@@ -150,9 +121,8 @@ class _AppLockRecoveryBodyState extends State<_AppLockRecoveryBody> {
               onPressed: _busy
                   ? null
                   : () {
-                      final empty = _phraseMode ? _phrase.text.trim().isEmpty : _key.text.trim().isEmpty;
-                      if (empty) {
-                        setState(() => _error = 'Enter your ${_phraseMode ? "phrase" : "private key"}.');
+                      if (_key.text.trim().isEmpty) {
+                        setState(() => _error = 'Enter your private key.');
                         return;
                       }
                       _verify();

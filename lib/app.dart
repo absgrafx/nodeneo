@@ -15,6 +15,8 @@ import 'services/bridge.dart';
 import 'services/rpc_settings_store.dart';
 import 'services/app_local_reset.dart';
 import 'services/app_logger.dart';
+import 'services/first_launch_guard.dart';
+import 'services/network_reachability.dart';
 import 'services/wallet_vault.dart';
 import 'app_route_observer.dart';
 import 'theme.dart';
@@ -46,7 +48,13 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
   bool _sdkReady = false;
   String? _sdkError;
   /// False when failure is missing native lib (iOS): RPC buttons are misleading.
-  bool _showRpcRecoveryOnError = true;
+  final bool _showRpcRecoveryOnError = true;
+
+  /// True when the device has no internet connection at startup. We surface
+  /// the dedicated [_OfflineScreen] in this case instead of the SDK error
+  /// screen so the user understands "fix your network", not "fix your RPC".
+  bool _offline = false;
+  bool _checkingNetwork = false;
 
   /// True when the app was launched from a mounted DMG volume — the user needs
   /// to drag it to /Applications first.
@@ -92,6 +100,12 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
           AppLockService.instance.markLocked();
         }
       });
+    } else if (state == AppLifecycleState.resumed) {
+      // Re-probe network on resume so the home-screen RPC pill (and anything
+      // else listening to NetworkReachability.onlineNotifier) reflects reality
+      // when the user toggled airplane mode while we were backgrounded. The
+      // probe is fire-and-forget — listeners will rebuild via the notifier.
+      Future<void>.microtask(NetworkReachability.recheck);
     }
   }
 
@@ -100,6 +114,37 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
       final dir = await getApplicationSupportDirectory();
       final dataDir = '${dir.path}${Platform.pathSeparator}nodeneo';
       await Directory(dataDir).create(recursive: true);
+
+      // Reconcile orphaned Keychain entries from a previous install BEFORE
+      // anything reads the wallet vault — otherwise the old wallet would be
+      // restored before we get a chance to wipe it. See FirstLaunchGuard for
+      // why iOS in particular needs this.
+      await FirstLaunchGuard.reconcileFreshInstall(dataDir);
+
+      // Network reachability gate: a DNS canary tells us "the device has
+      // internet" before we hit the Go SDK's `Init`. Without this, airplane
+      // mode / Wi-Fi offline drops the user on a confusing "SDK Init Failed
+      // (Edit Custom RPC)" screen — the actual fix is "turn on Wi-Fi", not
+      // "edit your RPC endpoint". The dedicated _OfflineScreen makes that
+      // clear and offers a single Try Again action.
+      if (mounted) setState(() => _checkingNetwork = true);
+      final online = await NetworkReachability.recheck();
+      if (!mounted) return;
+      setState(() => _checkingNetwork = false);
+      if (!online) {
+        AppLogger.warn(
+          '_initSDK: offline (DNS canaries failed) — showing _OfflineScreen.',
+        );
+        setState(() {
+          _offline = true;
+          _sdkError = null;
+          _sdkReady = false;
+        });
+        return;
+      }
+      // We made it past the canary: clear any stale offline flag so a manual
+      // retry from the offline screen flows straight into the loading state.
+      if (_offline) setState(() => _offline = false);
 
       final ethUrl = await RpcSettingsStore.instance.effectiveRpcUrl();
 
@@ -129,23 +174,30 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
       if (bridge.initialized) {
         var restored = false;
         try {
+          // One-shot migration for users who previously imported via a
+          // 12/24-word mnemonic. Derives the PK once via Go, saves it to
+          // the vault, wipes the mnemonic. No-op when nothing legacy is
+          // present, which is the steady-state for all new installs.
+          final migratedAddress =
+              await WalletVault.instance.migrateLegacyMnemonicToPrivateKey(bridge);
+
           String? walletSecret;
           String? walletAddress;
-          final saved = await WalletVault.instance.readMnemonic();
-          if (saved != null && saved.trim().isNotEmpty) {
-            final result = bridge.importWalletMnemonic(saved.trim());
-            walletAddress = result['address'] as String?;
-            walletSecret = saved.trim();
-            restored = true;
-          } else {
-            final pk = await WalletVault.instance.readPrivateKey();
-            if (pk != null && pk.trim().isNotEmpty) {
-              final result = bridge.importWalletPrivateKey(pk.trim());
+          final pk = await WalletVault.instance.readPrivateKey();
+          if (pk != null && pk.isNotEmpty) {
+            // If migration just ran, the wallet is already loaded in the
+            // Go SDK and re-importing would be wasteful. Otherwise this is
+            // a normal cold start with a saved PK.
+            if (migratedAddress != null && migratedAddress.isNotEmpty) {
+              walletAddress = migratedAddress;
+            } else {
+              final result = bridge.importWalletPrivateKey(pk);
               walletAddress = result['address'] as String?;
-              walletSecret = pk.trim();
-              restored = true;
             }
+            walletSecret = pk;
+            restored = true;
           }
+
           if (walletAddress != null && walletAddress.isNotEmpty) {
             final fp = _walletFingerprint(walletAddress);
             bridge.openWalletDatabase(fp);
@@ -154,7 +206,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
             _activateDbEncryption(bridge, walletSecret);
           }
         } on GoBridgeException catch (_) {
-          await WalletVault.instance.clearMnemonic();
+          await WalletVault.instance.clearStoredSecret();
         } catch (_) {}
         if (!mounted) return;
         setState(() {
@@ -237,7 +289,7 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
 
   /// Factory reset: ALL wallets, keys, DBs, logs, settings — nuclear option.
   Future<void> _fullFactoryReset() async {
-    await WalletVault.instance.clearMnemonic();
+    await WalletVault.instance.clearStoredSecret();
     await AppLockService.instance.clearLockCredentialsOnly();
     await _safeShutdown();
     final dir = await getApplicationSupportDirectory();
@@ -277,6 +329,19 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
     if (_runningFromDmg) {
       return const _DmgWarningScreen();
     }
+    if (_offline) {
+      return _OfflineScreen(
+        retrying: _checkingNetwork,
+        onRetry: () async {
+          if (!mounted) return;
+          setState(() {
+            _offline = false;
+            _sdkError = null;
+          });
+          await _initSDK();
+        },
+      );
+    }
     if (_sdkError != null) {
       return _ErrorScreen(
         error: _sdkError!,
@@ -297,7 +362,11 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
       );
     }
     if (!_sdkReady) {
-      return const _LoadingScreen();
+      return _LoadingScreen(
+        message: _checkingNetwork
+            ? 'Checking network...'
+            : 'Connecting to the Morpheus network...',
+      );
     }
     if (!_hasWallet) {
       return OnboardingScreen(onComplete: _onWalletCreated);
@@ -314,19 +383,110 @@ class _NodeNeoAppState extends State<NodeNeoApp> with WidgetsBindingObserver {
 }
 
 class _LoadingScreen extends StatelessWidget {
-  const _LoadingScreen();
+  final String message;
+  const _LoadingScreen({this.message = 'Connecting to the Morpheus network...'});
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: NeoTheme.green),
-            SizedBox(height: 24),
-            Text('Connecting to network...', style: TextStyle(color: Color(0xFF9CA3AF))),
+            const CircularProgressIndicator(color: NeoTheme.green),
+            const SizedBox(height: 24),
+            Text(
+              message,
+              style: const TextStyle(color: Color(0xFF9CA3AF)),
+              textAlign: TextAlign.center,
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown when the device has no internet at startup. Friendly retry UX so
+/// the user understands "fix your Wi-Fi", not "fix your blockchain RPC".
+class _OfflineScreen extends StatelessWidget {
+  final bool retrying;
+  final Future<void> Function() onRetry;
+
+  const _OfflineScreen({required this.retrying, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: NeoTheme.amber.withValues(alpha: 0.12),
+                    border: Border.all(
+                      color: NeoTheme.amber.withValues(alpha: 0.4),
+                      width: 2,
+                    ),
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.wifi_off_rounded,
+                      size: 36,
+                      color: NeoTheme.amber,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'No internet connection',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '${AppBrand.displayName} needs an internet connection to '
+                  'reach the Morpheus network. Check your Wi-Fi or cellular '
+                  'data, then try again.',
+                  style: TextStyle(
+                    color: Color(0xFF9CA3AF),
+                    fontSize: 14,
+                    height: 1.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 28),
+                SizedBox(
+                  width: 220,
+                  child: FilledButton.icon(
+                    onPressed: retrying ? null : () => onRetry(),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: NeoTheme.green,
+                      minimumSize: const Size(double.infinity, 48),
+                    ),
+                    icon: retrying
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.refresh_rounded, size: 20),
+                    label: Text(retrying ? 'Checking...' : 'Try again'),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -349,51 +509,162 @@ class _ErrorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final title = showRpcRecoveryActions
+        ? 'Blockchain unreachable'
+        : 'Not available on this build';
+    final subtitle = showRpcRecoveryActions
+        ? 'Your device is online, but ${AppBrand.displayName} couldn\'t reach '
+              'the Morpheus blockchain. The network may be temporarily down, '
+              'or your custom RPC endpoint may need to be updated.'
+        : null;
+
     return Scaffold(
       body: SafeArea(
         child: Center(
           child: Padding(
-            padding: const EdgeInsets.all(32),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('⚠️', style: TextStyle(fontSize: 48)),
-                const SizedBox(height: 16),
-                Text(
-                  showRpcRecoveryActions ? 'SDK Init Failed' : 'Not available on this build',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 200),
-                  child: SingleChildScrollView(
-                    child: Text(
-                      error,
-                      style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
-                      textAlign: TextAlign.center,
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: NeoTheme.amber.withValues(alpha: 0.12),
+                    border: Border.all(
+                      color: NeoTheme.amber.withValues(alpha: 0.4),
+                      width: 2,
+                    ),
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.cloud_off_rounded,
+                      size: 36,
+                      color: NeoTheme.amber,
                     ),
                   ),
                 ),
+                const SizedBox(height: 24),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Color(0xFF9CA3AF),
+                      fontSize: 14,
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
                 if (showRpcRecoveryActions) ...[
                   const SizedBox(height: 20),
                   if (onOpenNetworkSettings != null)
-                    FilledButton(
-                      onPressed: () => onOpenNetworkSettings!(),
-                      style: FilledButton.styleFrom(backgroundColor: NeoTheme.green),
-                      child: const Text('Edit custom RPC'),
+                    SizedBox(
+                      width: 280,
+                      child: FilledButton.icon(
+                        onPressed: () => onOpenNetworkSettings!(),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: NeoTheme.green,
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
+                        icon: const Icon(Icons.tune_rounded, size: 18),
+                        label: const Text('Edit blockchain endpoint'),
+                      ),
                     ),
-                  if (onOpenNetworkSettings != null) const SizedBox(height: 10),
+                  if (onOpenNetworkSettings != null)
+                    const SizedBox(height: 10),
                   if (onRetryDefaultRpc != null)
-                    OutlinedButton(
-                      onPressed: () => onRetryDefaultRpc!(),
-                      child: const Text('Reset to built-in public RPCs'),
+                    SizedBox(
+                      width: 280,
+                      child: OutlinedButton(
+                        onPressed: () => onRetryDefaultRpc!(),
+                        child: const Text('Reset to built-in public RPCs'),
+                      ),
                     ),
                 ],
+                const SizedBox(height: 24),
+                _ErrorDetailsExpander(error: error),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Collapsed-by-default expander with the raw error text. Power users / bug
+/// reporters can grab the underlying message; normies don't see a wall of
+/// "rpc: dial tcp 1.2.3.4:443: connect: network is unreachable" text.
+class _ErrorDetailsExpander extends StatefulWidget {
+  final String error;
+  const _ErrorDetailsExpander({required this.error});
+
+  @override
+  State<_ErrorDetailsExpander> createState() => _ErrorDetailsExpanderState();
+}
+
+class _ErrorDetailsExpanderState extends State<_ErrorDetailsExpander> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 360),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton.icon(
+            onPressed: () => setState(() => _expanded = !_expanded),
+            icon: Icon(
+              _expanded
+                  ? Icons.keyboard_arrow_up_rounded
+                  : Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: const Color(0xFF6B7280),
+            ),
+            label: Text(
+              _expanded ? 'Hide technical details' : 'Show technical details',
+              style: const TextStyle(
+                color: Color(0xFF6B7280),
+                fontSize: 12,
+              ),
+            ),
+          ),
+          if (_expanded)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF374151)),
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 160),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    widget.error,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: 11,
+                      color: Color(0xFF9CA3AF),
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

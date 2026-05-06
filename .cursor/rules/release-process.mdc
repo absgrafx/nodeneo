@@ -195,7 +195,12 @@ in pinned mode. Uncommenting belongs in a **separate** post-release commit
 when active SDK iteration resumes — typically rolled into the first
 `mobile/<feature>` PR of the next cycle.
 
-## 6. RELEASE_NOTES.md ritual (the important one)
+## 6. Doc rotation ritual (the important one)
+
+Three files move in lockstep when work ships. All three must be updated in
+the same release commit.
+
+### 6a. `RELEASE_NOTES.md`
 
 The CI release step does:
 ```
@@ -205,23 +210,57 @@ cat <asset-table>   >> /tmp/release-notes.md
 gh release create "$TAG_NAME" "$DMG_PATH" --notes-file /tmp/release-notes.md
 ```
 
-So the entire file becomes every future Release page body. Keep one section
-fully expanded; everything older lives in a table.
+So the entire file becomes every future Release page body. The file is a
+**reset-each-release** document: keep exactly one fully-expanded section
+(the latest), and demote everything older to a one-line row in the
+`## Previous Releases` table.
 
-**Each release:**
+Each cut:
 1. Add a new top section `## What's New in vX.Y.Z` with the full breakdown
-   (sections like Gateway / UX Polish / Engineering / iOS impact, etc.)
+   (sections grouped by area — Gateway, App Lock, Network, iOS Impact,
+   Engineering, etc. — whatever shape the cycle's work warrants)
 2. Demote the previously-top section to a one-line row in the
    `## Previous Releases` table. Each row needs a link to
    `https://github.com/absgrafx/nodeneo/releases/tag/vX.Y.Z` plus optional
    PR links `[#NN](.../pull/NN)`. Full detail stays pinned to that tag's
    GitHub Release page.
 
-Also bump:
-- `.ai-docs/feature_backlog.md` "Recently Shipped" — add a new vX.Y.Z section
-  above the previous one and update the `*Last updated:*` stamp at the top
-  of the section. The backlog can keep longer-form running history; the
-  RELEASE_NOTES table is just the user-facing summary.
+### 6b. `.ai-docs/architecture.md` "Recently Shipped"
+
+Architecture.md owns the **long-form record** of completed work. The
+`## Recently Shipped` section at the bottom of the file holds the running
+history; per-release entries stay there indefinitely so future contributors
+can search "when did we ship X?" without spelunking through old GitHub
+releases.
+
+Each cut:
+1. If a `### Next release (in progress)` block exists at the top of
+   *Recently Shipped*, rename it to `### vX.Y.Z — YYYY-MM-DD` and trim any
+   "to be validated" caveats now that the work is shipping.
+2. Otherwise add a new `### vX.Y.Z — YYYY-MM-DD` block above the previous
+   release entry with a paragraph + bullet list per shipped item.
+3. **Also** propagate any architectural changes inline (e.g. a new service
+   added to the Onboarding & Wallet section, a new layer in the layered
+   diagram, an updated Tech Stack row). The "Recently Shipped" log is the
+   *historical* record; the prose above it must reflect *current* state.
+
+### 6c. `.ai-docs/feature_backlog.md`
+
+The backlog is **open items only**. As soon as a feature ships, its
+description moves to architecture.md → Recently Shipped, and the backlog
+entry is deleted (not moved to a `Recently Shipped` subsection — that
+content lives in architecture.md now).
+
+Each cut:
+1. For every backlog item that shipped this cycle, delete its section
+   wholesale. If there are residual open follow-ups (telemetry, a deferred
+   polish item), leave a small "Open Questions / Follow-ups" stub under a
+   renamed heading that points readers at the architecture.md entry for
+   the shipped capability. Do NOT keep the full "What shipped" prose —
+   it's redundant with architecture.md.
+2. Update the `*Last updated:*` stamp at the bottom.
+3. Renumber the remaining items if the deletion left gaps and the order
+   no longer reads naturally.
 
 ## 7. Validate before pushing
 

@@ -92,12 +92,12 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
     final isDefaults = raw.isEmpty;
     final urlsToTest = isDefaults ? publicFallbackRpcUrls : raw;
 
+    final messenger = ScaffoldMessenger.of(context);
+
     if (!isDefaults) {
       final err = RpcSettingsStore.validateUserInput(raw);
       if (err != null) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(err)));
+        messenger.showSnackBar(SnackBar(content: Text(err)));
         return;
       }
     }
@@ -127,8 +127,9 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
       }
 
       final okCount = results.where((r) => r['ok'] == true).length;
+      if (!mounted) return;
       setState(() => _testResults = results);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text(
             '$okCount of ${results.length} RPC${results.length == 1 ? '' : 's'} passed (Base chainId $defaultBaseChainId)',

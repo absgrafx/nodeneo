@@ -51,7 +51,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
   bool _gwNetworkAccessible = false;
   final _gwPortCtrl = TextEditingController(text: '8083');
   List<Map<String, dynamic>> _apiKeys = [];
-  String? _newKeyFull; // shown once after generation
 
   @override
   void initState() {
@@ -134,12 +133,12 @@ class _ExpertScreenState extends State<ExpertScreen> {
     final isDefaults = raw.isEmpty;
     final urlsToTest = isDefaults ? publicFallbackRpcUrls : raw;
 
+    final messenger = ScaffoldMessenger.of(context);
+
     if (!isDefaults) {
       final err = RpcSettingsStore.validateUserInput(raw);
       if (err != null) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(err)));
+        messenger.showSnackBar(SnackBar(content: Text(err)));
         return;
       }
     }
@@ -167,8 +166,9 @@ class _ExpertScreenState extends State<ExpertScreen> {
       }
 
       final okCount = results.where((r) => r['ok'] == true).length;
+      if (!mounted) return;
       setState(() => _rpcTestResults = results);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text(
             '$okCount of ${results.length} RPC${results.length == 1 ? '' : 's'} passed (Base chainId $defaultBaseChainId)',
@@ -419,7 +419,6 @@ class _ExpertScreenState extends State<ExpertScreen> {
     try {
       final result = GoBridge().generateAPIKey(name);
       final fullKey = result['key'] as String? ?? '';
-      setState(() => _newKeyFull = fullKey);
       _loadApiKeys();
       _showNewKeyDialog(fullKey);
     } catch (e) {

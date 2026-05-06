@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../services/app_lock_service.dart';
+import '../../services/biometric_labels.dart';
 import '../../services/default_tuning_store.dart';
 import '../../services/form_factor.dart';
 import '../../services/keychain_sync_store.dart';
@@ -11,6 +13,7 @@ import '../../services/wallet_vault.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
 import '../security/app_lock_autofill.dart';
+import '../security/app_lock_setup_choice_screen.dart';
 import '../security/app_lock_setup_screen.dart';
 
 /// Preferences screen: system prompt, default tuning, session duration, security.
@@ -41,6 +44,12 @@ class _SessionsScreenState extends State<SessionsScreen> {
   bool _lockOn = false;
   bool _bioOn = false;
   bool _bioAvailable = false;
+  LockMode _lockMode = LockMode.off;
+  // Platform-aware label for the biometric modality on this device — refined
+  // by `_loadSecurity` (Face ID vs Touch ID vs Fingerprint vs Face Unlock vs
+  // Windows Hello). Defaults to the platform best-guess so the section renders
+  // sensibly during the async probe.
+  BiometricLabels _bio = BiometricLabels.platformGuess;
   bool _icloudSync = false;
   bool _icloudSyncChanging = false;
 
@@ -143,16 +152,18 @@ class _SessionsScreenState extends State<SessionsScreen> {
 
   Future<void> _loadSecurity() async {
     final auth = LocalAuthentication();
-    final dev = await auth.isDeviceSupported();
-    final can = dev && await auth.canCheckBiometrics;
+    final labels = await BiometricLabels.probe(auth);
     final lock = await AppLockService.instance.isLockEnabled;
     final bio = await AppLockService.instance.biometricEnabled;
+    final mode = await AppLockService.instance.mode;
     final sync = await KeychainSyncStore.instance.isEnabled();
     if (!mounted) return;
     setState(() {
       _lockOn = lock;
       _bioOn = bio;
-      _bioAvailable = can;
+      _bioAvailable = labels.available;
+      _bio = labels;
+      _lockMode = mode;
       _icloudSync = sync;
       _securityLoading = false;
     });
@@ -161,7 +172,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
   Future<void> _openEnableLock() async {
     final ok = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const AppLockSetupScreen(changingPassword: false),
+        builder: (_) => const AppLockSetupChoiceScreen(),
       ),
     );
     if (ok == true && mounted) await _loadSecurity();
@@ -177,6 +188,30 @@ class _SessionsScreenState extends State<SessionsScreen> {
   }
 
   Future<void> _confirmDisableLock() async {
+    // Biometric-only mode: confirm the user is physically present with a
+    // Face ID prompt instead of asking for a password we never stored.
+    if (_lockMode == LockMode.biometricOnly) {
+      final auth = LocalAuthentication();
+      try {
+        final ok = await auth.authenticate(
+          localizedReason: 'Confirm ${_bio.name} to turn off app lock',
+          options: const AuthenticationOptions(
+            stickyAuth: true,
+            biometricOnly: true,
+          ),
+        );
+        if (!mounted || !ok) return;
+        await AppLockService.instance.disableLock();
+        if (mounted) await _loadSecurity();
+      } on PlatformException catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message ?? 'Biometric check failed.')),
+        );
+      }
+      return;
+    }
+
     final ctrl = TextEditingController();
     final userCtrl = TextEditingController(text: kAppLockAutofillUsername);
     final pwFocus = FocusNode();
@@ -254,8 +289,65 @@ class _SessionsScreenState extends State<SessionsScreen> {
       );
       return;
     }
+    // Refuse to turn biometrics off in biometric-only mode — that would
+    // effectively disable the lock through a side door without the user
+    // ever confirming. Send them through "Turn off app lock" instead.
+    if (!v && _lockMode == LockMode.biometricOnly) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Add a backup password first, or turn off app lock to remove biometrics.',
+          ),
+        ),
+      );
+      return;
+    }
     await AppLockService.instance.setBiometricEnabled(v);
     if (mounted) await _loadSecurity();
+  }
+
+  Future<void> _addBackupPassword() async {
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => const AppLockSetupScreen(changingPassword: false),
+      ),
+    );
+    if (ok == true && mounted) await _loadSecurity();
+  }
+
+  Future<void> _removeBackupPassword() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove backup password?'),
+        content: Text(
+          'You\'ll only be able to unlock with ${_bio.name}. Your wallet '
+          'private key still works as a fallback if biometrics fail.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final removed = await AppLockService.instance.removePasswordKeepBiometric();
+    if (!mounted) return;
+    if (!removed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enable biometrics first before removing the password.'),
+        ),
+      );
+      return;
+    }
+    await _loadSecurity();
   }
 
   Future<void> _setICloudSync(bool v) async {
@@ -297,8 +389,15 @@ class _SessionsScreenState extends State<SessionsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
-            const _GatewayScopeNotice(),
-            const SizedBox(height: 12),
+            // Mobile builds don't ship the AI Gateway, so this whole notice
+            // would be confusing — there's no Cursor/Zed/curl path to talk
+            // about. Desktop users still need it (the most common mistake is
+            // assuming preferences saved here follow them into Cursor) but in
+            // a more subtle, expandable form.
+            if (PlatformCaps.supportsGateway) ...[
+              const _GatewayScopeNotice(),
+              const SizedBox(height: 12),
+            ],
             SectionCard(
               icon: Icons.psychology_outlined,
               title: 'System Prompt',
@@ -334,7 +433,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
               title: 'Security',
               status: StatusPill(
                 active: _lockOn,
-                label: _lockOn ? 'Locked' : 'Off',
+                label: _lockStatusPillLabel(),
               ),
               child: _buildSecurityBody(theme),
             ),
@@ -748,6 +847,38 @@ class _SessionsScreenState extends State<SessionsScreen> {
     );
   }
 
+  String _lockStatusPillLabel() {
+    switch (_lockMode) {
+      case LockMode.off:
+        return 'Off';
+      case LockMode.biometricOnly:
+        return _bio.name;
+      case LockMode.passwordOnly:
+        return 'Password';
+      case LockMode.passwordWithBiometric:
+        return '${_bio.name} + password';
+    }
+  }
+
+  String _lockBodyDescription() {
+    switch (_lockMode) {
+      case LockMode.off:
+        return 'Require ${_bio.name} or a password before using the app. '
+            'Separate from your wallet private key.';
+      case LockMode.biometricOnly:
+        return 'Unlocking with ${_bio.name}. Add a backup password to '
+            'unlock when biometrics fail (e.g. mask, sunglasses).';
+      case LockMode.passwordOnly:
+        return _bioAvailable
+            ? 'Unlocking with a password. Turn on ${_bio.name} below for '
+                  'a faster unlock.'
+            : 'Unlocking with a password. Biometrics are not available on '
+                  'this device.';
+      case LockMode.passwordWithBiometric:
+        return 'Unlocking with ${_bio.name}, password as fallback.';
+    }
+  }
+
   Widget _buildSecurityBody(ThemeData theme) {
     if (_securityLoading) {
       return const Center(
@@ -757,12 +888,13 @@ class _SessionsScreenState extends State<SessionsScreen> {
         ),
       );
     }
+    final hasPw = _lockMode == LockMode.passwordOnly ||
+        _lockMode == LockMode.passwordWithBiometric;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Adds a password (and optional biometrics) before using the app. '
-          'This is not your seed phrase — use a unique app password.',
+          _lockBodyDescription(),
           style: theme.textTheme.bodySmall?.copyWith(
             color: theme.hintColor,
             fontSize: 11,
@@ -781,23 +913,35 @@ class _SessionsScreenState extends State<SessionsScreen> {
             ),
           )
         else ...[
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: _openChangePassword,
-              child: const Text('Change app password'),
+          if (hasPw)
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _openChangePassword,
+                child: const Text('Change app password'),
+              ),
+            )
+          else
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _addBackupPassword,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add backup password'),
+              ),
             ),
-          ),
           const SizedBox(height: 8),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'Unlock with biometrics',
-              style: TextStyle(fontSize: 13),
+            title: Text(
+              'Unlock with ${_bio.name}',
+              style: const TextStyle(fontSize: 13),
             ),
             subtitle: Text(
               _bioAvailable
-                  ? 'Face ID, Touch ID, or fingerprint.'
+                  ? (_lockMode == LockMode.biometricOnly
+                        ? 'Add a backup password before turning this off.'
+                        : '${_bio.name} unlocks instantly on this device.')
                   : 'Not available on this device.',
               style: TextStyle(fontSize: 11, color: theme.hintColor),
             ),
@@ -807,6 +951,19 @@ class _SessionsScreenState extends State<SessionsScreen> {
                 : (v) => _setBiometric(v),
             activeThumbColor: NeoTheme.green,
           ),
+          if (_lockMode == LockMode.passwordWithBiometric) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: _removeBackupPassword,
+                child: Text(
+                  'Remove backup password',
+                  style: TextStyle(fontSize: 12, color: theme.hintColor),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerLeft,
@@ -882,65 +1039,101 @@ class _SessionsScreenState extends State<SessionsScreen> {
 }
 
 /// Inline notice that explains the scope of these preferences vs requests
-/// that flow through the local AI Gateway. Sits at the top of the
-/// Preferences list because the most common user mistake is assuming the
-/// system prompt / tuning saved here will follow them into Cursor / Zed /
-/// curl sessions.
+/// that flow through the local AI Gateway. Desktop-only — mobile builds
+/// don't ship the gateway and the [SessionsScreen] gates this widget out
+/// before it ever renders.
 ///
-/// We keep this static and visually quieter than a SectionCard so it reads
-/// as context, not another configurable surface.
-class _GatewayScopeNotice extends StatelessWidget {
+/// Collapsed by default to keep the Preferences screen visually quiet — the
+/// information is important the first time you read it, but tedious every
+/// other visit. Tapping the row expands the full passthrough explanation.
+/// This was the on-device feedback from validation 2026-05-01: the original
+/// always-on green-bordered card dominated the screen on every return visit.
+class _GatewayScopeNotice extends StatefulWidget {
   const _GatewayScopeNotice();
 
   @override
+  State<_GatewayScopeNotice> createState() => _GatewayScopeNoticeState();
+}
+
+class _GatewayScopeNoticeState extends State<_GatewayScopeNotice> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: NeoTheme.green.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: NeoTheme.green.withValues(alpha: 0.25),
-          width: 1,
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.info_outline_rounded,
-            size: 16,
-            color: NeoTheme.green.withValues(alpha: 0.85),
+    final accentColor = NeoTheme.green.withValues(alpha: 0.85);
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () => setState(() => _expanded = !_expanded),
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+          decoration: BoxDecoration(
+            color: _expanded
+                ? NeoTheme.green.withValues(alpha: 0.04)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: _expanded
+                  ? NeoTheme.green.withValues(alpha: 0.18)
+                  : NeoTheme.mainPanelOutline(0.25),
+              width: 1,
+            ),
           ),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text.rich(
-              TextSpan(
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFFD1D5DB),
-                  height: 1.4,
-                ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  TextSpan(
-                    text: 'These preferences apply to chats started in '
-                        'Node Neo only.',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                  Icon(Icons.info_outline_rounded, size: 14, color: accentColor),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'These preferences apply to Node Neo chats only',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF9CA3AF),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
-                  TextSpan(
-                    text:
-                        '  Requests that flow through the AI Gateway '
-                        '(Cursor, Zed, curl, or any OpenAI-compatible '
-                        'client) are passed through verbatim — the calling '
-                        'application controls its own system prompt, tools, '
-                        'temperature, and max_tokens. Override them on the '
-                        'caller side, not here.',
+                  Icon(
+                    _expanded
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: const Color(0xFF6B7280),
                   ),
                 ],
               ),
-            ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 160),
+                curve: Curves.easeOut,
+                child: _expanded
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(22, 8, 4, 2),
+                        child: Text(
+                          'Requests that flow through the AI Gateway '
+                          '(Cursor, Zed, curl, or any OpenAI-compatible '
+                          'client) are passed through verbatim — the calling '
+                          'application controls its own system prompt, tools, '
+                          'temperature, and max_tokens. Override them on the '
+                          'caller side, not here.',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: const Color(0xFFD1D5DB),
+                            height: 1.45,
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

@@ -41,3 +41,14 @@ android/local.properties
 *.env
 *.key
 *.pem
+
+# App Store Connect API key — created in ASC → Users & Access → Integrations,
+# downloadable exactly once. Treat like a private key; never commit.
+*.p8
+AuthKey_*.p8
+.appstore
+
+# Internal working docs — drafts, security plans, handoff context, dev
+# roadmaps. Treat as ephemeral planning notes; never publish. Public
+# README.md / docs go elsewhere.
+.ai-docs/
