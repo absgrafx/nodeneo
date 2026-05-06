@@ -12,7 +12,7 @@ enum LockMode {
   off,
 
   /// Face ID / Touch ID only. No password is stored, no fallback field is
-  /// shown on the lock screen. Recovery is via wallet phrase / private key.
+  /// shown on the lock screen. Recovery is via the wallet's private key.
   biometricOnly,
 
   /// Password only — biometrics disabled or unavailable on the device.
@@ -25,7 +25,7 @@ enum LockMode {
 
 /// Optional app-level lock (Face ID / Touch ID and/or password) for a hot
 /// wallet UX. When a password is set it is stored as SHA-256(salt:password);
-/// it is **not** the same secret as the wallet mnemonic.
+/// it is **not** the same secret as the wallet's private key.
 class AppLockService {
   AppLockService._();
   static final AppLockService instance = AppLockService._();

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../../services/app_lock_service.dart';
+import '../../services/biometric_labels.dart';
 import '../../constants/app_brand.dart';
 import '../../theme.dart';
 import '../../widgets/app_lock_recovery_sheet.dart';
@@ -35,11 +36,19 @@ class _AppLockScreenState extends State<AppLockScreen> {
   bool _autoFiredBiometric = false;
   LockMode _mode = LockMode.passwordOnly;
   bool _modeLoaded = false;
+  // In `passwordWithBiometric` mode the password field is collapsed by default
+  // so the biometric option is the visually obvious primary path. The user can
+  // expand it with "Use password instead" if biometrics fail / are unavailable.
+  bool _passwordExpanded = false;
+  // Best-guess biometric labels initialise from the platform. Refined on
+  // initState by an async device probe (Face ID vs Touch ID, etc.).
+  BiometricLabels _bio = BiometricLabels.platformGuess;
 
   @override
   void initState() {
     super.initState();
     _loadMode();
+    _refineBiometricLabels();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeAutoTriggerBiometric();
     });
@@ -52,6 +61,12 @@ class _AppLockScreenState extends State<AppLockScreen> {
       _mode = m;
       _modeLoaded = true;
     });
+  }
+
+  Future<void> _refineBiometricLabels() async {
+    final labels = await BiometricLabels.probe(_auth);
+    if (!mounted) return;
+    setState(() => _bio = labels);
   }
 
   @override
@@ -133,7 +148,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
         return;
       }
       final ok = await _auth.authenticate(
-        localizedReason: 'Unlock ${AppBrand.displayName}',
+        localizedReason: 'Unlock ${AppBrand.displayName} with ${_bio.name}',
         options: const AuthenticationOptions(
           stickyAuth: true,
           biometricOnly: true,
@@ -160,8 +175,16 @@ class _AppLockScreenState extends State<AppLockScreen> {
     final mode = _modeLoaded ? _mode : LockMode.passwordWithBiometric;
     final showBiometric = mode == LockMode.biometricOnly ||
         mode == LockMode.passwordWithBiometric;
-    final showPassword = mode == LockMode.passwordOnly ||
+    final hasPasswordFallback = mode == LockMode.passwordOnly ||
         mode == LockMode.passwordWithBiometric;
+    // Steve-Jobs UX: when both Face ID and a password are configured, Face ID
+    // is the only thing visible at first. The password field stays hidden
+    // behind a "Use password instead" link so the screen reads as a single
+    // primary CTA. Password-only users still see the field immediately.
+    final showPasswordField = mode == LockMode.passwordOnly ||
+        (mode == LockMode.passwordWithBiometric && _passwordExpanded);
+    final showPasswordToggle = mode == LockMode.passwordWithBiometric &&
+        !_passwordExpanded;
 
     return Scaffold(
       body: SafeArea(
@@ -189,7 +212,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
                 const SizedBox(height: 32),
                 if (showBiometric)
                   Padding(
-                    padding: EdgeInsets.only(bottom: showPassword ? 20 : 0),
+                    padding: EdgeInsets.only(bottom: showPasswordField ? 20 : 0),
                     child: FilledButton.icon(
                       onPressed: _busy ? null : _unlockWithBiometrics,
                       style: FilledButton.styleFrom(
@@ -197,10 +220,28 @@ class _AppLockScreenState extends State<AppLockScreen> {
                         minimumSize: const Size(double.infinity, 48),
                       ),
                       icon: const Icon(Icons.fingerprint, size: 22),
-                      label: const Text('Use Face ID / Touch ID'),
+                      label: Text(_bio.unlockCta),
                     ),
                   ),
-                if (showPassword) ...[
+                if (showPasswordToggle)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () {
+                              setState(() => _passwordExpanded = true);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) _pwFocus.requestFocus();
+                              });
+                            },
+                      child: Text(
+                        'Use password instead',
+                        style: TextStyle(color: theme.hintColor, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                if (showPasswordField) ...[
                   AppLockHiddenUsernameForAutofill(controller: _user),
                   const SizedBox(height: 8),
                   TextField(
@@ -243,7 +284,7 @@ class _AppLockScreenState extends State<AppLockScreen> {
                   const SizedBox(height: 12),
                   Text(_error!, style: const TextStyle(color: Color(0xFFF87171), fontSize: 13)),
                 ],
-                if (showPassword) ...[
+                if (showPasswordField) ...[
                   const SizedBox(height: 20),
                   OutlinedButton(
                     onPressed: _busy ? null : _unlockWithPassword,
@@ -255,6 +296,20 @@ class _AppLockScreenState extends State<AppLockScreen> {
                           )
                         : const Text('Unlock with password'),
                   ),
+                  if (mode == LockMode.passwordWithBiometric)
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => setState(() {
+                                _pw.clear();
+                                _error = null;
+                                _passwordExpanded = false;
+                              }),
+                      child: Text(
+                        'Hide password',
+                        style: TextStyle(color: theme.hintColor, fontSize: 12),
+                      ),
+                    ),
                 ],
                 const Spacer(),
                 TextButton(
@@ -264,9 +319,9 @@ class _AppLockScreenState extends State<AppLockScreen> {
                           showAppLockRecoverySheet(context);
                         },
                   child: Text(
-                    showPassword
-                        ? 'Forgot password? Recover with phrase or key'
-                        : 'Can\'t use Face ID? Recover with phrase or key',
+                    hasPasswordFallback
+                        ? 'Forgot password? Recover with private key'
+                        : 'Can\'t use ${_bio.name}? Recover with private key',
                     style: TextStyle(color: theme.hintColor, fontSize: 13),
                   ),
                 ),

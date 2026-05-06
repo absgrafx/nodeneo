@@ -145,6 +145,7 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
     if (result == null || result.files.isEmpty) return;
     final inputPath = result.files.single.path;
     if (inputPath == null) return;
+    if (!mounted) return;
 
     final ok = await showDialog<bool>(
       context: context,

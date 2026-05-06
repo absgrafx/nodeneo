@@ -4,6 +4,7 @@ import 'package:local_auth/local_auth.dart';
 
 import '../../constants/app_brand.dart';
 import '../../services/app_lock_service.dart';
+import '../../services/biometric_labels.dart';
 import '../../services/form_factor.dart';
 import '../../theme.dart';
 import 'app_lock_setup_screen.dart';
@@ -23,7 +24,10 @@ class AppLockSetupChoiceScreen extends StatefulWidget {
 
 class _AppLockSetupChoiceScreenState extends State<AppLockSetupChoiceScreen> {
   final _auth = LocalAuthentication();
-  bool _bioAvailable = false;
+  // Optimistic platform default keeps the screen readable during the async
+  // probe; refined to the precise modality (Touch ID vs Face ID, Fingerprint
+  // vs Face Unlock, etc.) once `BiometricLabels.probe` completes.
+  BiometricLabels _bio = BiometricLabels.platformGuess;
   bool _checking = true;
   bool _busy = false;
 
@@ -34,16 +38,10 @@ class _AppLockSetupChoiceScreenState extends State<AppLockSetupChoiceScreen> {
   }
 
   Future<void> _probeBiometrics() async {
-    bool can = false;
-    try {
-      final supported = await _auth.isDeviceSupported();
-      can = supported && await _auth.canCheckBiometrics;
-    } catch (_) {
-      can = false;
-    }
+    final labels = await BiometricLabels.probe(_auth);
     if (!mounted) return;
     setState(() {
-      _bioAvailable = can;
+      _bio = labels;
       _checking = false;
     });
   }
@@ -56,7 +54,8 @@ class _AppLockSetupChoiceScreenState extends State<AppLockSetupChoiceScreen> {
       // the storage flag. Otherwise a misconfigured device (no enrolled face,
       // passcode missing) would lock the user out on next cold start.
       final ok = await _auth.authenticate(
-        localizedReason: 'Confirm Face ID for ${AppBrand.displayName} app lock',
+        localizedReason:
+            '${_bio.confirmReasonVerb} ${AppBrand.displayName} app lock',
         options: const AuthenticationOptions(
           stickyAuth: true,
           biometricOnly: true,
@@ -72,7 +71,7 @@ class _AppLockSetupChoiceScreenState extends State<AppLockSetupChoiceScreen> {
       final messenger = ScaffoldMessenger.maybeOf(context);
       Navigator.of(context).pop(true);
       messenger?.showSnackBar(
-        const SnackBar(content: Text('App lock enabled with Face ID.')),
+        SnackBar(content: Text('App lock enabled with ${_bio.name}.')),
       );
     } on PlatformException catch (e) {
       if (!mounted) return;
@@ -118,14 +117,14 @@ class _AppLockSetupChoiceScreenState extends State<AppLockSetupChoiceScreen> {
               const SizedBox(height: 24),
               _LockChoiceCard(
                 icon: Icons.face_outlined,
-                title: 'Lock with Face ID / Touch ID',
-                subtitle: _bioAvailable
+                title: _bio.setupTitle,
+                subtitle: _bio.available
                     ? 'Recommended. Unlocks instantly on this device. '
                         'You can add a backup password later.'
-                    : 'Not available on this device. Set up Face ID or '
-                        'Touch ID in Settings to use this option.',
-                primary: _bioAvailable,
-                enabled: _bioAvailable && !_busy && !_checking,
+                    : 'Not available on this device. Set up ${_bio.name} '
+                        'in system settings to use this option.',
+                primary: _bio.available,
+                enabled: _bio.available && !_busy && !_checking,
                 cta: _busy
                     ? const SizedBox(
                         height: 18,
@@ -135,25 +134,25 @@ class _AppLockSetupChoiceScreenState extends State<AppLockSetupChoiceScreen> {
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Use Face ID'),
+                    : Text(_bio.unlockCta),
                 onTap: _enableBiometricOnly,
               ),
               const SizedBox(height: 12),
               _LockChoiceCard(
                 icon: Icons.password_outlined,
                 title: 'Lock with a password',
-                subtitle: 'A separate app password (not your wallet seed). '
+                subtitle: 'A separate app password (not your wallet private key). '
                     'Useful if biometrics are unavailable or you want a '
                     'shared device password.',
-                primary: !_bioAvailable,
+                primary: !_bio.available,
                 enabled: !_busy,
                 cta: const Text('Set a password'),
                 onTap: _enablePassword,
               ),
               const SizedBox(height: 16),
               Text(
-                'Either option, your wallet seed phrase / private key always '
-                'works as a recovery path if you get locked out.',
+                'Either way, your wallet private key always works as a '
+                'recovery path if you get locked out.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.hintColor,
                   height: 1.4,

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        TestFlight / App Store distribution export options.
+
+        Used by `make ipa-testflight`, which wraps:
+            flutter build ipa --export-options-plist=ios/ExportOptions.plist
+
+        Apple renamed the App Store export method to `app-store-connect` in
+        Xcode 15. The legacy name `app-store` still works but is deprecated.
+
+        Signing is automatic — Xcode picks (or auto-creates) the
+        Apple Distribution certificate + App Store provisioning profile that
+        match the team + bundle identifier in the project. There is no
+        per-bundle-id provisioningProfiles dict here on purpose; manual
+        signing would require us to mint and check in a profile UUID.
+
+        On the first archive after a clean machine, Xcode will prompt to
+        create the missing Apple Distribution cert. It uses the team chosen
+        by `teamID` below to do that without interactive selection.
+    -->
+    <key>method</key>
+    <string>app-store-connect</string>
+
+    <key>teamID</key>
+    <string>2S4578V7ZD</string>
+
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!--
+        Strip Swift symbols from the archive (smaller IPA, no impact on
+        crash reports — symbols are uploaded separately to ASC).
+    -->
+    <key>stripSwiftSymbols</key>
+    <true/>
+
+    <!--
+        Upload the .dSYM bundles alongside the IPA so App Store Connect
+        can symbolicate any crash reports we receive from TestFlight users.
+    -->
+    <key>uploadSymbols</key>
+    <true/>
+
+    <!--
+        Don't upload the bitcode IR. Apple deprecated bitcode in Xcode 14;
+        builds for iOS no longer ship a bitcode bundle and uploading would
+        be rejected by ASC validation.
+    -->
+    <key>uploadBitcode</key>
+    <false/>
+
+    <!--
+        ASC distribution requires a *thinning* choice. `<thin-for-all-variants>`
+        tells Xcode to leave the IPA universal so App Store Connect can do
+        per-device thinning at install time. Same as the GUI "App Thinning:
+        None" choice in the Distribute dialog.
+    -->
+    <key>thinning</key>
+    <string>&lt;none&gt;</string>
+
+    <!--
+        Distribution profiles are managed by ASC; we don't need a
+        manageAppVersionAndBuildNumber bump (we control versioning via
+        pubspec.yaml → FLUTTER_BUILD_NAME / FLUTTER_BUILD_NUMBER).
+    -->
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+</dict>
+</plist>
