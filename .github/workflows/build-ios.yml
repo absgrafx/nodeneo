@@ -1,0 +1,363 @@
+name: iOS Build & TestFlight
+#
+# Branch Strategy (mirrors build-macos.yml + Morpheus-Lumerin-Node):
+#   • dev:  Build + upload to TestFlight Internal Group (no review)
+#   • main: Build + upload to TestFlight + git tag + GitHub Release (notes only)
+#
+# App Store submission for review is intentionally NOT automated. The actual
+# "Submit for Review" button in App Store Connect requires complete metadata
+# (screenshots, age rating, review notes, what's-new copy), and an Apple
+# rejection is expensive enough that gating it behind a human eyeball click
+# is the right call. Once the build lands in TestFlight from main, promote
+# it to App Store via App Store Connect → My Apps → 1.0 Prepare for Submission
+# → "Add Build" → click Submit.
+#
+# SemVer Tagging:
+#   • main: auto-bumps MINOR (v3.4.0, v3.5.0, …) unless VMAJ_NEW is raised
+#   • dev:  vMAJ.MIN.COMMITS-dev (e.g. v3.4.7-dev) — not published to GH
+#
+# Trigger: fires on push (i.e. PR merge) to dev or main only.
+
+on:
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.41.7"
+  GO_VERSION: "1.26"
+  # Bundle identifier registered in App Store Connect (matches
+  # ios/Runner.xcodeproj/project.pbxproj DEVELOPMENT_TEAM 2S4578V7ZD).
+  IOS_BUNDLE_ID: "com.absgrafx.nodeneo"
+
+permissions:
+  contents: write
+
+jobs:
+  # ── SemVer Tag Generation ─────────────────────────────────────────
+  # Identical logic to build-macos.yml so a given commit gets the SAME
+  # tag whether it ships to macOS or iOS. Important: the iOS build number
+  # (CFBundleVersion) is set from GITHUB_RUN_NUMBER, which is global to the
+  # repo, so an iOS build cannot collide with a macOS build of the same
+  # short version — App Store Connect rejects duplicate
+  # (CFBundleShortVersionString, CFBundleVersion) pairs.
+  generate-tag:
+    runs-on: ubuntu-latest
+    name: Generate SemVer Tag
+    outputs:
+      tag_name: ${{ steps.semver.outputs.tag_name }}
+      vfull: ${{ steps.semver.outputs.vfull }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next version
+        id: semver
+        run: |
+          VMAJ_NEW=3
+          VMIN_NEW=0
+          VPAT_NEW=0
+
+          VLAST=$(git tag -l "v[0-9]*" \
+            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" \
+            | sort -V | tail -n 1 | cut -c2-)
+
+          if [ -n "$VLAST" ]; then
+            eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
+          else
+            VMAJ=0; VMIN=0; VPAT=0
+          fi
+
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
+              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW; VPAT=$VPAT_NEW
+            else
+              VMIN=$((VMIN + 1)); VPAT=0
+            fi
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VTAG=v${VFULL}
+          else
+            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
+              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW
+            fi
+            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || echo HEAD)
+            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD)
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            RNAME=${GITHUB_REF_NAME##*/}
+            VTAG=v${VFULL}-${RNAME}
+          fi
+
+          echo "tag_name=${VTAG}" >> "$GITHUB_OUTPUT"
+          echo "vfull=${VFULL}"   >> "$GITHUB_OUTPUT"
+          echo "### Build Tag: \`${VTAG}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Build IPA + ship to TestFlight ────────────────────────────────
+  build-ios:
+    runs-on: macos-latest
+    needs: generate-tag
+    timeout-minutes: 45
+    env:
+      APP_VERSION: ${{ needs.generate-tag.outputs.vfull }}
+      TAG_NAME: ${{ needs.generate-tag.outputs.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # ── Toolchains ──
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.mod
+
+      - name: Install Python dependencies (branding pipeline)
+        run: pip3 install --break-system-packages cairosvg
+
+      # ── Resolve embedded proxy-router version ──
+      # Same step as build-macos.yml, with the bare-hash fix applied here too:
+      # we drop --single-branch so `git describe --tags` can reach release tags
+      # cut from main even when our pinned commit is on dev. Without this,
+      # the in-app "About" → "Proxy-router" row shows the bare 12-char hash
+      # instead of the v7.0.0-N-g<hash> form.
+      - name: Determine embedded proxy-router version
+        id: pr_version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_COMMIT=$(grep 'MorpheusAIs/Morpheus-Lumerin-Node/proxy-router' go/go.mod | grep -oE '[0-9a-f]{12}$' || echo "unknown")
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/MorpheusAIs/Morpheus-Lumerin-Node.git /tmp/morpheus-lumerin-node 2>/dev/null || true
+          cd /tmp/morpheus-lumerin-node
+          git fetch origin --tags 2>/dev/null || true
+          git fetch origin main:main 2>/dev/null || true
+          PR_VERSION=$(git describe --tags --always --match 'v*' "$PR_COMMIT" 2>/dev/null || echo "$PR_COMMIT")
+          echo "PR_VERSION=$PR_VERSION" >> "$GITHUB_OUTPUT"
+          echo "PR_COMMIT=$PR_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "Embedded proxy-router: $PR_VERSION ($PR_COMMIT)"
+
+      # ── Build Go iOS static archive ──
+      # `make go-ios` produces build/go/ios/libnodeneo.a as a c-archive for
+      # arm64 device (LC_BUILD_VERSION platform=2). The flutter build below
+      # links it via the Xcode project's "Other Linker Flags" entry.
+      - name: Build Go iOS static archive
+        env:
+          PR_VERSION: ${{ steps.pr_version.outputs.PR_VERSION }}
+          PR_COMMIT: ${{ steps.pr_version.outputs.PR_COMMIT }}
+        run: make go-ios
+
+      # ── Flutter dependencies ──
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # ── Branding pipeline ──
+      - name: Rasterize brand assets
+        run: |
+          python3 tools/branding/render_launcher_icons.py
+          dart run flutter_launcher_icons
+          dart run flutter_native_splash:create
+
+      # ── Set up the Apple Distribution signing identity ──
+      # The .p12 cert is exported from a developer's keychain (Keychain
+      # Access → "Apple Distribution: Alan Sorber (2S4578V7ZD)" → right-click
+      # → Export → .p12 with a password) and stored as a base64-encoded
+      # GitHub Secret. We import it into a fresh ephemeral keychain so it
+      # doesn't bleed into the runner's default keychain or persist across
+      # jobs. The keychain is unlocked once with KEYCHAIN_PASSWORD and the
+      # partition list is opened so codesign can use the key without
+      # interactive prompting.
+      - name: Import Apple Distribution certificate
+        env:
+          APPLE_DIST_CERT_P12_BASE64: ${{ secrets.APPLE_DIST_CERT_P12_BASE64 }}
+          APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_DIST_CERT_P12_BASE64" ]; then
+            echo "::error::APPLE_DIST_CERT_P12_BASE64 secret is empty. See"
+            echo "          .ai-docs/ios_device_signing.md → Section 3 for how"
+            echo "          to export the Apple Distribution cert as .p12 and"
+            echo "          base64-encode it for this secret."
+            exit 1
+          fi
+          echo "$APPLE_DIST_CERT_P12_BASE64" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+          security find-identity -p codesigning -v build.keychain
+
+      # ── Place ASC API key where xcodebuild looks for it ──
+      # xcodebuild's automatic signing path can fetch + create provisioning
+      # profiles using an ASC API key, which avoids the manual "log into
+      # Xcode" prompt. The key file must live at the standard path
+      # ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 — same convention
+      # `make upload-testflight` follows. We re-use the same key for
+      # archive-time signing AND for the upload step below.
+      - name: Stage App Store Connect API key
+        env:
+          APPLE_ASC_API_KEY_ID: ${{ secrets.APPLE_ASC_API_KEY_ID }}
+          APPLE_ASC_API_KEY_P8: ${{ secrets.APPLE_ASC_API_KEY_P8 }}
+        run: |
+          if [ -z "$APPLE_ASC_API_KEY_ID" ] || [ -z "$APPLE_ASC_API_KEY_P8" ]; then
+            echo "::error::APPLE_ASC_API_KEY_ID or APPLE_ASC_API_KEY_P8 is empty."
+            echo "          See .ai-docs/ios_device_signing.md → Section 2 for how"
+            echo "          to create the ASC API key."
+            exit 1
+          fi
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$APPLE_ASC_API_KEY_P8" | base64 --decode \
+            > "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
+          echo "ASC API key staged at ~/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
+
+      # ── Build the IPA ──
+      # Uses the same path local devs run via `make ipa-testflight`:
+      #   flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+      # The plist already specifies app-store-connect distribution + automatic
+      # signing + team 2S4578V7ZD. CFBundleShortVersionString comes from
+      # --build-name, CFBundleVersion from --build-number (must be unique per
+      # short-version pair across all uploads to ASC).
+      - name: Flutter build IPA (release)
+        env:
+          ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
+        run: |
+          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          if [ -n "$ETH_RPC_URL" ]; then
+            DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
+          fi
+          flutter build ipa --release \
+            --export-options-plist=ios/ExportOptions.plist \
+            $DART_DEFINES
+          ls -lh build/ios/ipa/*.ipa
+
+      # ── Verify Go FFI symbols survived Apple's strip pass ──
+      # Mirrors the local `_verify-ipa-symbols` Makefile check. If
+      # STRIP_STYLE drifts back to "all", Init/Shutdown/etc. get nuked and
+      # Dart's dlsym fails at runtime with "Failed to lookup symbol 'Init'",
+      # which only surfaces on TestFlight install. Catching here saves a
+      # 10-15 min upload + processing round-trip + the test-pilot install
+      # before anyone notices.
+      - name: Verify Go FFI symbols in IPA
+        run: |
+          IPA="$(ls -t build/ios/ipa/*.ipa | head -1)"
+          TMPDIR_CHECK=$(mktemp -d)
+          unzip -q -p "$IPA" Payload/Runner.app/Runner > "$TMPDIR_CHECK/Runner"
+          if ! nm -gU "$TMPDIR_CHECK/Runner" 2>/dev/null | grep -q ' _Init$'; then
+            echo "::error::Go FFI symbol 'Init' is NOT exported in the shipped Runner binary."
+            echo "          The IPA will fail at runtime with:"
+            echo "            Failed to lookup symbol 'Init': dlsym(RTLD_DEFAULT, Init); symbol not found"
+            echo "          Most likely cause: STRIP_STYLE in ios/Runner.xcodeproj/project.pbxproj"
+            echo "          reverted to 'all' (Apple default). Set STRIP_STYLE = \"non-global\" in the"
+            echo "          Runner target's Debug, Profile, AND Release configs."
+            rm -rf "$TMPDIR_CHECK"
+            exit 1
+          fi
+          rm -rf "$TMPDIR_CHECK"
+          echo "Symbol verification: Init is exported ✓"
+
+      # ── Upload IPA to TestFlight ──
+      # Uses the modern altool path (xcrun iTMSTransporter was removed in
+      # Xcode 26 CLI tools). The ASC API key on disk is what authenticates;
+      # no Apple ID password needed in CI. Internal Group testers see the
+      # build immediately after processing (~10-30 min); External testers
+      # require Beta App Review which must be set up once via ASC UI.
+      - name: Upload IPA to TestFlight
+        env:
+          APPLE_ASC_API_KEY_ID: ${{ secrets.APPLE_ASC_API_KEY_ID }}
+          APPLE_ASC_API_ISSUER_ID: ${{ secrets.APPLE_ASC_API_ISSUER_ID }}
+        run: |
+          IPA="$(ls -t build/ios/ipa/*.ipa | head -1)"
+          if [ -z "$IPA" ]; then
+            echo "::error::No IPA found in build/ios/ipa/. The build step above must have failed."
+            exit 1
+          fi
+          echo "Uploading $IPA to App Store Connect..."
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA" \
+            --apiKey "$APPLE_ASC_API_KEY_ID" \
+            --apiIssuer "$APPLE_ASC_API_ISSUER_ID"
+          echo "### TestFlight upload" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build \`v${APP_VERSION} (${GITHUB_RUN_NUMBER})\` is uploaded." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Processing typically takes 10–30 min. Watch for it under" >> "$GITHUB_STEP_SUMMARY"
+          echo "**App Store Connect → ${IOS_BUNDLE_ID} → TestFlight**." >> "$GITHUB_STEP_SUMMARY"
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Once processed, **promote to App Store**:" >> "$GITHUB_STEP_SUMMARY"
+            echo "App Store Connect → My Apps → Node Neo → \`${APP_VERSION}\` Prepare" >> "$GITHUB_STEP_SUMMARY"
+            echo "for Submission → Add Build → Submit for Review." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ── Upload IPA as workflow artifact (always) ──
+      # Lets you download and inspect the binary even if the TestFlight upload
+      # gets stuck mid-processing. 14-day retention matches macOS workflow.
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: nodeneo-${{ env.APP_VERSION }}-ios.ipa
+          path: build/ios/ipa/*.ipa
+          retention-days: 14
+
+      # ── Tag + GitHub Release (main only) ──
+      # iOS doesn't get a downloadable binary asset on the GitHub Release
+      # (unlike the macOS DMG). The release exists purely for the changelog
+      # entry and the cross-platform tag — RELEASE_NOTES.md is the same
+      # source of truth as the macOS workflow.
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # If the macOS workflow already created this tag for the same commit,
+          # `git tag` will fail — that's fine, the release create can target
+          # the existing tag. Skip-on-already-exists is handled by checking
+          # for the tag first.
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists (likely from build-macos.yml)."
+          else
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi
+
+          # If a release already exists for this tag, just print and skip —
+          # it'll have been created by the macOS workflow with the DMG asset.
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "GitHub Release $TAG_NAME already exists. Skipping creation."
+            echo "iOS build is on TestFlight; macOS DMG is on the existing release."
+          else
+            : > /tmp/release-notes.md
+            if [ -f RELEASE_NOTES.md ]; then
+              cat RELEASE_NOTES.md >> /tmp/release-notes.md
+              printf '\n---\n\n' >> /tmp/release-notes.md
+            fi
+            cat <<'ASSET_TABLE' >> /tmp/release-notes.md
+          ## Download
+
+          | Platform | Channel | Notes |
+          |----------|---------|-------|
+          | iOS / iPadOS | TestFlight + App Store | Install via TestFlight (beta) or the App Store (`com.absgrafx.nodeneo`) once promoted from this build. |
+          | macOS | GitHub Releases (signed + notarized DMG) | See assets below if the macOS build for this tag has finished. |
+
+          ASSET_TABLE
+
+            gh release create "$TAG_NAME" \
+              --title "Node Neo $TAG_NAME" \
+              --notes-file /tmp/release-notes.md \
+              --latest
+          fi

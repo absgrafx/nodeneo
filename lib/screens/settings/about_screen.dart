@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../constants/app_brand.dart';
+import '../../constants/external_links.dart';
 import '../../services/bridge.dart';
 import '../../services/form_factor.dart';
 import '../../services/platform_caps.dart';
@@ -219,6 +220,45 @@ class _AboutScreenState extends State<AboutScreen> {
                       mono: true,
                     ),
                   ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Legal & Resources card — surfaces the nodeneo.ai pages that
+            // App Store review checks (Privacy / Terms / Support) and the
+            // public source repo. Lives on the About screen specifically
+            // because that's where reviewers look for "who runs this app
+            // and how do I contact them"; the same links also appear in
+            // the home-screen settings drawer for the everyday user path.
+            SectionCard(
+              icon: Icons.description_outlined,
+              title: 'Legal & Resources',
+              child: Column(
+                children: [
+                  _ExternalLinkRow(
+                    icon: Icons.privacy_tip_outlined,
+                    label: 'Privacy Policy',
+                    subtitle: 'What we collect (nothing)',
+                    url: ExternalLinks.privacy,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.gavel_outlined,
+                    label: 'Terms of Service',
+                    subtitle: 'Self-custody · MIT source',
+                    url: ExternalLinks.terms,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.help_outline,
+                    label: 'Support',
+                    subtitle: 'FAQ · email a human',
+                    url: ExternalLinks.support,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.code,
+                    label: 'Source code',
+                    subtitle: 'github.com/absgrafx/nodeneo',
+                    url: ExternalLinks.github,
+                  ),
                 ],
               ),
             ),
@@ -484,4 +524,67 @@ class _LogFileInfo {
     required this.sizeKb,
     required this.modified,
   });
+}
+
+/// Compact link row used inside the "Legal & Resources" card. Tapping it
+/// launches [url] in the platform's default browser via
+/// [ExternalLinks.launch] (which surfaces a snackbar fallback if the
+/// platform refuses to handle the scheme).
+class _ExternalLinkRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final String url;
+
+  const _ExternalLinkRow({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.url,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: () => ExternalLinks.launch(url, context: context),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: theme.hintColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.open_in_new,
+              size: 14,
+              color: theme.hintColor.withValues(alpha: 0.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

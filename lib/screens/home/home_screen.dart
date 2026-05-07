@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../app_route_observer.dart';
 import '../../constants/app_brand.dart';
+import '../../constants/external_links.dart';
 import '../../constants/network_tokens.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/bridge.dart';
@@ -1232,6 +1233,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           builder: (_) => const AboutScreen(),
         ),
       );
+    } else if (key.startsWith('help:')) {
+      // Help & Resources group: tap → open the matching nodeneo.ai page in
+      // the user's default browser. The "help:" prefix lets the drawer keep
+      // a single onTap callback rather than splitting external links into
+      // their own widget tree.
+      final url = key.substring('help:'.length);
+      await ExternalLinks.launch(url, context: context);
     }
   }
 
@@ -3186,7 +3194,82 @@ class _SettingsDrawer extends StatelessWidget {
               subtitle: 'About · Log viewer',
               onTap: () => onTap('about'),
             ),
+
+            // Help & Resources — links out to nodeneo.ai. Surfaced here so
+            // a user who's stuck mid-onboarding can find the same long-form
+            // copy that Apple Review reads on the public site (Why? / New
+            // to crypto? / Support / Privacy / Terms).
+            const SizedBox(height: 8),
+            const _SettingsDrawerSectionHeader(label: 'Help & Resources'),
+            _SettingsDrawerItem(
+              icon: Icons.lightbulb_outline,
+              title: 'Why Node Neo?',
+              subtitle: 'The pitch in two minutes',
+              external: true,
+              onTap: () => onTap('help:${ExternalLinks.why}'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.school_outlined,
+              title: 'New to crypto?',
+              subtitle: 'Calm 25-minute walkthrough',
+              external: true,
+              onTap: () => onTap('help:${ExternalLinks.onramp}'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.rocket_launch_outlined,
+              title: 'Quick start',
+              subtitle: 'Already have a wallet — go',
+              external: true,
+              onTap: () => onTap('help:${ExternalLinks.quickStart}'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.help_outline,
+              title: 'Support',
+              subtitle: 'FAQ · email a human',
+              external: true,
+              onTap: () => onTap('help:${ExternalLinks.support}'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.privacy_tip_outlined,
+              title: 'Privacy Policy',
+              subtitle: 'What we collect (nothing)',
+              external: true,
+              onTap: () => onTap('help:${ExternalLinks.privacy}'),
+            ),
+            _SettingsDrawerItem(
+              icon: Icons.gavel_outlined,
+              title: 'Terms of Service',
+              subtitle: 'Self-custody · MIT source',
+              external: true,
+              onTap: () => onTap('help:${ExternalLinks.terms}'),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Mono uppercase label used to break the drawer into Settings vs. Help &
+/// Resources groups. Same visual register as the section dividers in the
+/// website footer (`mono` + emerald + wide letter-spacing).
+class _SettingsDrawerSectionHeader extends StatelessWidget {
+  final String label;
+  const _SettingsDrawerSectionHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: theme.textTheme.bodySmall?.copyWith(
+          fontFamily: 'JetBrains Mono',
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 1.6,
+          color: NeoTheme.emerald,
         ),
       ),
     );
@@ -3199,11 +3282,18 @@ class _SettingsDrawerItem extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
 
+  /// `true` when the row launches an external URL (browser, mail
+  /// client) rather than pushing an in-app screen. Swaps the trailing
+  /// chevron for an `open_in_new` glyph so the user knows the tap will
+  /// leave the app.
+  final bool external;
+
   const _SettingsDrawerItem({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.external = false,
   });
 
   @override
@@ -3239,7 +3329,11 @@ class _SettingsDrawerItem extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(Icons.chevron_right, size: 20, color: theme.hintColor.withValues(alpha: 0.5)),
+            Icon(
+              external ? Icons.open_in_new : Icons.chevron_right,
+              size: external ? 16 : 20,
+              color: theme.hintColor.withValues(alpha: 0.5),
+            ),
           ],
         ),
       ),
