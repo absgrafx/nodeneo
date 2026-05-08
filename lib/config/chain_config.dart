@@ -10,7 +10,9 @@ bool get hasBuildTimeRpc => _buildTimeRpc.isNotEmpty;
 /// Public fallback RPCs (used only when no dedicated/custom node is set).
 ///
 /// Comma-separated HTTPS JSON-RPC URLs; Go SDK round-robins and retries.
-/// Keep in sync with `.ai-docs/testing_notes.md` when changing.
+/// Each entry must be a Base mainnet (chain id 8453) endpoint that
+/// returns valid JSON-RPC responses with no auth — anything that 401s
+/// or rate-limits aggressively will fail the round-robin.
 const String publicFallbackRpcUrls = 'https://mainnet.base.org,'
     'https://base.publicnode.com,'
     'https://base-rpc.publicnode.com,'
