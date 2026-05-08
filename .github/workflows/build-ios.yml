@@ -219,17 +219,21 @@ jobs:
           echo "ASC API key staged at ~/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
 
       # ── Pre-fetch the provisioning profile via the ASC API ──
-      # `flutter build ipa` invokes `xcodebuild` which uses ExportOptions.plist
-      # `signingStyle: automatic`. On a developer's machine that path works
-      # because Xcode has the developer's Apple ID logged in and auto-fetches
-      # a managed profile. On a clean CI runner there's no logged-in account
-      # and Flutter doesn't pass the ASC API key auth flags through to
-      # xcodebuild — so xcodebuild fails with "No Accounts" / "No profiles
-      # for 'com.absgrafx.nodeneo' were found". The fix is to pre-fetch the
-      # matching IOS_APP_STORE-class profile via the ASC API and place it
-      # in the standard location ~/Library/MobileDevice/Provisioning Profiles/
-      # before xcodebuild runs. xcodebuild's automatic signing then picks the
-      # profile up from disk and skips the account-login path entirely.
+      # `flutter build ipa` invokes `xcodebuild` which (with the project's
+      # default automatic signing) tries to log in with an Apple ID and
+      # fetch/create a managed profile on the fly. On a clean CI runner
+      # there's no logged-in account and Flutter doesn't pass the ASC API
+      # key auth flags through to xcodebuild — so xcodebuild fails with
+      # "No Accounts" / "No profiles for 'com.absgrafx.nodeneo' were found".
+      #
+      # The fix is two steps:
+      #   1. Pre-fetch the matching IOS_APP_STORE-class profile via the ASC
+      #      API and place it in ~/Library/MobileDevice/Provisioning Profiles/.
+      #   2. Patch ios/Runner.xcodeproj/project.pbxproj's Release config to
+      #      Manual signing pointing at that profile (next step). Debug and
+      #      Profile configs stay on Automatic so local `flutter run` on a
+      #      developer's device is unaffected.
+      #
       # Apple-managed profiles auto-include all current Distribution certs
       # on the team, so the freshly-fetched profile lists today's Apple
       # Distribution cert without us having to re-issue the profile by hand
@@ -260,13 +264,95 @@ jobs:
           api-key-id: ${{ secrets.APPLE_ASC_API_KEY_ID }}
           api-private-key: ${{ steps.asc_key_pem.outputs.pem }}
 
+      # ── Switch Runner target's Release config to manual signing ──
+      # Required because xcodebuild's *automatic* signing path on a clean
+      # runner attempts an Apple ID login (which CI doesn't have) regardless
+      # of any profile sitting in ~/Library/MobileDevice/Provisioning Profiles/.
+      # We patch only the Runner target's Release config block in
+      # project.pbxproj so Debug / Profile configs (used by `flutter run` on
+      # a developer's device) keep their existing Automatic signing.
+      # ExportOptions.plist is patched in-place too so `xcodebuild
+      # -exportArchive` matches the same profile/team for IPA export.
+      - name: Switch Xcode project to manual signing (Release)
+        env:
+          IOS_BUNDLE_ID: ${{ env.IOS_BUNDLE_ID }}
+        run: |
+          set -euo pipefail
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$(ls -t "$PROFILE_DIR"/*.mobileprovision 2>/dev/null | head -n1 || true)"
+          if [ -z "$PROFILE_PATH" ]; then
+            echo "::error::No provisioning profile found in $PROFILE_DIR (download step must have failed)."
+            exit 1
+          fi
+          PLIST="$(security cms -D -i "$PROFILE_PATH")"
+          PROFILE_NAME="$(echo "$PLIST" | plutil -extract Name raw -o - -)"
+          PROFILE_UUID="$(echo "$PLIST" | plutil -extract UUID raw -o - -)"
+          echo "Profile: name='$PROFILE_NAME' uuid=$PROFILE_UUID"
+          echo "  path: $PROFILE_PATH"
+          export PROFILE_NAME
+          python3 - <<'PY'
+          import os, re, sys
+          path = "ios/Runner.xcodeproj/project.pbxproj"
+          name = os.environ["PROFILE_NAME"]
+          src = open(path).read()
+          # Locate the Runner native target's Release config block by its
+          # stable UUID (97C147071CF9000F007C117D) so we don't touch Debug,
+          # Profile, or the RunnerTests target's Release config.
+          pat = re.compile(
+              r"(97C147071CF9000F007C117D /\* Release \*/ = \{[\s\S]*?buildSettings = \{)"
+              r"([\s\S]*?)"
+              r"(\};\s*name = Release;\s*\};)",
+              re.M,
+          )
+          def patch(m):
+              head, body, tail = m.group(1), m.group(2), m.group(3)
+              body = body.replace(
+                  'CODE_SIGN_IDENTITY = "Apple Development";',
+                  'CODE_SIGN_IDENTITY = "Apple Distribution";\n'
+                  '\t\t\t\t"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";',
+              )
+              body = body.replace(
+                  'CODE_SIGN_STYLE = Automatic;',
+                  'CODE_SIGN_STYLE = Manual;',
+              )
+              body = body.replace(
+                  'PROVISIONING_PROFILE_SPECIFIER = "";',
+                  f'PROVISIONING_PROFILE_SPECIFIER = "{name}";',
+              )
+              return head + body + tail
+          new, n = pat.subn(patch, src, count=1)
+          if n != 1:
+              sys.stderr.write("ERROR: failed to locate Runner Release config block.\n")
+              sys.exit(1)
+          if new == src:
+              sys.stderr.write("ERROR: patch matched but produced no change.\n")
+              sys.exit(1)
+          open(path, "w").write(new)
+          print(f"project.pbxproj: Runner Release config -> Manual signing, profile='{name}'")
+          PY
+          # Patch ExportOptions.plist so the export step (-exportArchive) uses
+          # the same manual mapping. Local dev (`make ipa-testflight`) reads
+          # the file as committed (automatic), so this in-place edit is
+          # CI-only and disappears with the runner.
+          /usr/libexec/PlistBuddy -c "Set :signingStyle manual" ios/ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" ios/ExportOptions.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy \
+            -c "Add :provisioningProfiles:$IOS_BUNDLE_ID string $PROFILE_NAME" \
+            ios/ExportOptions.plist 2>/dev/null \
+            || /usr/libexec/PlistBuddy \
+                 -c "Set :provisioningProfiles:$IOS_BUNDLE_ID $PROFILE_NAME" \
+                 ios/ExportOptions.plist
+          echo "ExportOptions.plist (post-patch):"
+          /usr/libexec/PlistBuddy -c "Print" ios/ExportOptions.plist
+
       # ── Build the IPA ──
       # Uses the same path local devs run via `make ipa-testflight`:
       #   flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
-      # The plist already specifies app-store-connect distribution + automatic
-      # signing + team 2S4578V7ZD. CFBundleShortVersionString comes from
-      # --build-name, CFBundleVersion from --build-number (must be unique per
-      # short-version pair across all uploads to ASC).
+      # On CI, the previous step has flipped the Runner Release config and
+      # ExportOptions.plist to manual signing using the App Store profile we
+      # downloaded; locally, both files stay on automatic. CFBundleShortVersionString
+      # comes from --build-name, CFBundleVersion from --build-number (must be
+      # unique per short-version pair across all uploads to ASC).
       - name: Flutter build IPA (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
