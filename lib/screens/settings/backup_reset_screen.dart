@@ -1,11 +1,10 @@
 import 'dart:developer' as developer;
-import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../services/bridge.dart';
 import '../../services/form_factor.dart';
@@ -131,11 +130,20 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
       );
 
       if (PlatformCaps.isMobile) {
-        // iOS/Android: write the encrypted backup to a temp file via the Go
-        // bridge, then surface a Files-app save sheet
-        // (UIDocumentPickerViewController) to let the user pick a final
-        // destination. We do the bytes-to-final-location copy ourselves
-        // because the picker only returns a sandbox-scoped path.
+        // iOS/Android: there is NO equivalent of `getSaveLocation` here —
+        // file_selector_ios throws `UnimplementedError: getSavePath() has
+        // not been implemented` because iOS has no system "Save File"
+        // dialog. The native pattern is the Share sheet
+        // (`UIActivityViewController`), which lets the user pick "Save to
+        // Files", "AirDrop", "Mail", etc. as a single choice. Pipeline:
+        //   1. Write the encrypted backup to the app's temp directory via
+        //      the Go bridge (sandbox-scoped path the OS will reclaim).
+        //   2. Hand that file to `SharePlus.instance.share(...)` and let
+        //      the user pick a destination.
+        // `sharePositionOrigin` is REQUIRED on iPad — without it iOS
+        // raises NSInvalidArgumentException because a popover anchor must
+        // be set. We use the screen's render box, which produces a sane
+        // mid-screen popover on iPad and is harmlessly ignored on iPhone.
         final tmpDir = await getTemporaryDirectory();
         final tmpPath = '${tmpDir.path}/$fileName';
         GoBridge().exportBackup(
@@ -144,26 +152,42 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
           info.version,
           _walletPrefix(),
         );
-        final bytes = await File(tmpPath).readAsBytes();
+        developer.log('export staged: tmp=$tmpPath', name: _logName);
+
+        if (!mounted) return;
+        final RenderBox? box = context.findRenderObject() as RenderBox?;
+        final Rect? origin = (box != null && box.hasSize)
+            ? box.localToGlobal(Offset.zero) & box.size
+            : null;
+
+        final ShareResult result = await SharePlus.instance.share(
+          ShareParams(
+            files: <XFile>[
+              XFile(tmpPath, mimeType: 'application/octet-stream'),
+            ],
+            fileNameOverrides: <String>[fileName],
+            subject: 'Node Neo backup',
+            sharePositionOrigin: origin,
+          ),
+        );
         developer.log(
-          'export staged: tmp=$tmpPath bytes=${bytes.length}',
+          'export share result: status=${result.status} raw="${result.raw}"',
           name: _logName,
         );
-        final saveLocation = await getSaveLocation(
-          suggestedName: fileName,
-          acceptedTypeGroups: const <XTypeGroup>[_backupTypeGroup],
-        );
-        if (saveLocation == null) {
-          developer.log('export cancelled by user (mobile)', name: _logName);
+        // Don't fail loudly on a dismissed sheet — the user explicitly
+        // chose to back out. `unavailable` is iOS-speak for "we can't tell
+        // which app received the file", which is fine.
+        if (result.status == ShareResultStatus.dismissed) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Export cancelled.'),
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
           return;
         }
-        final fileData = XFile.fromData(
-          Uint8List.fromList(bytes),
-          name: fileName,
-          mimeType: 'application/octet-stream',
-        );
-        await fileData.saveTo(saveLocation.path);
-        await File(tmpPath).delete().catchError((_) => File(tmpPath));
       } else {
         // Desktop: hand the system save panel a starting directory and let
         // the user pick the final path; the Go bridge writes directly to it.
@@ -197,9 +221,15 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
 
       developer.log('export ok: $fileName', name: _logName);
       if (mounted) {
+        // Mobile uses the Share sheet so the user picked the destination
+        // themselves (Files / AirDrop / Mail / …) — phrasing has to stay
+        // honest about that instead of asserting a location.
+        final message = PlatformCaps.isMobile
+            ? 'Backup shared as $fileName'
+            : 'Backup saved to $fileName';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Backup saved to $fileName'),
+            content: Text(message),
             duration: const Duration(seconds: 5),
           ),
         );
