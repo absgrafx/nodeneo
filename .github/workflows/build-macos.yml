@@ -149,7 +149,8 @@ jobs:
       # BUILD_CHANNEL is consumed by lib/constants/app_brand.dart's
       # AppBrand.formatVersion() to decide whether the in-app About
       # screen shows "v3.4.0" (main release) or "v3.4.0+42" (dev preview).
-      # See .ai-docs/versioning.md for the full policy.
+      # The CFBundleShortVersionString in Info.plist stays clean X.Y.Z
+      # either way; the +RUN suffix is purely a display-layer cue.
       - name: Flutter build macOS (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}

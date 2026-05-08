@@ -393,9 +393,10 @@ jobs:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
           # BUILD_CHANNEL drives the in-app About screen's version display
-          # (vX.Y.Z on main, vX.Y.Z+RUN on dev) via
-          # lib/constants/app_brand.dart. The IPA's CFBundleShortVersionString
-          # stays clean X.Y.Z either way — see .ai-docs/versioning.md.
+          # (vX.Y.Z on main, vX.Y.Z+RUN on dev) via the formatVersion helper
+          # in lib/constants/app_brand.dart. The IPA's CFBundleShortVersionString
+          # stays clean X.Y.Z either way — preview vs stable is purely a
+          # display-time decision, not a binary-level one.
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             BUILD_CHANNEL=stable
           else
@@ -475,7 +476,7 @@ jobs:
       # Lets you download and inspect the binary even if the TestFlight upload
       # gets stuck mid-processing. 14-day retention matches macOS workflow.
       # Artifact name carries the +RUN suffix on dev to mirror DMG naming
-      # and the in-app "v3.4.0+42" preview label (see .ai-docs/versioning.md).
+      # and the in-app "v3.4.0+42" preview label.
       - name: Compute IPA artifact name
         id: ipa_artifact
         run: |

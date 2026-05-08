@@ -72,13 +72,6 @@ Flutter UI → dart:ffi → Go c-shared (.dylib) → proxy-router mobile SDK →
 - **SQLite** for conversations, messages, preferences — wallet-scoped with column-level encryption
 - **Platform** secure storage (Keychain) + optional biometrics (Face ID / Touch ID)
 
-Documentation:
-
-- [`.ai-docs/architecture.md`](.ai-docs/architecture.md) — long-form architecture record + "Recently Shipped" log
-- [`.ai-docs/versioning.md`](.ai-docs/versioning.md) — how `X.Y.Z` and build numbers are assigned across iOS, macOS, and dev / main channels
-- [`.ai-docs/release_process.md`](.ai-docs/release_process.md) — top-to-bottom release ritual, including the post-release pubspec bump
-- [`.ai-docs/ios_device_signing.md`](.ai-docs/ios_device_signing.md) — Apple Distribution cert + ASC API key setup for iOS CI
-
 ## Platforms
 
 | Platform | Status | Notes |
