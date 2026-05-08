@@ -59,42 +59,35 @@ jobs:
       - name: Compute next version
         id: semver
         run: |
-          VMAJ_NEW=3
-          VMIN_NEW=0
-          VPAT_NEW=0
-
-          VLAST=$(git tag -l "v[0-9]*" \
-            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" \
-            | sort -V | tail -n 1 | cut -c2-)
-
-          if [ -n "$VLAST" ]; then
-            eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
-          else
-            VMAJ=0; VMIN=0; VPAT=0
+          # Source of truth is pubspec.yaml's `version:` line. Format:
+          # "version: 3.4.0+1" -> VPUB=3.4.0. CFBundleShortVersionString
+          # (visible in TestFlight + App Store) and the git tag both derive
+          # from this. The build number (CFBundleVersion) is set separately
+          # to GITHUB_RUN_NUMBER in the build-ios job, which keeps each
+          # upload's (CFBundleShortVersionString, CFBundleVersion) pair
+          # unique even within a single VPUB cycle.
+          VPUB=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          if ! echo "$VPUB" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::pubspec.yaml version is not a clean semver: '${VPUB}'"
+            exit 1
           fi
 
           if [ "$GITHUB_REF_NAME" = "main" ]; then
-            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
-              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW; VPAT=$VPAT_NEW
-            else
-              VMIN=$((VMIN + 1)); VPAT=0
-            fi
-            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VFULL=$VPUB
             VTAG=v${VFULL}
           else
-            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
-              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW
-            fi
-            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || echo HEAD)
-            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD)
-            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            # Dev preview: same VFULL as the upcoming main release (ASC
+            # requires CFBundleShortVersionString to be clean X.Y.Z) but the
+            # git tag gets a "-dev" suffix so it doesn't collide with the
+            # eventual main release tag for the same pubspec version.
+            VFULL=$VPUB
             RNAME=${GITHUB_REF_NAME##*/}
             VTAG=v${VFULL}-${RNAME}
           fi
 
           echo "tag_name=${VTAG}" >> "$GITHUB_OUTPUT"
           echo "vfull=${VFULL}"   >> "$GITHUB_OUTPUT"
-          echo "### Build Tag: \`${VTAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Build Tag: \`${VTAG}\` (CFBundleShortVersionString: \`${VFULL}\`)" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Build IPA + ship to TestFlight ────────────────────────────────
   build-ios:
@@ -200,13 +193,14 @@ jobs:
           rm certificate.p12
           security find-identity -p codesigning -v build.keychain
 
-      # ── Place ASC API key where xcodebuild looks for it ──
-      # xcodebuild's automatic signing path can fetch + create provisioning
-      # profiles using an ASC API key, which avoids the manual "log into
-      # Xcode" prompt. The key file must live at the standard path
+      # ── Place ASC API key where xcrun altool looks for it ──
+      # The .p8 file must live at the standard path
       # ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 — same convention
-      # `make upload-testflight` follows. We re-use the same key for
-      # archive-time signing AND for the upload step below.
+      # `make upload-testflight` follows. Used by the altool upload step
+      # below. (xcodebuild's archive-time signing does NOT pick up this
+      # key automatically — `flutter build ipa` doesn't pass the
+      # -authenticationKey* flags through to xcodebuild — so we additionally
+      # pre-fetch the provisioning profile in the next step.)
       - name: Stage App Store Connect API key
         env:
           APPLE_ASC_API_KEY_ID: ${{ secrets.APPLE_ASC_API_KEY_ID }}
@@ -223,6 +217,48 @@ jobs:
             > "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
           echo "ASC API key staged at ~/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
+
+      # ── Pre-fetch the provisioning profile via the ASC API ──
+      # `flutter build ipa` invokes `xcodebuild` which uses ExportOptions.plist
+      # `signingStyle: automatic`. On a developer's machine that path works
+      # because Xcode has the developer's Apple ID logged in and auto-fetches
+      # a managed profile. On a clean CI runner there's no logged-in account
+      # and Flutter doesn't pass the ASC API key auth flags through to
+      # xcodebuild — so xcodebuild fails with "No Accounts" / "No profiles
+      # for 'com.absgrafx.nodeneo' were found". The fix is to pre-fetch the
+      # matching IOS_APP_STORE-class profile via the ASC API and place it
+      # in the standard location ~/Library/MobileDevice/Provisioning Profiles/
+      # before xcodebuild runs. xcodebuild's automatic signing then picks the
+      # profile up from disk and skips the account-login path entirely.
+      # Apple-managed profiles auto-include all current Distribution certs
+      # on the team, so the freshly-fetched profile lists today's Apple
+      # Distribution cert without us having to re-issue the profile by hand
+      # whenever the cert rotates.
+      - name: Decode ASC API key (PEM) for provisioning download
+        id: asc_key_pem
+        env:
+          APPLE_ASC_API_KEY_P8: ${{ secrets.APPLE_ASC_API_KEY_P8 }}
+        run: |
+          DECODED=$(echo "$APPLE_ASC_API_KEY_P8" | base64 --decode)
+          # Mask the key contents in case any logging in subsequent steps
+          # tries to print it. ::add-mask:: works per-line so we mask each.
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done <<< "$DECODED"
+          {
+            echo 'pem<<EOF_ASC_KEY_PEM'
+            echo "$DECODED"
+            echo 'EOF_ASC_KEY_PEM'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download provisioning profile (ASC API)
+        uses: apple-actions/download-provisioning-profiles@v3
+        with:
+          bundle-id: ${{ env.IOS_BUNDLE_ID }}
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ secrets.APPLE_ASC_API_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPLE_ASC_API_KEY_ID }}
+          api-private-key: ${{ steps.asc_key_pem.outputs.pem }}
 
       # ── Build the IPA ──
       # Uses the same path local devs run via `make ipa-testflight`:
