@@ -2,7 +2,7 @@
 ///
 /// **Node Neo** — decentralised AI inference client.
 /// Powered by the Morpheus DeAI Network.
-/// Published by absgrafx (com.absgrafx.nodeneo).
+/// Published by ABSGrafx LLC (com.absgrafx.nodeneo).
 class AppBrand {
   AppBrand._();
 

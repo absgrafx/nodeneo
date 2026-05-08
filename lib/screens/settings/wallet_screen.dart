@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../constants/external_links.dart';
 import '../../services/bridge.dart';
 import '../../services/form_factor.dart';
 import '../../theme.dart';
@@ -399,6 +400,36 @@ class _WalletScreenState extends State<WalletScreen> {
                     : '${_sessions.length} active',
               ),
               child: _buildSessionsBody(theme),
+            ),
+            const SizedBox(height: 16),
+            // Quiet escape hatch into the long-form crypto walkthrough
+            // on nodeneo.ai. Anyone landing here who isn't sure what
+            // ETH-for-gas / MOR-for-stake actually means gets one tap
+            // to a 25-minute primer instead of being stuck staring at
+            // a wallet they don't yet understand. Sized small on
+            // purpose so it doesn't compete with the primary key /
+            // session affordances above.
+            Center(
+              child: TextButton.icon(
+                onPressed: () => ExternalLinks.launch(
+                  ExternalLinks.onramp,
+                  context: context,
+                ),
+                icon: const Icon(Icons.school_outlined, size: 16),
+                label: const Text(
+                  'New to crypto? See the walkthrough',
+                  style: TextStyle(fontSize: 12),
+                ),
+                style: TextButton.styleFrom(
+                  foregroundColor: NeoTheme.emerald,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
             ),
           ],
         ),

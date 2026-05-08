@@ -1,6 +1,6 @@
 ## What's New in v3.4.0
 
-The App Store legitimacy + CI/CD release. The app now points users out to a real public Privacy / Terms / Support surface on `nodeneo.ai`, and a new `.github/workflows/build-ios.yml` ships every `dev` merge straight to TestFlight (Internal Group) and every `main` merge to TestFlight + a tagged GitHub Release. App Store submission for review remains a deliberate manual click in App Store Connect — every other gate is now automated.
+The App Store legitimacy + CI/CD release. The app now points users out to a real public Privacy / Terms / Support surface on `nodeneo.ai`, a new `.github/workflows/build-ios.yml` ships every `dev` merge straight to TestFlight (Internal Group) and every `main` merge to TestFlight + a tagged GitHub Release, the iOS App Privacy nutrition label is now legitimately "Data Not Collected" (only `NSFaceIDUsageDescription` declared), and the in-app helper-link surface has been reorganized so each external page lives in its single most contextually appropriate home. App Store submission for review remains a deliberate manual click in App Store Connect — every other gate is now automated.
 
 ### App Store legitimacy surface (nodeneo.ai + in-app links)
 
@@ -32,10 +32,31 @@ Apple Distribution `.p12` cert is base64-decoded into an ephemeral keychain on t
 
 While in the workflows file: the long-standing cosmetic bug where the in-app *About → Proxy-router* row showed a bare 12-char commit hash instead of `v7.0.0-N-g<hash>` is fixed (`build-macos.yml` and `build-ios.yml` both drop `--single-branch` and explicitly fetch `main` so `git describe --tags` can reach release tags as ancestors of dev-pinned commits).
 
+### iOS App Privacy nutrition label cleanup (`file_picker` → `file_selector`)
+
+The old `file_picker` package transitively pulled in photo / video / audio CocoaPods (`DKImagePickerController`, `DKPhotoGallery`, `SDWebImage`, `SwiftyGif`) even though the app's only document-picker call site is the `.nnbak` save / load on the Backup & Reset screen. Apple's binary scanner observed those linked frameworks and forced four purpose strings into `Info.plist` — `NSPhotoLibraryUsageDescription`, `NSPhotoLibraryAddUsageDescription`, `NSCameraUsageDescription`, `NSMicrophoneUsageDescription` — which then surfaced as data-collection rows on the App Privacy nutrition label even though Dart never invokes Photos / Camera / Mic. For a privacy-first app, that's the kind of half-true label that erodes trust.
+
+Replaced with the official `flutter.dev` `file_selector` package, which uses `UIDocumentPickerViewController` exclusively on iOS (no Photos / Camera / Mic linkage). All three non-FaceID purpose strings have been removed; `NSFaceIDUsageDescription` (authentication, not data collection) is the only declaration that remains. The App Privacy section can now legitimately answer "Data Not Collected" for every category. `BackupResetScreen` was rewired to the new API: `getSaveLocation` for export, `openFile` for import, plus the iOS-specific "write to temp file → read bytes → `XFile.fromData(...).saveTo(scopedPath)`" dance because the document picker returns a writeable scoped path rather than a destination directory.
+
+### Helper-link reorganization
+
+The previous v3.4.0 work landed a `Help & Resources` group in the settings drawer with seven external-link rows. On smaller screens the drawer body (a non-scrolling `Column`) overflowed; on larger screens the rows duplicated content that has more contextually correct homes elsewhere in the app. The reorganization pushes each link to its single best home and rewrites the drawer body as a scrollable `ListView` so future additions can't regress this.
+
+- **Settings drawer** trimmed to the five in-app navigation rows: *Preferences · Wallet · Expert Mode · Backup & Reset · About & Help*. The `Version & Logs` row was renamed `About & Help` (subtitle `App info · Resources · Logs`) — anchors on existing Apple-platform muscle memory and signals all three card types behind it.
+- **About screen** is now three cards, each with one purpose. The **About card** absorbs `Why Node Neo?` + `Architecture deep dive` + `Privacy Policy` + `Terms of Service` below the version block (separated by a divider) — Privacy + Terms are legal *commitments*, not utilities, so they belong with "who runs this app and what we promise" rather than in a generic resources bucket. The **Resources card** (renamed from `Legal & Resources`) is a tight three-row utility card: *Support · Report a bug · Source code*. The **Logs card** is unchanged.
+- **Wallet screen** gained a compact "New to crypto? See the walkthrough" link below the Active Sessions card — same affordance the onboarding screen uses, so anyone landing on Wallet without crypto vocabulary has one tap to the 25-minute primer.
+- **Home front page** gained a small "Quick start guide" link below the `START A NEW CHAT by selecting a model` hint — discoverable for the user staring at the model list, ignored by an oriented user.
+- **`lib/constants/external_links.dart`** doc comments updated to reflect the new homes for each link.
+
+### Public website (`nodeneo.ai`) — support CTA flip
+
+`nodeneo.ai/support.html` previously led with "Email support@nodeneo.ai" as the primary action. Flipped: **GitHub Issues** is now the primary CTA (public, searchable, every answer helps the next user with the same problem); email is the secondary fallback for cases that genuinely need a private channel (lost-wallet questions, payment-processor issues, security disclosures). Meta description and supporting copy updated to match. The `support.html` favicon and footer references are unchanged.
+
 ### iOS Impact / Compatibility
 
-- All in-app changes are platform-neutral; the `Help & Resources` drawer section, the About screen `Legal & Resources` card, and the onboarding `Terms / Privacy` acknowledgement all render on iOS, macOS, and (when they ship) iPad / Android.
-- No new dependencies. Re-uses `url_launcher` (already in `pubspec.yaml`) and the existing `LaunchMode.externalApplication` pattern from `home_screen.dart` and `wallet_screen.dart`.
+- All in-app changes are platform-neutral; the trimmed settings drawer, the consolidated About / Resources cards, the onboarding `Terms / Privacy` acknowledgement, and the new contextual deep-links on Wallet / Home all render on iOS, macOS, and (when they ship) iPad / Android.
+- One dependency swap: `file_picker: ^11.0.2` → `file_selector: ^1.1.0`. The replacement is an official `flutter.dev` package; on iOS it's a thin wrapper around `UIDocumentPickerViewController` and adds zero new permissions. macOS uses the native `NSSavePanel` / `NSOpenPanel` (no entitlement changes). The `BackupResetScreen` rewire is the only call site.
+- Re-uses `url_launcher` (already in `pubspec.yaml`) and the existing `LaunchMode.externalApplication` pattern for every external link.
 - Gateway (desktop-only feature, gated by `PlatformCaps.supportsGateway`) is unchanged in this release.
 
 ---

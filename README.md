@@ -32,7 +32,7 @@ Grab the latest **signed & notarized** `.dmg` from [**Releases**](https://github
 
 ### iPhone (iOS 16+)
 
-Currently distributed via TestFlight / enterprise provisioning while App Store submission is in progress. Ping [@absgrafx](https://github.com/absgrafx) for an invite, or build from source with Xcode (see below).
+Currently distributed via TestFlight / enterprise provisioning while App Store submission is in progress. Email [info@absgrafx.com](mailto:info@absgrafx.com) for a TestFlight invite, or build from source with Xcode (see below).
 
 > Linux and Windows are on the backlog — not yet shipped.
 
@@ -120,4 +120,4 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
-<sub>By <a href="https://github.com/absgrafx">absgrafx</a>. Protocol and upstream repos: <a href="https://github.com/MorpheusAIs">MorpheusAIs</a>.</sub>
+<sub>By <a href="https://absgrafx.com">ABSGrafx LLC</a>. Protocol and upstream repos: <a href="https://github.com/MorpheusAIs">MorpheusAIs</a>.</sub>

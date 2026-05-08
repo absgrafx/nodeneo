@@ -150,7 +150,7 @@ class _AboutScreenState extends State<AboutScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Version & Logs')),
+      appBar: AppBar(title: const Text('About & Help')),
       body: MaxContentWidth(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -220,21 +220,36 @@ class _AboutScreenState extends State<AboutScreen> {
                       mono: true,
                     ),
                   ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            // Legal & Resources card — surfaces the nodeneo.ai pages that
-            // App Store review checks (Privacy / Terms / Support) and the
-            // public source repo. Lives on the About screen specifically
-            // because that's where reviewers look for "who runs this app
-            // and how do I contact them"; the same links also appear in
-            // the home-screen settings drawer for the everyday user path.
-            SectionCard(
-              icon: Icons.description_outlined,
-              title: 'Legal & Resources',
-              child: Column(
-                children: [
+                  // Long-form context + the legal commitments (Privacy
+                  // / Terms) live inside the About card itself — the
+                  // reader is here asking "what is this app and what
+                  // are you promising me?", so the pitch, the
+                  // architecture deep dive, and the two legal pages
+                  // belong next to the version block. Privacy + Terms
+                  // are paired with the onboarding acknowledgement
+                  // ("by creating a wallet you agree to our Terms and
+                  // Privacy Policy"); keeping them here makes the App
+                  // Store reviewer's "who runs this app and what are
+                  // their commitments" surface a single tap.
+                  const SizedBox(height: 14),
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: theme.dividerColor.withValues(alpha: 0.4),
+                  ),
+                  const SizedBox(height: 4),
+                  _ExternalLinkRow(
+                    icon: Icons.auto_awesome_outlined,
+                    label: 'Why Node Neo?',
+                    subtitle: 'The pitch in two minutes',
+                    url: ExternalLinks.why,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.architecture_outlined,
+                    label: 'Architecture deep dive',
+                    subtitle: 'Trust model · TEE · proxy-router',
+                    url: ExternalLinks.deepDive,
+                  ),
                   _ExternalLinkRow(
                     icon: Icons.privacy_tip_outlined,
                     label: 'Privacy Policy',
@@ -247,11 +262,34 @@ class _AboutScreenState extends State<AboutScreen> {
                     subtitle: 'Self-custody · MIT source',
                     url: ExternalLinks.terms,
                   ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Resources card — help-first utility links. Privacy and
+            // Terms used to live here under "Legal & Resources"; they
+            // moved to the About card because they're commitments,
+            // not utilities. What's left is a tight three-row card
+            // with one purpose: "where do I get help / see the code".
+            // Order intentionally puts Support first so the user
+            // who's stuck reaches the FAQ + issue tracker before the
+            // power-user paths (issues filing, source).
+            SectionCard(
+              icon: Icons.support_outlined,
+              title: 'Resources',
+              child: Column(
+                children: [
                   _ExternalLinkRow(
                     icon: Icons.help_outline,
                     label: 'Support',
-                    subtitle: 'FAQ · email a human',
+                    subtitle: 'FAQ · public issues · email',
                     url: ExternalLinks.support,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.bug_report_outlined,
+                    label: 'Report a bug',
+                    subtitle: 'github.com/absgrafx/nodeneo/issues',
+                    url: ExternalLinks.githubIssues,
                   ),
                   _ExternalLinkRow(
                     icon: Icons.code,

@@ -1233,13 +1233,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           builder: (_) => const AboutScreen(),
         ),
       );
-    } else if (key.startsWith('help:')) {
-      // Help & Resources group: tap → open the matching nodeneo.ai page in
-      // the user's default browser. The "help:" prefix lets the drawer keep
-      // a single onTap callback rather than splitting external links into
-      // their own widget tree.
-      final url = key.substring('help:'.length);
-      await ExternalLinks.launch(url, context: context);
     }
   }
 
@@ -1492,7 +1485,42 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 6),
+                      // Front-page deep link into `nodeneo.ai/start.html`
+                      // for users who want a "first chat in 5 minutes"
+                      // checklist. Sized as a quiet text link so it
+                      // doesn't compete with the model list — anyone
+                      // already at home in the app ignores it; anyone
+                      // who needs it sees it the moment they're staring
+                      // at the model list and wondering what to tap.
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () => ExternalLinks.launch(
+                            ExternalLinks.quickStart,
+                            context: context,
+                          ),
+                          icon: const Icon(
+                            Icons.rocket_launch_outlined,
+                            size: 14,
+                          ),
+                          label: const Text(
+                            'Quick start guide',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                          style: TextButton.styleFrom(
+                            foregroundColor: NeoTheme.emerald,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
+                            ),
+                            minimumSize: const Size(0, 24),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
                     ],
                   ),
                 ),
@@ -2180,9 +2208,65 @@ class _FundWalletOverlay extends StatelessWidget {
                   height: 1.4,
                 ),
               ),
+              // Deep links into the long-form funding walkthroughs on
+              // nodeneo.ai. Sized small and underneath the address so the
+              // primary affordance (copy address + send funds) stays
+              // dominant; the links are a way out for the user who has
+              // never bought crypto and doesn't know where to start. Both
+              // open in the platform browser via ExternalLinks.launch.
+              const SizedBox(height: 14),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  _FundWalletHelpLink(
+                    icon: Icons.school_outlined,
+                    label: 'New to crypto? See the walkthrough',
+                    url: ExternalLinks.onramp,
+                  ),
+                  _FundWalletHelpLink(
+                    icon: Icons.rocket_launch_outlined,
+                    label: 'Quick start',
+                    url: ExternalLinks.quickStart,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Compact emerald-toned text-button used inside [_FundWalletOverlay] to
+/// link out to the funding walkthroughs on `nodeneo.ai`. Mirrors the
+/// "New to crypto?" affordance used on the onboarding screen so a user
+/// who skipped that path on first launch still has the same out.
+class _FundWalletHelpLink extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String url;
+
+  const _FundWalletHelpLink({
+    required this.icon,
+    required this.label,
+    required this.url,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: () => ExternalLinks.launch(url, context: context),
+      icon: Icon(icon, size: 14),
+      label: Text(label, style: const TextStyle(fontSize: 11)),
+      style: TextButton.styleFrom(
+        foregroundColor: NeoTheme.emerald,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        minimumSize: const Size(0, 28),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
       ),
     );
   }
@@ -3131,9 +3215,14 @@ class _SettingsDrawer extends StatelessWidget {
     return Drawer(
       width: drawerWidth,
       backgroundColor: theme.colorScheme.surface,
+      // The drawer body is a `ListView` rather than a `Column` so the
+      // content scrolls when accessibility text scaling, short
+      // screens, or future additions push it past the viewport. The
+      // earlier `Column` quietly clipped under-sized devices and
+      // produced a "BOTTOM OVERFLOWED" debug banner during testing.
       child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
+          padding: EdgeInsets.zero,
           children: [
             DrawerHeader(
               margin: EdgeInsets.zero,
@@ -3190,86 +3279,11 @@ class _SettingsDrawer extends StatelessWidget {
             ),
             _SettingsDrawerItem(
               icon: Icons.info_outline,
-              title: 'Version & Logs',
-              subtitle: 'About · Log viewer',
+              title: 'About & Help',
+              subtitle: 'App info · Resources · Logs',
               onTap: () => onTap('about'),
             ),
-
-            // Help & Resources — links out to nodeneo.ai. Surfaced here so
-            // a user who's stuck mid-onboarding can find the same long-form
-            // copy that Apple Review reads on the public site (Why? / New
-            // to crypto? / Support / Privacy / Terms).
-            const SizedBox(height: 8),
-            const _SettingsDrawerSectionHeader(label: 'Help & Resources'),
-            _SettingsDrawerItem(
-              icon: Icons.lightbulb_outline,
-              title: 'Why Node Neo?',
-              subtitle: 'The pitch in two minutes',
-              external: true,
-              onTap: () => onTap('help:${ExternalLinks.why}'),
-            ),
-            _SettingsDrawerItem(
-              icon: Icons.school_outlined,
-              title: 'New to crypto?',
-              subtitle: 'Calm 25-minute walkthrough',
-              external: true,
-              onTap: () => onTap('help:${ExternalLinks.onramp}'),
-            ),
-            _SettingsDrawerItem(
-              icon: Icons.rocket_launch_outlined,
-              title: 'Quick start',
-              subtitle: 'Already have a wallet — go',
-              external: true,
-              onTap: () => onTap('help:${ExternalLinks.quickStart}'),
-            ),
-            _SettingsDrawerItem(
-              icon: Icons.help_outline,
-              title: 'Support',
-              subtitle: 'FAQ · email a human',
-              external: true,
-              onTap: () => onTap('help:${ExternalLinks.support}'),
-            ),
-            _SettingsDrawerItem(
-              icon: Icons.privacy_tip_outlined,
-              title: 'Privacy Policy',
-              subtitle: 'What we collect (nothing)',
-              external: true,
-              onTap: () => onTap('help:${ExternalLinks.privacy}'),
-            ),
-            _SettingsDrawerItem(
-              icon: Icons.gavel_outlined,
-              title: 'Terms of Service',
-              subtitle: 'Self-custody · MIT source',
-              external: true,
-              onTap: () => onTap('help:${ExternalLinks.terms}'),
-            ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Mono uppercase label used to break the drawer into Settings vs. Help &
-/// Resources groups. Same visual register as the section dividers in the
-/// website footer (`mono` + emerald + wide letter-spacing).
-class _SettingsDrawerSectionHeader extends StatelessWidget {
-  final String label;
-  const _SettingsDrawerSectionHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-      child: Text(
-        label.toUpperCase(),
-        style: theme.textTheme.bodySmall?.copyWith(
-          fontFamily: 'JetBrains Mono',
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 1.6,
-          color: NeoTheme.emerald,
         ),
       ),
     );
@@ -3282,18 +3296,11 @@ class _SettingsDrawerItem extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
 
-  /// `true` when the row launches an external URL (browser, mail
-  /// client) rather than pushing an in-app screen. Swaps the trailing
-  /// chevron for an `open_in_new` glyph so the user knows the tap will
-  /// leave the app.
-  final bool external;
-
   const _SettingsDrawerItem({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
-    this.external = false,
   });
 
   @override
@@ -3330,8 +3337,8 @@ class _SettingsDrawerItem extends StatelessWidget {
               ),
             ),
             Icon(
-              external ? Icons.open_in_new : Icons.chevron_right,
-              size: external ? 16 : 20,
+              Icons.chevron_right,
+              size: 20,
               color: theme.hintColor.withValues(alpha: 0.5),
             ),
           ],
