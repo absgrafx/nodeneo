@@ -62,7 +62,19 @@ AuthKey_*.p8
 *.mobileprovision
 .appstore
 
-# Internal working docs — drafts, security plans, handoff context, dev
-# roadmaps. Treat as ephemeral planning notes; never publish. Public
-# README.md / docs go elsewhere.
-.ai-docs/
+# .ai-docs/ houses two classes of file:
+#   1. Canonical public-ish docs that README.md links to and that
+#      error messages in the GitHub workflows direct contributors at.
+#      These need to be tracked — broken links on the public repo are
+#      worse than the small leak of internal-feeling prose.
+#   2. Internal planning / scratch notes — decision logs, security
+#      planning, handoff context, business / LLC paperwork drafts, AI
+#      sessions' working memory. These stay ignored. `feature_backlog.md`
+#      lives here despite README mentions because it carries LLC EIN /
+#      address / banking-vendor details that don't belong in public.
+# Default: ignore everything; allow-list (`!`) only the canonical files.
+.ai-docs/*
+!.ai-docs/architecture.md
+!.ai-docs/versioning.md
+!.ai-docs/release_process.md
+!.ai-docs/ios_device_signing.md

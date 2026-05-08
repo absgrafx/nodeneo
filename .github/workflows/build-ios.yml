@@ -392,7 +392,17 @@ jobs:
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
+          # BUILD_CHANNEL drives the in-app About screen's version display
+          # (vX.Y.Z on main, vX.Y.Z+RUN on dev) via
+          # lib/constants/app_brand.dart. The IPA's CFBundleShortVersionString
+          # stays clean X.Y.Z either way — see .ai-docs/versioning.md.
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            BUILD_CHANNEL=stable
+          else
+            BUILD_CHANNEL=preview
+          fi
           DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
           fi
@@ -464,10 +474,21 @@ jobs:
       # ── Upload IPA as workflow artifact (always) ──
       # Lets you download and inspect the binary even if the TestFlight upload
       # gets stuck mid-processing. 14-day retention matches macOS workflow.
+      # Artifact name carries the +RUN suffix on dev to mirror DMG naming
+      # and the in-app "v3.4.0+42" preview label (see .ai-docs/versioning.md).
+      - name: Compute IPA artifact name
+        id: ipa_artifact
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "name=nodeneo-${APP_VERSION}-ios.ipa" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=nodeneo-${APP_VERSION}+${GITHUB_RUN_NUMBER}-ios.ipa" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v6
         with:
-          name: nodeneo-${{ env.APP_VERSION }}-ios.ipa
+          name: ${{ steps.ipa_artifact.outputs.name }}
           path: build/ios/ipa/*.ipa
           retention-days: 14
 
