@@ -1,12 +1,18 @@
 name: macOS Build & Release
 #
-# Branch Strategy (mirrors Morpheus-Lumerin-Node):
-#   • dev:  Build + test only — DMG uploaded as artifact, no signing/notarization
-#   • main: Build + sign + notarize + DMG published as GitHub Release
+# Branch Strategy:
+#   • dev:  Build + sign + notarize → DMG uploaded as workflow artifact only
+#           (no GH Release). Same Apple signing path as production so a
+#           cert / profile / notary-service regression shows up on dev,
+#           not on release day. The dev preview DMG installs like a real
+#           release (no xattr ritual, no right-click → Open).
+#   • main: Same pipeline + DMG published as a tagged GH Release with
+#           RELEASE_NOTES.md as the body.
 #
-# SemVer Tagging:
-#   • main: auto-bumps MINOR (v1.1.0, v1.2.0, …) unless VMAJ_NEW is raised
-#   • dev:  vMAJ.MIN.COMMITS-dev (e.g. v1.0.7-dev) — not published
+# Versioning (see lib/constants/app_brand.dart's BUILD_CHANNEL plumbing):
+#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`
+#   • dev:  vX.Y.Z+RUN, DMG named `Node Neo-X.Y.Z+RUN-macOS.dmg`,
+#           git tag `vX.Y.Z-dev` (not pushed as a release)
 #
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
@@ -164,53 +170,14 @@ jobs:
           cp build/go/libnodeneo.dylib "$APP_DIR/Contents/Frameworks/"
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
 
-      # ── Ad-hoc sign for dev (preview builds) ──
-      # `flutter build macos` ad-hoc-signs the Runner Mach-O via the
-      # `CODE_SIGN_IDENTITY = "-"` we patched in earlier, but the
-      # `libnodeneo.dylib` we just copied into Contents/Frameworks/ is
-      # unsigned. macOS library validation kills the process at load
-      # time and Finder shows the cryptic dialog
-      #     "The application 'Node Neo' can't be opened."
-      # *before* any of the app's code runs. `xattr -cr` clears Gatekeeper
-      # quarantine but does nothing for the unsigned-dylib kill — the only
-      # fix is to actually sign the dylib (even ad-hoc is enough for
-      # library validation on the user's own machine).
-      #
-      # We re-sign the dylib first, then deep-re-sign the bundle so the
-      # outer signature seals over the dylib's hash. This step is the
-      # dev-equivalent of the `Codesign app bundle` step below; it
-      # intentionally skips `--options runtime` and `--entitlements`
-      # because:
-      #   - Hardened runtime needs entitlement substitution (team prefix)
-      #     which we don't have on dev.
-      #   - Without sandbox (we're sandbox=false), the keychain-access-
-      #     groups entitlement is optional; the app accesses its own
-      #     keychain items by bundle id without it.
-      # On `main`, the proper Developer ID + entitlements + hardened
-      # runtime path runs instead — see the next set of steps.
-      - name: Ad-hoc sign for local launch (dev only)
-        if: github.ref != 'refs/heads/main'
-        run: |
-          codesign --force --sign - \
-            "$APP_DIR/Contents/Frameworks/libnodeneo.dylib"
-          codesign --force --deep --sign - "$APP_DIR"
-          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
-          echo "Bundle ad-hoc signed for local launch."
-          echo ""
-          echo "### Installing the dev preview DMG" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "1. Mount the DMG and drag \`Node Neo.app\` to Applications." >> "$GITHUB_STEP_SUMMARY"
-          echo "2. Clear Gatekeeper quarantine (DMGs from CI artifacts always carry it):" >> "$GITHUB_STEP_SUMMARY"
-          echo "   \`\`\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "   xattr -dr com.apple.quarantine \"/Applications/Node Neo.app\"" >> "$GITHUB_STEP_SUMMARY"
-          echo "   \`\`\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "3. First launch may still need **right-click → Open** to bypass" >> "$GITHUB_STEP_SUMMARY"
-          echo "   the \"unidentified developer\" dialog (ad-hoc signing isn't" >> "$GITHUB_STEP_SUMMARY"
-          echo "   a Developer ID — only \`main\` builds are signed + notarized)." >> "$GITHUB_STEP_SUMMARY"
-
-      # ── Sign (main only) ──
+      # ── Sign + notarize (dev AND main) ─────────────────────────────────
+      # Both branches run the full Apple signing + notarization path so
+      # the dev preview DMG is a true production smoke test. Only the
+      # downstream GH Release publication is `main`-only — see the bottom
+      # of this file. If any step here fails (cert expired, profile
+      # mismatch, Apple notary service hiccup) we want to know on the
+      # next dev push, not on release day.
       - name: Import signing certificate
-        if: github.ref == 'refs/heads/main'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
@@ -227,7 +194,6 @@ jobs:
           rm certificate.p12
 
       - name: Embed provisioning profile
-        if: github.ref == 'refs/heads/main'
         env:
           PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
         run: |
@@ -236,7 +202,6 @@ jobs:
           echo "Embedded provisioning profile into app bundle"
 
       - name: Expand entitlements variables for CI signing
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
@@ -246,7 +211,6 @@ jobs:
           cat macos/Runner/Release.entitlements
 
       - name: Codesign app bundle
-        if: github.ref == 'refs/heads/main'
         env:
           SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
         run: |
@@ -258,12 +222,11 @@ jobs:
             --sign "$SIGNING_IDENTITY" \
             "$APP_DIR"
 
-      # ── Notarize the .app (main only) ──
+      # ── Notarize the .app ──
       # Submit a ZIP of the .app for notarization, then staple the ticket
       # onto the .app BEFORE packaging the DMG. This way when the user drags
       # the app out of the DMG the notarization ticket travels with it.
       - name: Notarize app bundle
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
@@ -304,11 +267,13 @@ jobs:
           echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
           echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
 
-      # ── Notarize + staple DMG (main only) ──
+      # ── Notarize + staple DMG ──
       # The .app inside is already notarized+stapled. The DMG is a separate
       # artifact that needs its own notarization submission for stapling.
+      # We staple the DMG too so users who keep the DMG around (rather than
+      # mounting once and trashing it) don't get a Gatekeeper prompt the
+      # second time they double-click it.
       - name: Notarize and staple DMG
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
