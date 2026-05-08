@@ -218,61 +218,75 @@ jobs:
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
           echo "ASC API key staged at ~/.appstoreconnect/private_keys/AuthKey_${APPLE_ASC_API_KEY_ID}.p8"
 
-      # ── Pre-fetch the provisioning profile via the ASC API ──
-      # `flutter build ipa` invokes `xcodebuild` which (with the project's
-      # default automatic signing) tries to log in with an Apple ID and
-      # fetch/create a managed profile on the fly. On a clean CI runner
-      # there's no logged-in account and Flutter doesn't pass the ASC API
-      # key auth flags through to xcodebuild — so xcodebuild fails with
-      # "No Accounts" / "No profiles for 'com.absgrafx.nodeneo' were found".
+      # ── Stage the manually-managed App Store provisioning profile ──
+      # Why not auto-sign or let the ASC API download a managed profile?
+      # On a clean CI runner there's no Apple ID logged into Xcode, so
+      # automatic signing's "fetch a managed profile" path fails with
+      # "No Accounts". Pre-fetching the Xcode-managed profile via the ASC
+      # API also fails for two reasons under manual signing:
+      #   1) Xcode refuses Xcode-managed profiles when CODE_SIGN_STYLE=Manual:
+      #      "is Xcode managed, but signing settings require a manually
+      #       managed profile."
+      #   2) The Xcode-managed App Store profile in our team didn't include
+      #      our specific Apple Distribution cert in its DeveloperCertificates
+      #      list anyway.
       #
-      # The fix is two steps:
-      #   1. Pre-fetch the matching IOS_APP_STORE-class profile via the ASC
-      #      API and place it in ~/Library/MobileDevice/Provisioning Profiles/.
-      #   2. Patch ios/Runner.xcodeproj/project.pbxproj's Release config to
-      #      Manual signing pointing at that profile (next step). Debug and
-      #      Profile configs stay on Automatic so local `flutter run` on a
-      #      developer's device is unaffected.
+      # Solution: a manually-managed App Store profile created once in the
+      # Apple Developer portal that explicitly lists our Apple Distribution
+      # cert (the same one whose .p12 we import via APPLE_DIST_CERT_P12_BASE64).
+      # The .mobileprovision contents aren't secret (they're shipped inside
+      # every IPA), but we keep them in a secret so team layout stays out of
+      # the repo and annual renewal is a single secret update.
       #
-      # Apple-managed profiles auto-include all current Distribution certs
-      # on the team, so the freshly-fetched profile lists today's Apple
-      # Distribution cert without us having to re-issue the profile by hand
-      # whenever the cert rotates.
-      - name: Decode ASC API key (PEM) for provisioning download
-        id: asc_key_pem
+      # The next step patches project.pbxproj's Runner Release config to
+      # Manual signing pointing at this profile by *name*, read from the
+      # profile itself — so renaming the profile in the dev portal and
+      # re-uploading the secret is the only step needed; nothing in the
+      # workflow has to change.
+      - name: Stage App Store provisioning profile
         env:
-          APPLE_ASC_API_KEY_P8: ${{ secrets.APPLE_ASC_API_KEY_P8 }}
+          IOS_PROFILE_APP_STORE_BASE64: ${{ secrets.IOS_PROFILE_APP_STORE_BASE64 }}
         run: |
-          DECODED=$(echo "$APPLE_ASC_API_KEY_P8" | base64 --decode)
-          # Mask the key contents in case any logging in subsequent steps
-          # tries to print it. ::add-mask:: works per-line so we mask each.
-          while IFS= read -r line; do
-            [ -n "$line" ] && echo "::add-mask::$line"
-          done <<< "$DECODED"
-          {
-            echo 'pem<<EOF_ASC_KEY_PEM'
-            echo "$DECODED"
-            echo 'EOF_ASC_KEY_PEM'
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Download provisioning profile (ASC API)
-        uses: apple-actions/download-provisioning-profiles@v3
-        with:
-          bundle-id: ${{ env.IOS_BUNDLE_ID }}
-          profile-type: IOS_APP_STORE
-          issuer-id: ${{ secrets.APPLE_ASC_API_ISSUER_ID }}
-          api-key-id: ${{ secrets.APPLE_ASC_API_KEY_ID }}
-          api-private-key: ${{ steps.asc_key_pem.outputs.pem }}
+          set -euo pipefail
+          if [ -z "$IOS_PROFILE_APP_STORE_BASE64" ]; then
+            echo "::error::IOS_PROFILE_APP_STORE_BASE64 secret is empty."
+            echo "          Create a *manually-managed* App Store profile in the Apple Developer"
+            echo "          portal (https://developer.apple.com/account/resources/profiles/list)"
+            echo "          for bundle id ${IOS_BUNDLE_ID}, select the Apple Distribution cert"
+            echo "          whose .p12 is in APPLE_DIST_CERT_P12_BASE64, download the"
+            echo "          .mobileprovision, and store it as IOS_PROFILE_APP_STORE_BASE64."
+            exit 1
+          fi
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          DEST="$PROFILE_DIR/nodeneo_app_store.mobileprovision"
+          echo "$IOS_PROFILE_APP_STORE_BASE64" | base64 --decode > "$DEST"
+          PLIST="$(security cms -D -i "$DEST")"
+          PROFILE_NAME="$(echo "$PLIST" | plutil -extract Name raw -o - -)"
+          PROFILE_UUID="$(echo "$PLIST" | plutil -extract UUID raw -o - -)"
+          IS_XCODE_MANAGED="$(echo "$PLIST" | plutil -extract IsXcodeManaged raw -o - - 2>/dev/null || echo false)"
+          PROFILE_BUNDLE_ID="$(echo "$PLIST" | plutil -extract Entitlements.application-identifier raw -o - - | sed 's/^[^.]*\.//')"
+          echo "Profile: name='$PROFILE_NAME' uuid=$PROFILE_UUID"
+          echo "  bundle_id=$PROFILE_BUNDLE_ID  xcode_managed=$IS_XCODE_MANAGED"
+          if [ "$IS_XCODE_MANAGED" = "true" ]; then
+            echo "::error::Profile is Xcode-managed. Manual signing rejects Xcode-managed profiles."
+            echo "          Recreate it in the dev portal as a regular App Store profile (NOT"
+            echo "          'Xcode automatically signs') and re-encode for IOS_PROFILE_APP_STORE_BASE64."
+            exit 1
+          fi
+          if [ "$PROFILE_BUNDLE_ID" != "$IOS_BUNDLE_ID" ]; then
+            echo "::error::Profile bundle id ($PROFILE_BUNDLE_ID) doesn't match IOS_BUNDLE_ID ($IOS_BUNDLE_ID)."
+            exit 1
+          fi
 
       # ── Switch Runner target's Release config to manual signing ──
-      # Required because xcodebuild's *automatic* signing path on a clean
-      # runner attempts an Apple ID login (which CI doesn't have) regardless
-      # of any profile sitting in ~/Library/MobileDevice/Provisioning Profiles/.
-      # We patch only the Runner target's Release config block in
-      # project.pbxproj so Debug / Profile configs (used by `flutter run` on
-      # a developer's device) keep their existing Automatic signing.
-      # ExportOptions.plist is patched in-place too so `xcodebuild
-      # -exportArchive` matches the same profile/team for IPA export.
+      # Patches only the Runner-target Release config block (UUID
+      # 97C147071CF9000F007C117D) so Debug / Profile configs (used by
+      # local `flutter run` on a developer's device) keep their existing
+      # Automatic signing. ExportOptions.plist is patched in-place too so
+      # `xcodebuild -exportArchive` uses the same profile/team for IPA
+      # export. The committed pbxproj + ExportOptions.plist on disk stay
+      # on Automatic; both edits disappear with the runner.
       - name: Switch Xcode project to manual signing (Release)
         env:
           IOS_BUNDLE_ID: ${{ env.IOS_BUNDLE_ID }}
