@@ -19,14 +19,28 @@ import '../wallet/wallet_security_actions.dart';
 /// or grep for `[backup-reset]` in any log dump.
 const String _logName = 'backup-reset';
 
-/// Type group used for both Save and Open dialogs. We accept any extension
-/// because real `.nnbak` files were unrecognised by the system on first
-/// open (no UTType registered for our private extension), and tightening
-/// the filter just hides the user's own backup. The extension list stays
-/// here as a hint for the system picker and as documentation.
+/// Type group used for the Save (macOS) and Open (macOS + iOS) dialogs.
+/// We deliberately stay permissive — real `.nnbak` files were unrecognised
+/// by the system on first open (no UTType registered for our private
+/// extension), and tightening the filter just hides the user's own backup
+/// behind a "no matching files" picker.
+///
+/// `extensions` is enough on macOS — `NSOpenPanel` happily filters by
+/// raw extension. iOS's `file_selector_ios` is stricter:
+/// `UIDocumentPickerViewController` is built on UTIs, so it rejects an
+/// `XTypeGroup` that has `extensions` set without a non-empty
+/// `uniformTypeIdentifiers`. The error you'll see otherwise is:
+///   "Invalid argument(s): The provided type group Instance of
+///    'XTypeGroup' should either allow all files, or have a non-empty
+///    'uniformTypeIdentifiers'."
+/// `public.data` matches any binary file, which mirrors the
+/// "show everything, let the user pick their .nnbak" intent above.
+/// macOS treats `uniformTypeIdentifiers` as a hint and keeps honouring
+/// the `extensions` filter, so this is a no-op there.
 const XTypeGroup _backupTypeGroup = XTypeGroup(
   label: 'Node Neo backup',
   extensions: <String>['nnbak'],
+  uniformTypeIdentifiers: <String>['public.data'],
 );
 
 /// Backup & Reset screen: data export/import and destructive operations.
