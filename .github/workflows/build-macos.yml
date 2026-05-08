@@ -42,36 +42,24 @@ jobs:
       - name: Compute next version
         id: semver
         run: |
-          VMAJ_NEW=3
-          VMIN_NEW=0
-          VPAT_NEW=0
-
-          # Find the last production tag (clean semver: v#.#.# with no suffix).
-          VLAST=$(git tag -l "v[0-9]*" \
-            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" \
-            | sort -V | tail -n 1 | cut -c2-)
-
-          if [ -n "$VLAST" ]; then
-            eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
-          else
-            VMAJ=0; VMIN=0; VPAT=0
+          # Source of truth is pubspec.yaml's `version:` line. Format:
+          # "version: 3.4.0+1" -> VPUB=3.4.0. The DMG name and git tag both
+          # derive from this; matches the iOS workflow byte-for-byte so a
+          # given commit gets the same tag whether it ships to macOS or iOS.
+          VPUB=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          if ! echo "$VPUB" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::pubspec.yaml version is not a clean semver: '${VPUB}'"
+            exit 1
           fi
 
           if [ "$GITHUB_REF_NAME" = "main" ]; then
-            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
-              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW; VPAT=$VPAT_NEW
-            else
-              VMIN=$((VMIN + 1)); VPAT=0
-            fi
-            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VFULL=$VPUB
             VTAG=v${VFULL}
           else
-            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
-              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW
-            fi
-            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || echo HEAD)
-            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD)
-            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            # Dev preview: same VFULL as the upcoming main release; the
+            # git tag gets a "-dev" suffix so it doesn't collide with the
+            # eventual main release tag for the same pubspec version.
+            VFULL=$VPUB
             RNAME=${GITHUB_REF_NAME##*/}
             VTAG=v${VFULL}-${RNAME}
           fi
