@@ -181,14 +181,14 @@ jobs:
           dart run flutter_native_splash:create
 
       # ── Set up the Apple Distribution signing identity ──
-      # The .p12 cert is exported from a developer's keychain (Keychain
-      # Access → "Apple Distribution: Alan Sorber (2S4578V7ZD)" → right-click
-      # → Export → .p12 with a password) and stored as a base64-encoded
-      # GitHub Secret. We import it into a fresh ephemeral keychain so it
-      # doesn't bleed into the runner's default keychain or persist across
-      # jobs. The keychain is unlocked once with KEYCHAIN_PASSWORD and the
-      # partition list is opened so codesign can use the key without
-      # interactive prompting.
+      # The .p12 cert is exported from the maintainer's keychain (Keychain
+      # Access → "Apple Distribution: <account name> (<team id>)" →
+      # right-click → Export → .p12 with a password) and stored as a
+      # base64-encoded GitHub Secret. We import it into a fresh ephemeral
+      # keychain so it doesn't bleed into the runner's default keychain or
+      # persist across jobs. The keychain is unlocked once with
+      # KEYCHAIN_PASSWORD and the partition list is opened so codesign can
+      # use the key without interactive prompting.
       - name: Import Apple Distribution certificate
         env:
           APPLE_DIST_CERT_P12_BASE64: ${{ secrets.APPLE_DIST_CERT_P12_BASE64 }}
@@ -196,10 +196,14 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           if [ -z "$APPLE_DIST_CERT_P12_BASE64" ]; then
-            echo "::error::APPLE_DIST_CERT_P12_BASE64 secret is empty. See"
-            echo "          .ai-docs/ios_device_signing.md → Section 3 for how"
-            echo "          to export the Apple Distribution cert as .p12 and"
-            echo "          base64-encode it for this secret."
+            echo "::error::APPLE_DIST_CERT_P12_BASE64 secret is empty."
+            echo "          Export the Apple Distribution cert from Keychain"
+            echo "          Access as a .p12, base64-encode it"
+            echo "          (\`base64 -i dist.p12 | pbcopy\`), and paste the"
+            echo "          result into the APPLE_DIST_CERT_P12_BASE64 GitHub"
+            echo "          Secret. Set APPLE_DIST_CERT_PASSWORD to the .p12"
+            echo "          export password and KEYCHAIN_PASSWORD to any"
+            echo "          random string used to unlock the runner keychain."
             exit 1
           fi
           echo "$APPLE_DIST_CERT_P12_BASE64" | base64 --decode > certificate.p12
@@ -229,8 +233,14 @@ jobs:
         run: |
           if [ -z "$APPLE_ASC_API_KEY_ID" ] || [ -z "$APPLE_ASC_API_KEY_P8" ]; then
             echo "::error::APPLE_ASC_API_KEY_ID or APPLE_ASC_API_KEY_P8 is empty."
-            echo "          See .ai-docs/ios_device_signing.md → Section 2 for how"
-            echo "          to create the ASC API key."
+            echo "          Create an App Store Connect API key at:"
+            echo "          App Store Connect → Users and Access → Integrations"
+            echo "          → Team Keys → +. Choose 'Developer' (or 'App Manager')"
+            echo "          access. Download the .p8 ONCE — Apple will not show"
+            echo "          it again. Set APPLE_ASC_API_KEY_ID to the 10-char"
+            echo "          key id, APPLE_ASC_API_ISSUER_ID to the team's issuer"
+            echo "          UUID (visible on the same page), and"
+            echo "          APPLE_ASC_API_KEY_P8 to the base64-encoded .p8 body."
             exit 1
           fi
           mkdir -p "$HOME/.appstoreconnect/private_keys"
@@ -392,7 +402,18 @@ jobs:
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
+          # BUILD_CHANNEL drives the in-app About screen's version display
+          # (vX.Y.Z on main, vX.Y.Z+RUN on dev) via the formatVersion helper
+          # in lib/constants/app_brand.dart. The IPA's CFBundleShortVersionString
+          # stays clean X.Y.Z either way — preview vs stable is purely a
+          # display-time decision, not a binary-level one.
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            BUILD_CHANNEL=stable
+          else
+            BUILD_CHANNEL=preview
+          fi
           DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
           fi
@@ -464,10 +485,21 @@ jobs:
       # ── Upload IPA as workflow artifact (always) ──
       # Lets you download and inspect the binary even if the TestFlight upload
       # gets stuck mid-processing. 14-day retention matches macOS workflow.
+      # Artifact name carries the +RUN suffix on dev to mirror DMG naming
+      # and the in-app "v3.4.0+42" preview label.
+      - name: Compute IPA artifact name
+        id: ipa_artifact
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            echo "name=nodeneo-${APP_VERSION}-ios.ipa" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=nodeneo-${APP_VERSION}+${GITHUB_RUN_NUMBER}-ios.ipa" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v6
         with:
-          name: nodeneo-${{ env.APP_VERSION }}-ios.ipa
+          name: ${{ steps.ipa_artifact.outputs.name }}
           path: build/ios/ipa/*.ipa
           retention-days: 14
 

@@ -152,11 +152,22 @@ jobs:
           sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' macos/Runner.xcodeproj/project.pbxproj
 
       # ── Build release app (inject version + optional premium RPC) ──
+      # BUILD_CHANNEL is consumed by lib/constants/app_brand.dart's
+      # AppBrand.formatVersion() to decide whether the in-app About
+      # screen shows "v3.4.0" (main release) or "v3.4.0+42" (dev preview).
+      # The CFBundleShortVersionString in Info.plist stays clean X.Y.Z
+      # either way; the +RUN suffix is purely a display-layer cue.
       - name: Flutter build macOS (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            BUILD_CHANNEL=stable
+          else
+            BUILD_CHANNEL=preview
+          fi
           DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
           fi
@@ -248,7 +259,20 @@ jobs:
       - name: Package DMG
         run: |
           APP_NAME=$(basename "$APP_DIR" .app)
-          DMG_NAME="Node Neo-${APP_VERSION}-macOS.dmg"
+          # Dev DMGs include the build number so a preview download is
+          # visually distinct from a shipped release on disk:
+          #   main → Node Neo-3.4.0-macOS.dmg
+          #   dev  → Node Neo-3.4.0+42-macOS.dmg
+          # The .app *inside* the DMG always reports CFBundleShortVersionString
+          # = ${APP_VERSION} (no suffix) because that's what pubspec carries;
+          # the suffix is purely a filename / artifact-naming hint that
+          # mirrors the in-app "v3.4.0+42" preview label.
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            DMG_VERSION="${APP_VERSION}"
+          else
+            DMG_VERSION="${APP_VERSION}+${GITHUB_RUN_NUMBER}"
+          fi
+          DMG_NAME="Node Neo-${DMG_VERSION}-macOS.dmg"
           DMG_PATH="build/${DMG_NAME}"
 
           create-dmg \

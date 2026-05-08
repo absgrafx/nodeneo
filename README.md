@@ -72,8 +72,6 @@ Flutter UI → dart:ffi → Go c-shared (.dylib) → proxy-router mobile SDK →
 - **SQLite** for conversations, messages, preferences — wallet-scoped with column-level encryption
 - **Platform** secure storage (Keychain) + optional biometrics (Face ID / Touch ID)
 
-Full architecture docs: [.ai-docs/architecture.md](.ai-docs/architecture.md)
-
 ## Platforms
 
 | Platform | Status | Notes |

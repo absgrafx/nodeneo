@@ -7,8 +7,7 @@ import 'dart:io' show Platform;
 /// Blockchain Connection configuration.
 ///
 /// Capability gating lives here. **Layout** decisions (column counts,
-/// tile density, nav style) belong in `lib/services/form_factor.dart`
-/// — see `.ai-docs/ui_responsive_design.md`.
+/// tile density, nav style) belong in `lib/services/form_factor.dart`.
 class PlatformCaps {
   PlatformCaps._();
 
