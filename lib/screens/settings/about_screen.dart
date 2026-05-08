@@ -159,7 +159,7 @@ class _AboutScreenState extends State<AboutScreen> {
               icon: Icons.info_outline_rounded,
               title: 'About',
               status: Text(
-                'v$_appVersion',
+                AppBrand.formatVersion(_appVersion, _buildNumber),
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
@@ -201,7 +201,7 @@ class _AboutScreenState extends State<AboutScreen> {
                   const SizedBox(height: 16),
                   _VersionRow(
                     label: 'App version',
-                    value: 'v$_appVersion ($_buildNumber)',
+                    value: AppBrand.formatVersion(_appVersion, _buildNumber),
                   ),
                   const SizedBox(height: 8),
                   _VersionRow(

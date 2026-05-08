@@ -1,12 +1,18 @@
 name: macOS Build & Release
 #
-# Branch Strategy (mirrors Morpheus-Lumerin-Node):
-#   • dev:  Build + test only — DMG uploaded as artifact, no signing/notarization
-#   • main: Build + sign + notarize + DMG published as GitHub Release
+# Branch Strategy:
+#   • dev:  Build + sign + notarize → DMG uploaded as workflow artifact only
+#           (no GH Release). Same Apple signing path as production so a
+#           cert / profile / notary-service regression shows up on dev,
+#           not on release day. The dev preview DMG installs like a real
+#           release (no xattr ritual, no right-click → Open).
+#   • main: Same pipeline + DMG published as a tagged GH Release with
+#           RELEASE_NOTES.md as the body.
 #
-# SemVer Tagging:
-#   • main: auto-bumps MINOR (v1.1.0, v1.2.0, …) unless VMAJ_NEW is raised
-#   • dev:  vMAJ.MIN.COMMITS-dev (e.g. v1.0.7-dev) — not published
+# Versioning (see lib/constants/app_brand.dart's BUILD_CHANNEL plumbing):
+#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`
+#   • dev:  vX.Y.Z+RUN, DMG named `Node Neo-X.Y.Z+RUN-macOS.dmg`,
+#           git tag `vX.Y.Z-dev` (not pushed as a release)
 #
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
@@ -146,11 +152,22 @@ jobs:
           sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' macos/Runner.xcodeproj/project.pbxproj
 
       # ── Build release app (inject version + optional premium RPC) ──
+      # BUILD_CHANNEL is consumed by lib/constants/app_brand.dart's
+      # AppBrand.formatVersion() to decide whether the in-app About
+      # screen shows "v3.4.0" (main release) or "v3.4.0+42" (dev preview).
+      # The CFBundleShortVersionString in Info.plist stays clean X.Y.Z
+      # either way; the +RUN suffix is purely a display-layer cue.
       - name: Flutter build macOS (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            BUILD_CHANNEL=stable
+          else
+            BUILD_CHANNEL=preview
+          fi
           DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
           fi
@@ -164,9 +181,14 @@ jobs:
           cp build/go/libnodeneo.dylib "$APP_DIR/Contents/Frameworks/"
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
 
-      # ── Sign (main only) ──
+      # ── Sign + notarize (dev AND main) ─────────────────────────────────
+      # Both branches run the full Apple signing + notarization path so
+      # the dev preview DMG is a true production smoke test. Only the
+      # downstream GH Release publication is `main`-only — see the bottom
+      # of this file. If any step here fails (cert expired, profile
+      # mismatch, Apple notary service hiccup) we want to know on the
+      # next dev push, not on release day.
       - name: Import signing certificate
-        if: github.ref == 'refs/heads/main'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
@@ -183,7 +205,6 @@ jobs:
           rm certificate.p12
 
       - name: Embed provisioning profile
-        if: github.ref == 'refs/heads/main'
         env:
           PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
         run: |
@@ -192,7 +213,6 @@ jobs:
           echo "Embedded provisioning profile into app bundle"
 
       - name: Expand entitlements variables for CI signing
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
@@ -202,7 +222,6 @@ jobs:
           cat macos/Runner/Release.entitlements
 
       - name: Codesign app bundle
-        if: github.ref == 'refs/heads/main'
         env:
           SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
         run: |
@@ -214,12 +233,11 @@ jobs:
             --sign "$SIGNING_IDENTITY" \
             "$APP_DIR"
 
-      # ── Notarize the .app (main only) ──
+      # ── Notarize the .app ──
       # Submit a ZIP of the .app for notarization, then staple the ticket
       # onto the .app BEFORE packaging the DMG. This way when the user drags
       # the app out of the DMG the notarization ticket travels with it.
       - name: Notarize app bundle
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
@@ -241,7 +259,20 @@ jobs:
       - name: Package DMG
         run: |
           APP_NAME=$(basename "$APP_DIR" .app)
-          DMG_NAME="Node Neo-${APP_VERSION}-macOS.dmg"
+          # Dev DMGs include the build number so a preview download is
+          # visually distinct from a shipped release on disk:
+          #   main → Node Neo-3.4.0-macOS.dmg
+          #   dev  → Node Neo-3.4.0+42-macOS.dmg
+          # The .app *inside* the DMG always reports CFBundleShortVersionString
+          # = ${APP_VERSION} (no suffix) because that's what pubspec carries;
+          # the suffix is purely a filename / artifact-naming hint that
+          # mirrors the in-app "v3.4.0+42" preview label.
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            DMG_VERSION="${APP_VERSION}"
+          else
+            DMG_VERSION="${APP_VERSION}+${GITHUB_RUN_NUMBER}"
+          fi
+          DMG_NAME="Node Neo-${DMG_VERSION}-macOS.dmg"
           DMG_PATH="build/${DMG_NAME}"
 
           create-dmg \
@@ -260,11 +291,13 @@ jobs:
           echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
           echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
 
-      # ── Notarize + staple DMG (main only) ──
+      # ── Notarize + staple DMG ──
       # The .app inside is already notarized+stapled. The DMG is a separate
       # artifact that needs its own notarization submission for stapling.
+      # We staple the DMG too so users who keep the DMG around (rather than
+      # mounting once and trashing it) don't get a Gatekeeper prompt the
+      # second time they double-click it.
       - name: Notarize and staple DMG
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}

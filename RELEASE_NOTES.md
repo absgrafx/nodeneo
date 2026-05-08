@@ -26,7 +26,7 @@ Mirrors the structure of `build-macos.yml`: a `generate-tag` job that produces t
 - **Push to `main`** — same pipeline, plus a SemVer git tag and a GitHub Release with notes only (the IPA itself is uploaded to TestFlight, not attached to the GH Release — App Store distribution doesn't allow sideload).
 - **App Store submission for review** is intentionally **not** automated. The "Submit for Review" click in App Store Connect requires complete metadata (screenshots, age rating, review notes, what's-new copy); a rejection costs days. Once a build lands in TestFlight from `main`, promote it manually via App Store Connect.
 
-Apple Distribution `.p12` cert is base64-decoded into an ephemeral keychain on the runner; ASC API key is staged at `~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8` so both archive-time signing AND the `altool` upload use the same credential. Required GitHub Secrets and the `.p12` export walkthrough are documented in `.ai-docs/ios_device_signing.md` Section 3 (which used to be a "future plan" placeholder; now it's the runbook).
+Apple Distribution `.p12` cert is base64-decoded into an ephemeral keychain on the runner; ASC API key is staged at `~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8` so both archive-time signing AND the `altool` upload use the same credential.
 
 ### macOS workflow polish
 
