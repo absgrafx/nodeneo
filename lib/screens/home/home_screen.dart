@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../app_route_observer.dart';
 import '../../constants/app_brand.dart';
+import '../../constants/external_links.dart';
 import '../../constants/network_tokens.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/bridge.dart';
@@ -1484,7 +1485,42 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 6),
+                      // Front-page deep link into `nodeneo.ai/start.html`
+                      // for users who want a "first chat in 5 minutes"
+                      // checklist. Sized as a quiet text link so it
+                      // doesn't compete with the model list — anyone
+                      // already at home in the app ignores it; anyone
+                      // who needs it sees it the moment they're staring
+                      // at the model list and wondering what to tap.
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () => ExternalLinks.launch(
+                            ExternalLinks.quickStart,
+                            context: context,
+                          ),
+                          icon: const Icon(
+                            Icons.rocket_launch_outlined,
+                            size: 14,
+                          ),
+                          label: const Text(
+                            'Quick start guide',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                          style: TextButton.styleFrom(
+                            foregroundColor: NeoTheme.emerald,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
+                            ),
+                            minimumSize: const Size(0, 24),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
                     ],
                   ),
                 ),
@@ -2172,9 +2208,65 @@ class _FundWalletOverlay extends StatelessWidget {
                   height: 1.4,
                 ),
               ),
+              // Deep links into the long-form funding walkthroughs on
+              // nodeneo.ai. Sized small and underneath the address so the
+              // primary affordance (copy address + send funds) stays
+              // dominant; the links are a way out for the user who has
+              // never bought crypto and doesn't know where to start. Both
+              // open in the platform browser via ExternalLinks.launch.
+              const SizedBox(height: 14),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  _FundWalletHelpLink(
+                    icon: Icons.school_outlined,
+                    label: 'New to crypto? See the walkthrough',
+                    url: ExternalLinks.onramp,
+                  ),
+                  _FundWalletHelpLink(
+                    icon: Icons.rocket_launch_outlined,
+                    label: 'Quick start',
+                    url: ExternalLinks.quickStart,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Compact emerald-toned text-button used inside [_FundWalletOverlay] to
+/// link out to the funding walkthroughs on `nodeneo.ai`. Mirrors the
+/// "New to crypto?" affordance used on the onboarding screen so a user
+/// who skipped that path on first launch still has the same out.
+class _FundWalletHelpLink extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String url;
+
+  const _FundWalletHelpLink({
+    required this.icon,
+    required this.label,
+    required this.url,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: () => ExternalLinks.launch(url, context: context),
+      icon: Icon(icon, size: 14),
+      label: Text(label, style: const TextStyle(fontSize: 11)),
+      style: TextButton.styleFrom(
+        foregroundColor: NeoTheme.emerald,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        minimumSize: const Size(0, 28),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
       ),
     );
   }
@@ -3123,9 +3215,14 @@ class _SettingsDrawer extends StatelessWidget {
     return Drawer(
       width: drawerWidth,
       backgroundColor: theme.colorScheme.surface,
+      // The drawer body is a `ListView` rather than a `Column` so the
+      // content scrolls when accessibility text scaling, short
+      // screens, or future additions push it past the viewport. The
+      // earlier `Column` quietly clipped under-sized devices and
+      // produced a "BOTTOM OVERFLOWED" debug banner during testing.
       child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
+          padding: EdgeInsets.zero,
           children: [
             DrawerHeader(
               margin: EdgeInsets.zero,
@@ -3182,8 +3279,8 @@ class _SettingsDrawer extends StatelessWidget {
             ),
             _SettingsDrawerItem(
               icon: Icons.info_outline,
-              title: 'Version & Logs',
-              subtitle: 'About · Log viewer',
+              title: 'About & Help',
+              subtitle: 'App info · Resources · Logs',
               onTap: () => onTap('about'),
             ),
           ],
@@ -3239,7 +3336,11 @@ class _SettingsDrawerItem extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(Icons.chevron_right, size: 20, color: theme.hintColor.withValues(alpha: 0.5)),
+            Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: theme.hintColor.withValues(alpha: 0.5),
+            ),
           ],
         ),
       ),

@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -12,6 +12,16 @@ import '../../services/platform_caps.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
 import '../wallet/wallet_security_actions.dart';
+
+/// Type group used for both Save and Open dialogs. We accept any extension
+/// because real `.nnbak` files were unrecognised by the system on first
+/// open (no UTType registered for our private extension), and tightening
+/// the filter just hides the user's own backup. The extension list stays
+/// here as a hint for the system picker and as documentation.
+const XTypeGroup _backupTypeGroup = XTypeGroup(
+  label: 'Node Neo backup',
+  extensions: <String>['nnbak'],
+);
 
 /// Backup & Reset screen: data export/import and destructive operations.
 class BackupResetScreen extends StatefulWidget {
@@ -75,6 +85,10 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
 
       if (PlatformCaps.isMobile) {
         // iOS/Android: export to temp file, read bytes, pass to save dialog.
+        // file_selector's `getSaveLocation` on iOS surfaces a Files-app
+        // sheet (UIDocumentPickerViewController) and returns a writeable
+        // path the system has scoped to that destination. We then write
+        // the bytes ourselves rather than relying on the picker to do it.
         final tmpDir = await getTemporaryDirectory();
         final tmpPath = '${tmpDir.path}/$fileName';
         GoBridge().exportBackup(
@@ -84,25 +98,30 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
           _walletPrefix(),
         );
         final bytes = await File(tmpPath).readAsBytes();
-        final outputPath = await FilePicker.saveFile(
-          dialogTitle: 'Save backup',
-          fileName: fileName,
-          bytes: Uint8List.fromList(bytes),
+        final saveLocation = await getSaveLocation(
+          suggestedName: fileName,
+          acceptedTypeGroups: const <XTypeGroup>[_backupTypeGroup],
         );
+        if (saveLocation == null) return;
+        final fileData = XFile.fromData(
+          Uint8List.fromList(bytes),
+          name: fileName,
+          mimeType: 'application/octet-stream',
+        );
+        await fileData.saveTo(saveLocation.path);
         await File(tmpPath).delete().catchError((_) => File(tmpPath));
-        if (outputPath == null) return;
       } else {
         final dir =
             await getDownloadsDirectory() ??
             await getApplicationDocumentsDirectory();
-        final outputPath = await FilePicker.saveFile(
-          dialogTitle: 'Save backup',
-          fileName: fileName,
+        final saveLocation = await getSaveLocation(
+          suggestedName: fileName,
           initialDirectory: dir.path,
+          acceptedTypeGroups: const <XTypeGroup>[_backupTypeGroup],
         );
-        if (outputPath == null) return;
+        if (saveLocation == null) return;
         GoBridge().exportBackup(
-          outputPath,
+          saveLocation.path,
           passphrase,
           info.version,
           _walletPrefix(),
@@ -138,13 +157,13 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
       return;
     }
 
-    final result = await FilePicker.pickFiles(
-      dialogTitle: 'Select backup file',
-      type: FileType.any,
+    final picked = await openFile(
+      acceptedTypeGroups: const <XTypeGroup>[_backupTypeGroup],
+      confirmButtonText: 'Import',
     );
-    if (result == null || result.files.isEmpty) return;
-    final inputPath = result.files.single.path;
-    if (inputPath == null) return;
+    if (picked == null) return;
+    final inputPath = picked.path;
+    if (inputPath.isEmpty) return;
     if (!mounted) return;
 
     final ok = await showDialog<bool>(

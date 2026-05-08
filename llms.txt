@@ -2,7 +2,7 @@
 
 > A consumer-grade, mobile-first client for the Morpheus decentralized AI network.
 > Wallet, MOR staking, model selection, and private chat — no Docker, no IPFS, no Swagger.
-> Published by [absgrafx](https://github.com/absgrafx). Protocol: [MorpheusAIs](https://github.com/MorpheusAIs).
+> Published by [ABSGrafx LLC](https://absgrafx.com). Protocol: [MorpheusAIs](https://github.com/MorpheusAIs).
 
 ## Overview
 

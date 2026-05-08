@@ -108,17 +108,22 @@ jobs:
         run: pip3 install --break-system-packages cairosvg
 
       # ── Resolve embedded proxy-router version ──
+      # Drop --single-branch and explicitly fetch main so `git describe --tags`
+      # can reach release tags (cut from main) as ancestors of the dev-pinned
+      # commit. Without this the in-app About screen shows the bare 12-char
+      # hash instead of the v7.0.0-N-g<hash> form the ldflag is meant to
+      # produce. Cosmetic, but it's the version users read on every release.
       - name: Determine embedded proxy-router version
         id: pr_version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_COMMIT=$(grep 'MorpheusAIs/Morpheus-Lumerin-Node/proxy-router' go/go.mod | grep -oE '[0-9a-f]{12}$' || echo "unknown")
-          # Shallow-clone Morpheus-Lumerin-Node just enough to git-describe the pinned commit
-          git clone --filter=blob:none --no-checkout --single-branch \
+          git clone --filter=blob:none --no-checkout \
             https://github.com/MorpheusAIs/Morpheus-Lumerin-Node.git /tmp/morpheus-lumerin-node 2>/dev/null || true
           cd /tmp/morpheus-lumerin-node
           git fetch origin --tags 2>/dev/null || true
+          git fetch origin main:main 2>/dev/null || true
           PR_VERSION=$(git describe --tags --always --match 'v*' "$PR_COMMIT" 2>/dev/null || echo "$PR_COMMIT")
           echo "PR_VERSION=$PR_VERSION" >> "$GITHUB_OUTPUT"
           echo "PR_COMMIT=$PR_COMMIT" >> "$GITHUB_OUTPUT"

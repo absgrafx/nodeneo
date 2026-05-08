@@ -49,14 +49,6 @@
 		<true/>
 		<key>NSFaceIDUsageDescription</key>
 		<string>Unlock Node Neo with Face ID when you enable biometric app lock.</string>
-		<key>NSPhotoLibraryUsageDescription</key>
-		<string>Node Neo can save and restore wallet backup files. Photo Library access lets you choose a backup file from your photo library if you stored it there.</string>
-		<key>NSPhotoLibraryAddUsageDescription</key>
-		<string>Lets Node Neo save a wallet backup file to your photo library if you choose that destination.</string>
-		<key>NSCameraUsageDescription</key>
-		<string>Node Neo's file picker can import files captured with your camera. Camera access is only used when you choose to capture a file.</string>
-		<key>NSMicrophoneUsageDescription</key>
-		<string>Node Neo's file picker can import video files. Microphone access is only used if you record video during a file pick.</string>
 		<key>UILaunchStoryboardName</key>
 		<string>LaunchScreen</string>
 		<key>UISupportedInterfaceOrientations</key>
