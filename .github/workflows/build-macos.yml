@@ -14,6 +14,10 @@ name: macOS Build & Release
 #   • dev:  vX.Y.Z+RUN, DMG named `Node Neo-X.Y.Z+RUN-macOS.dmg`,
 #           git tag `vX.Y.Z-dev` (not pushed as a release)
 #
+# RUN tracks the iOS workflow's GITHUB_RUN_NUMBER for the same commit, so
+# `Node Neo-3.4.0+6-macOS.dmg` and TestFlight's `v3.4.0 (6)` always agree.
+# See the "Resolve iOS-aligned build number" step below for the lookup.
+#
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
 on:
@@ -85,6 +89,52 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # ── Resolve iOS-aligned build number ──────────────────────────────
+      # GITHUB_RUN_NUMBER is per-workflow in GitHub Actions. The macOS and
+      # iOS workflows have independent counters that drift apart over time
+      # (e.g. macOS at run 78 while iOS is at run 6 because the iOS
+      # workflow was added later). For a single commit pushed to dev we
+      # want both artifacts to advertise the SAME build number so a user
+      # downloading "Node Neo-3.4.0+6-macOS.dmg" can cross-reference it
+      # against TestFlight's "v3.4.0 (6)" at a glance.
+      #
+      # iOS is the constraining platform — TestFlight requires
+      # CFBundleVersion to be monotonically unique within a given
+      # CFBundleShortVersionString. iOS therefore keeps its own
+      # GITHUB_RUN_NUMBER as the source of truth, and macOS looks up the
+      # iOS workflow's run number for the SAME commit (head_sha) and
+      # reuses it. Both workflows trigger on the same push event, so the
+      # iOS run is created within seconds of macOS — the polling loop
+      # below covers the small window where the iOS run hasn't been
+      # registered yet. If the lookup ever fails (iOS workflow disabled,
+      # API outage, …) we fall back to the macOS GITHUB_RUN_NUMBER and
+      # log a warning instead of failing the build.
+      - name: Resolve iOS-aligned build number
+        id: build_num
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha="${GITHUB_SHA}"
+          BNUM=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            BNUM=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/build-ios.yml/runs?head_sha=${sha}&per_page=1" \
+              --jq '.workflow_runs[0].run_number // empty' 2>/dev/null || true)
+            if [ -n "$BNUM" ]; then
+              echo "Found iOS run number: ${BNUM} (attempt ${attempt})"
+              break
+            fi
+            echo "iOS run not yet available for ${sha} (attempt ${attempt}) — waiting 6s..."
+            sleep 6
+          done
+          if [ -z "$BNUM" ]; then
+            echo "::warning::Could not find iOS workflow run for ${sha} after 60s; falling back to macOS GITHUB_RUN_NUMBER (${GITHUB_RUN_NUMBER}). DMG filename and TestFlight build number may diverge for this commit."
+            BNUM="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "BUILD_NUMBER=${BNUM}" >> "$GITHUB_ENV"
+          echo "build_number=${BNUM}" >> "$GITHUB_OUTPUT"
+          echo "Using build number: ${BNUM}"
 
       # ── Toolchains ──
       - uses: subosito/flutter-action@v2
@@ -166,7 +216,7 @@ jobs:
           else
             BUILD_CHANNEL=preview
           fi
-          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${BUILD_NUMBER}"
           DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
@@ -262,15 +312,18 @@ jobs:
           # Dev DMGs include the build number so a preview download is
           # visually distinct from a shipped release on disk:
           #   main → Node Neo-3.4.0-macOS.dmg
-          #   dev  → Node Neo-3.4.0+42-macOS.dmg
+          #   dev  → Node Neo-3.4.0+6-macOS.dmg   (matches TestFlight "(6)")
+          # BUILD_NUMBER is resolved up-front from the iOS workflow's
+          # run_number for the same commit, so this DMG name and the
+          # corresponding TestFlight CFBundleVersion stay in lockstep.
           # The .app *inside* the DMG always reports CFBundleShortVersionString
           # = ${APP_VERSION} (no suffix) because that's what pubspec carries;
           # the suffix is purely a filename / artifact-naming hint that
-          # mirrors the in-app "v3.4.0+42" preview label.
+          # mirrors the in-app "v3.4.0+6" preview label.
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             DMG_VERSION="${APP_VERSION}"
           else
-            DMG_VERSION="${APP_VERSION}+${GITHUB_RUN_NUMBER}"
+            DMG_VERSION="${APP_VERSION}+${BUILD_NUMBER}"
           fi
           DMG_NAME="Node Neo-${DMG_VERSION}-macOS.dmg"
           DMG_PATH="build/${DMG_NAME}"
