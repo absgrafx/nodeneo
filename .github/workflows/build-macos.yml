@@ -10,13 +10,18 @@ name: macOS Build & Release
 #           RELEASE_NOTES.md as the body.
 #
 # Versioning (see lib/constants/app_brand.dart's BUILD_CHANNEL plumbing):
-#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`
-#   • dev:  vX.Y.Z+RUN, DMG named `Node Neo-X.Y.Z+RUN-macOS.dmg`,
-#           git tag `vX.Y.Z-dev` (not pushed as a release)
+#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`. CFBundleVersion
+#           is set equal to CFBundleShortVersionString so AppDelegate's
+#           runtime About-panel override clears the trailing `(N)` parens.
+#   • dev:  vX.Y.Z+N, DMG named `Node Neo-X.Y.Z+N-macOS.dmg`,
+#           git tag `vX.Y.Z-dev` (not pushed as a release).
 #
-# RUN tracks the iOS workflow's GITHUB_RUN_NUMBER for the same commit, so
-# `Node Neo-3.4.0+6-macOS.dmg` and TestFlight's `v3.4.0 (6)` always agree.
-# See the "Resolve iOS-aligned build number" step below for the lookup.
+# N = `git rev-list --count <last-vX.Y.Z-tag>..HEAD` — the count of dev
+# commits since the most recent release. Resets to ~1 every main release.
+# Both workflows compute this independently against the same head_sha →
+# `Node Neo-3.5.0+4-macOS.dmg` and TestFlight's `v3.5.0 (4)` agree by
+# construction, no cross-workflow API call needed. See the "Compute
+# BUILD_NUMBER" step below.
 #
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
@@ -89,52 +94,52 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-      # ── Resolve iOS-aligned build number ──────────────────────────────
-      # GITHUB_RUN_NUMBER is per-workflow in GitHub Actions. The macOS and
-      # iOS workflows have independent counters that drift apart over time
-      # (e.g. macOS at run 78 while iOS is at run 6 because the iOS
-      # workflow was added later). For a single commit pushed to dev we
-      # want both artifacts to advertise the SAME build number so a user
-      # downloading "Node Neo-3.4.0+6-macOS.dmg" can cross-reference it
-      # against TestFlight's "v3.4.0 (6)" at a glance.
+      # ── Compute BUILD_NUMBER (commits since last release tag) ─────────
+      # Replaces the per-workflow `GITHUB_RUN_NUMBER` we used through
+      # v3.4.0. The run-number counter never resets, so dev previews of
+      # v3.5.0 were starting at +11 (the cumulative iOS workflow count
+      # from the v3.4.0 train) instead of +1 — visually misleading
+      # because the small integer is what most readers parse as "build N
+      # of this version".
       #
-      # iOS is the constraining platform — TestFlight requires
-      # CFBundleVersion to be monotonically unique within a given
-      # CFBundleShortVersionString. iOS therefore keeps its own
-      # GITHUB_RUN_NUMBER as the source of truth, and macOS looks up the
-      # iOS workflow's run number for the SAME commit (head_sha) and
-      # reuses it. Both workflows trigger on the same push event, so the
-      # iOS run is created within seconds of macOS — the polling loop
-      # below covers the small window where the iOS run hasn't been
-      # registered yet. If the lookup ever fails (iOS workflow disabled,
-      # API outage, …) we fall back to the macOS GITHUB_RUN_NUMBER and
-      # log a warning instead of failing the build.
-      - name: Resolve iOS-aligned build number
+      # New scheme: BUILD_NUMBER = (commits in HEAD's ancestry that are
+      # NOT in the most recent vX.Y.Z tag's ancestry). It resets to ~1
+      # automatically every time a release lands on main, because the
+      # release tag absorbs all of dev's prior history.
+      #
+      # We deliberately use `git tag --list` (no --merged filter) rather
+      # than `git describe`: the v3.4.0 tag was cut from a merge commit
+      # on main that isn't in dev's ancestry, so `describe` returns
+      # nothing while `rev-list a..HEAD` correctly computes the symmetric
+      # difference (the count of new dev commits since the tag).
+      #
+      # macOS and iOS both run this same logic against the same head_sha
+      # → identical BUILD_NUMBER on both platforms, no cross-workflow
+      # API call needed (we used to look up the iOS workflow's run number
+      # to keep them aligned; obsolete now).
+      #
+      # Caveat: if release PRs to main ever switch from `--merge` to
+      # squash, dev's history is no longer absorbed and the count will
+      # balloon. v3.4.0 was merged with `--merge` (1808159 in main's
+      # log); keep that convention.
+      - name: Compute BUILD_NUMBER (commits since last release tag)
         id: build_num
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sha="${GITHUB_SHA}"
-          BNUM=""
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            BNUM=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/build-ios.yml/runs?head_sha=${sha}&per_page=1" \
-              --jq '.workflow_runs[0].run_number // empty' 2>/dev/null || true)
-            if [ -n "$BNUM" ]; then
-              echo "Found iOS run number: ${BNUM} (attempt ${attempt})"
-              break
-            fi
-            echo "iOS run not yet available for ${sha} (attempt ${attempt}) — waiting 6s..."
-            sleep 6
-          done
-          if [ -z "$BNUM" ]; then
-            echo "::warning::Could not find iOS workflow run for ${sha} after 60s; falling back to macOS GITHUB_RUN_NUMBER (${GITHUB_RUN_NUMBER}). DMG filename and TestFlight build number may diverge for this commit."
-            BNUM="${GITHUB_RUN_NUMBER}"
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1 || true)
+          if [ -n "$LAST_TAG" ]; then
+            BNUM=$(git rev-list --count "${LAST_TAG}..HEAD" 2>/dev/null || echo "")
+          else
+            BNUM=$(git rev-list --count HEAD 2>/dev/null || echo "")
           fi
+          [ -z "$BNUM" ] && BNUM=1
+          [ "$BNUM" -lt 1 ] && BNUM=1
           echo "BUILD_NUMBER=${BNUM}" >> "$GITHUB_ENV"
           echo "build_number=${BNUM}" >> "$GITHUB_OUTPUT"
-          echo "Using build number: ${BNUM}"
+          echo "Computed BUILD_NUMBER=${BNUM} (commits since ${LAST_TAG:-<no release tag>})"
 
       # ── Toolchains ──
       - uses: subosito/flutter-action@v2
@@ -204,19 +209,38 @@ jobs:
       # ── Build release app (inject version + optional premium RPC) ──
       # BUILD_CHANNEL is consumed by lib/constants/app_brand.dart's
       # AppBrand.formatVersion() to decide whether the in-app About
-      # screen shows "v3.4.0" (main release) or "v3.4.0+42" (dev preview).
+      # screen shows "v3.5.0" (main release) or "v3.5.0+42" (dev preview).
       # The CFBundleShortVersionString in Info.plist stays clean X.Y.Z
       # either way; the +RUN suffix is purely a display-layer cue.
+      #
+      # CFBundleVersion (passed as --build-number) is what AppKit
+      # normally renders as "(N)" after "Version X.Y.Z" in the macOS
+      # About panel. We hide that parens segment on stable builds via
+      # `macos/Runner/AppDelegate.swift` — it overrides the standard
+      # About menu item and clears `applicationVersion` whenever
+      # `CFBundleVersion == CFBundleShortVersionString`.
+      #
+      # That's why on `main` we set CFBundleVersion to APP_VERSION here:
+      # the equality is the runtime signal AppDelegate looks for. End
+      # result: stable About panel reads `Version 3.5.0` (no parens).
+      #
+      # On `dev` we use the integer BUILD_NUMBER, so CFBundleVersion is
+      # never equal to a SemVer string, AppDelegate falls through, and
+      # the panel keeps the default `Version 3.5.0 (N)` rendering — the
+      # `(N)` is what lets a downloaded preview be cross-referenced
+      # against its TestFlight build at a glance.
       - name: Flutter build macOS (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             BUILD_CHANNEL=stable
+            EFFECTIVE_BUILD_NUMBER="${APP_VERSION}"
           else
             BUILD_CHANNEL=preview
+            EFFECTIVE_BUILD_NUMBER="${BUILD_NUMBER}"
           fi
-          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${BUILD_NUMBER}"
+          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${EFFECTIVE_BUILD_NUMBER}"
           DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
@@ -371,16 +395,45 @@ jobs:
           path: ${{ env.DMG_PATH }}
           retention-days: 14
 
-      # ── GitHub Release (main only) ──
+      # ── GitHub Release (main only) ──────────────────────────────────
+      # macOS is the sole owner of the release tag and the GitHub Release
+      # itself: it's the only platform with a downloadable binary asset
+      # (the signed/notarized DMG). iOS distributes through TestFlight on
+      # `dev` and through the App Store production track on `main` — its
+      # workflow no longer creates a tag or a release on this repo, so
+      # the macOS workflow can publish unconditionally.
+      #
+      # The defensive `if release exists, upload --clobber` guard below
+      # is kept as belt-and-suspenders: it costs nothing on the happy
+      # path and rescues any future state where the tag/release somehow
+      # already exists for this commit (manual creation, a re-run, etc.)
+      # so the workflow never fails with the "tag already exists" error
+      # that surfaced during the v3.4.0 release.
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git tag "$TAG_NAME"
-          git push origin "$TAG_NAME"
+          # Tag-or-skip. iOS does the same dance, so whichever wins the
+          # race pushes the tag and the loser sees "Everything up-to-date".
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists locally; nothing to push."
+          else
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi
 
-          # Build release notes: repo RELEASE_NOTES.md (if present) + asset table
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "GitHub Release $TAG_NAME already exists (likely from build-ios.yml)."
+            echo "Attaching macOS DMG to the existing release..."
+            gh release upload "$TAG_NAME" "$DMG_PATH" --clobber
+            exit 0
+          fi
+
+          # Build release notes: repo RELEASE_NOTES.md (if present) + a
+          # platform-aware download table that mentions both iOS and
+          # macOS. Using the same shape as build-ios.yml so the release
+          # body looks identical no matter which workflow won the race.
           : > /tmp/release-notes.md
           if [ -f RELEASE_NOTES.md ]; then
             cat RELEASE_NOTES.md >> /tmp/release-notes.md
@@ -389,11 +442,12 @@ jobs:
           cat <<'ASSET_TABLE' >> /tmp/release-notes.md
           ## Download
 
-          Signed and notarized — download, mount, drag to Applications.
+          Signed and notarized — download, mount, drag to Applications (macOS); install via TestFlight or the App Store (iOS).
 
-          | Asset | Description |
-          |-------|-------------|
-          | `Node Neo-VERSION-macOS.dmg` | macOS desktop client (Apple Silicon / Intel universal) |
+          | Platform | Channel | Notes |
+          |----------|---------|-------|
+          | iOS / iPadOS | TestFlight + App Store | Install via TestFlight (beta) or the App Store (`com.absgrafx.nodeneo`) once promoted from this build. |
+          | macOS | GitHub Releases (signed + notarized DMG) | Download `Node Neo-VERSION-macOS.dmg` from Assets below. |
 
           ASSET_TABLE
           sed -i '' "s/VERSION/${APP_VERSION}/g" /tmp/release-notes.md

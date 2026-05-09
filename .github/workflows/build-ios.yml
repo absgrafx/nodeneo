@@ -1,20 +1,27 @@
 name: iOS Build & TestFlight
 #
-# Branch Strategy (mirrors build-macos.yml + Morpheus-Lumerin-Node):
-#   • dev:  Build + upload to TestFlight Internal Group (no review)
-#   • main: Build + upload to TestFlight + git tag + GitHub Release (notes only)
+# Branch Strategy:
+#   • dev:  Build + upload to TestFlight Internal Group (no review). This
+#           is the dev-preview distribution channel.
+#   • main: Build + verify FFI symbols + upload IPA as workflow artifact.
+#           NO TestFlight upload (TestFlight is the dev preview channel),
+#           NO tag, NO GitHub Release. The macOS workflow owns the tag
+#           and release page; iOS has no asset to attach. App Store
+#           production upload from main lands here once review approval
+#           is granted (see the "Future" comment in the upload region).
 #
-# App Store submission for review is intentionally NOT automated. The actual
-# "Submit for Review" button in App Store Connect requires complete metadata
-# (screenshots, age rating, review notes, what's-new copy), and an Apple
-# rejection is expensive enough that gating it behind a human eyeball click
-# is the right call. Once the build lands in TestFlight from main, promote
-# it to App Store via App Store Connect → My Apps → 1.0 Prepare for Submission
-# → "Add Build" → click Submit.
+# App Store submission for review is intentionally NOT automated. The
+# actual "Submit for Review" button in App Store Connect requires
+# complete metadata (screenshots, age rating, review notes, what's-new
+# copy), and an Apple rejection is expensive enough that gating it
+# behind a human eyeball click is the right call.
 #
-# SemVer Tagging:
-#   • main: auto-bumps MINOR (v3.4.0, v3.5.0, …) unless VMAJ_NEW is raised
-#   • dev:  vMAJ.MIN.COMMITS-dev (e.g. v3.4.7-dev) — not published to GH
+# Versioning:
+#   CFBundleShortVersionString is the `version:` line of pubspec.yaml.
+#   CFBundleVersion is `git rev-list --count <last-vX.Y.Z-tag>..HEAD` —
+#   the count of dev commits since the last release. Resets to ~1 on
+#   every main release. macOS computes the same value from the same
+#   head_sha so platforms stay aligned without a cross-workflow lookup.
 #
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
@@ -39,11 +46,12 @@ permissions:
 jobs:
   # ── SemVer Tag Generation ─────────────────────────────────────────
   # Identical logic to build-macos.yml so a given commit gets the SAME
-  # tag whether it ships to macOS or iOS. Important: the iOS build number
-  # (CFBundleVersion) is set from GITHUB_RUN_NUMBER, which is global to the
-  # repo, so an iOS build cannot collide with a macOS build of the same
-  # short version — App Store Connect rejects duplicate
-  # (CFBundleShortVersionString, CFBundleVersion) pairs.
+  # tag whether it ships to macOS or iOS. The build number (CFBundleVersion)
+  # is computed in the build-ios job below as `git rev-list --count
+  # <last-vX.Y.Z-tag>..HEAD` — same algorithm as build-macos.yml, so both
+  # platforms produce identical CFBundleVersion for the same head_sha
+  # without any cross-workflow API call. App Store Connect rejects
+  # duplicate (CFBundleShortVersionString, CFBundleVersion) pairs.
   generate-tag:
     runs-on: ubuntu-latest
     name: Generate SemVer Tag
@@ -60,12 +68,13 @@ jobs:
         id: semver
         run: |
           # Source of truth is pubspec.yaml's `version:` line. Format:
-          # "version: 3.4.0+1" -> VPUB=3.4.0. CFBundleShortVersionString
+          # "version: 3.5.0+1" -> VPUB=3.5.0. CFBundleShortVersionString
           # (visible in TestFlight + App Store) and the git tag both derive
-          # from this. The build number (CFBundleVersion) is set separately
-          # to GITHUB_RUN_NUMBER in the build-ios job, which keeps each
-          # upload's (CFBundleShortVersionString, CFBundleVersion) pair
-          # unique even within a single VPUB cycle.
+          # from this. The build number (CFBundleVersion) is computed in
+          # the build-ios job as `git rev-list --count <last-vX.Y.Z-tag>..HEAD`,
+          # which keeps each upload's (CFBundleShortVersionString,
+          # CFBundleVersion) pair unique within a single VPUB cycle and
+          # resets to ~1 when a new release tag lands on main.
           VPUB=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
           if ! echo "$VPUB" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::pubspec.yaml version is not a clean semver: '${VPUB}'"
@@ -100,6 +109,27 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # ── Compute BUILD_NUMBER (commits since last release tag) ─────────
+      # Resets to 1 on every main release. See `build-macos.yml` for the
+      # full rationale + caveats — the algorithm here is a verbatim copy
+      # so both platforms compute the same CFBundleVersion for the same
+      # head_sha and TestFlight / DMG / About panels stay aligned.
+      - name: Compute BUILD_NUMBER (commits since last release tag)
+        run: |
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1 || true)
+          if [ -n "$LAST_TAG" ]; then
+            BNUM=$(git rev-list --count "${LAST_TAG}..HEAD" 2>/dev/null || echo "")
+          else
+            BNUM=$(git rev-list --count HEAD 2>/dev/null || echo "")
+          fi
+          [ -z "$BNUM" ] && BNUM=1
+          [ "$BNUM" -lt 1 ] && BNUM=1
+          echo "BUILD_NUMBER=${BNUM}" >> "$GITHUB_ENV"
+          echo "Computed BUILD_NUMBER=${BNUM} (commits since ${LAST_TAG:-<no release tag>})"
 
       # ── Toolchains ──
       # Xcode 26 / iOS 26 SDK is required by App Store Connect for any
@@ -412,7 +442,7 @@ jobs:
           else
             BUILD_CHANNEL=preview
           fi
-          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${BUILD_NUMBER}"
           DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
@@ -447,13 +477,23 @@ jobs:
           rm -rf "$TMPDIR_CHECK"
           echo "Symbol verification: Init is exported ✓"
 
-      # ── Upload IPA to TestFlight ──
+      # ── Upload IPA to TestFlight (dev only) ──
+      # TestFlight is the dev-preview distribution channel. Internal-Group
+      # testers see the build ~10-30 min after upload. We deliberately do
+      # NOT upload from `main`: the App Store production track is its own
+      # destination (different ExportOptions distribution, different review
+      # queue, different audience) and conflating the two would surface
+      # release-candidate builds to TestFlight reviewers as if they were
+      # ordinary betas. The main-branch upload to App Store production is
+      # planned to land in this same workflow once App Store review
+      # approval is in place — see the "Future: App Store production
+      # upload (main)" comment below.
+      #
       # Uses the modern altool path (xcrun iTMSTransporter was removed in
       # Xcode 26 CLI tools). The ASC API key on disk is what authenticates;
-      # no Apple ID password needed in CI. Internal Group testers see the
-      # build immediately after processing (~10-30 min); External testers
-      # require Beta App Review which must be set up once via ASC UI.
+      # no Apple ID password needed in CI.
       - name: Upload IPA to TestFlight
+        if: github.ref == 'refs/heads/dev'
         env:
           APPLE_ASC_API_KEY_ID: ${{ secrets.APPLE_ASC_API_KEY_ID }}
           APPLE_ASC_API_ISSUER_ID: ${{ secrets.APPLE_ASC_API_ISSUER_ID }}
@@ -471,16 +511,36 @@ jobs:
             --apiIssuer "$APPLE_ASC_API_ISSUER_ID"
           echo "### TestFlight upload" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Build \`v${APP_VERSION} (${GITHUB_RUN_NUMBER})\` is uploaded." >> "$GITHUB_STEP_SUMMARY"
+          echo "Build \`v${APP_VERSION} (${BUILD_NUMBER})\` is uploaded." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Processing typically takes 10–30 min. Watch for it under" >> "$GITHUB_STEP_SUMMARY"
           echo "**App Store Connect → ${IOS_BUNDLE_ID} → TestFlight**." >> "$GITHUB_STEP_SUMMARY"
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Once processed, **promote to App Store**:" >> "$GITHUB_STEP_SUMMARY"
-            echo "App Store Connect → My Apps → Node Neo → \`${APP_VERSION}\` Prepare" >> "$GITHUB_STEP_SUMMARY"
-            echo "for Submission → Add Build → Submit for Review." >> "$GITHUB_STEP_SUMMARY"
-          fi
+
+      # ── Note: main IPA does not auto-publish ──
+      # On main the workflow still builds + verifies the IPA and uploads
+      # it as a workflow artifact (see step below) so the binary is
+      # downloadable and inspectable. It does NOT push to TestFlight
+      # (above) or to a GitHub Release (the macOS workflow owns both
+      # the tag and the release page; iOS has no asset to attach).
+      #
+      # Future: App Store production upload (main).
+      # Once App Store review approval is granted for `com.absgrafx.nodeneo`,
+      # add a `Upload IPA to App Store production` step here, gated
+      # `if: github.ref == 'refs/heads/main'`. It will use the same
+      # `xcrun altool --upload-app --type ios` invocation as TestFlight
+      # but with an `ExportOptions.plist` configured for `app-store`
+      # distribution. App Store submission for review will still be a
+      # deliberate manual click in App Store Connect — the upload is
+      # the only part to automate.
+      - name: Note (main builds do not auto-publish)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "### Main IPA built — not auto-published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "TestFlight uploads are gated to \`dev\` (preview channel)." >> "$GITHUB_STEP_SUMMARY"
+          echo "App Store production upload from \`main\` will be wired in" >> "$GITHUB_STEP_SUMMARY"
+          echo "once App Store review approval lands. The IPA artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "below is the binary that would have been pushed." >> "$GITHUB_STEP_SUMMARY"
 
       # ── Upload IPA as workflow artifact (always) ──
       # Lets you download and inspect the binary even if the TestFlight upload
@@ -493,7 +553,7 @@ jobs:
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             echo "name=nodeneo-${APP_VERSION}-ios.ipa" >> "$GITHUB_OUTPUT"
           else
-            echo "name=nodeneo-${APP_VERSION}+${GITHUB_RUN_NUMBER}-ios.ipa" >> "$GITHUB_OUTPUT"
+            echo "name=nodeneo-${APP_VERSION}+${BUILD_NUMBER}-ios.ipa" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload IPA artifact
@@ -503,50 +563,10 @@ jobs:
           path: build/ios/ipa/*.ipa
           retention-days: 14
 
-      # ── Tag + GitHub Release (main only) ──
-      # iOS doesn't get a downloadable binary asset on the GitHub Release
-      # (unlike the macOS DMG). The release exists purely for the changelog
-      # entry and the cross-platform tag — RELEASE_NOTES.md is the same
-      # source of truth as the macOS workflow.
-      - name: Create GitHub Release
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # If the macOS workflow already created this tag for the same commit,
-          # `git tag` will fail — that's fine, the release create can target
-          # the existing tag. Skip-on-already-exists is handled by checking
-          # for the tag first.
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Tag $TAG_NAME already exists (likely from build-macos.yml)."
-          else
-            git tag "$TAG_NAME"
-            git push origin "$TAG_NAME"
-          fi
-
-          # If a release already exists for this tag, just print and skip —
-          # it'll have been created by the macOS workflow with the DMG asset.
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "GitHub Release $TAG_NAME already exists. Skipping creation."
-            echo "iOS build is on TestFlight; macOS DMG is on the existing release."
-          else
-            : > /tmp/release-notes.md
-            if [ -f RELEASE_NOTES.md ]; then
-              cat RELEASE_NOTES.md >> /tmp/release-notes.md
-              printf '\n---\n\n' >> /tmp/release-notes.md
-            fi
-            cat <<'ASSET_TABLE' >> /tmp/release-notes.md
-          ## Download
-
-          | Platform | Channel | Notes |
-          |----------|---------|-------|
-          | iOS / iPadOS | TestFlight + App Store | Install via TestFlight (beta) or the App Store (`com.absgrafx.nodeneo`) once promoted from this build. |
-          | macOS | GitHub Releases (signed + notarized DMG) | See assets below if the macOS build for this tag has finished. |
-
-          ASSET_TABLE
-
-            gh release create "$TAG_NAME" \
-              --title "Node Neo $TAG_NAME" \
-              --notes-file /tmp/release-notes.md \
-              --latest
-          fi
+      # ── Tagging + GitHub Release ──
+      # Owned by the macOS workflow exclusively. The macOS DMG is the
+      # only downloadable binary asset on a Node Neo release; it would
+      # be confusing to have iOS create the same tag/release with no
+      # asset to attach (and on a v3.4.0 ship that race-created an
+      # asset-less release that had to be patched up manually).
+      # See `.github/workflows/build-macos.yml` → "GitHub Release" step.
