@@ -10,13 +10,18 @@ name: macOS Build & Release
 #           RELEASE_NOTES.md as the body.
 #
 # Versioning (see lib/constants/app_brand.dart's BUILD_CHANNEL plumbing):
-#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`
-#   • dev:  vX.Y.Z+RUN, DMG named `Node Neo-X.Y.Z+RUN-macOS.dmg`,
-#           git tag `vX.Y.Z-dev` (not pushed as a release)
+#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`. CFBundleVersion
+#           is set equal to CFBundleShortVersionString so AppDelegate's
+#           runtime About-panel override clears the trailing `(N)` parens.
+#   • dev:  vX.Y.Z+N, DMG named `Node Neo-X.Y.Z+N-macOS.dmg`,
+#           git tag `vX.Y.Z-dev` (not pushed as a release).
 #
-# RUN tracks the iOS workflow's GITHUB_RUN_NUMBER for the same commit, so
-# `Node Neo-3.4.0+6-macOS.dmg` and TestFlight's `v3.4.0 (6)` always agree.
-# See the "Resolve iOS-aligned build number" step below for the lookup.
+# N = `git rev-list --count <last-vX.Y.Z-tag>..HEAD` — the count of dev
+# commits since the most recent release. Resets to ~1 every main release.
+# Both workflows compute this independently against the same head_sha →
+# `Node Neo-3.5.0+4-macOS.dmg` and TestFlight's `v3.5.0 (4)` agree by
+# construction, no cross-workflow API call needed. See the "Compute
+# BUILD_NUMBER" step below.
 #
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
@@ -89,50 +94,52 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-      # ── Resolve iOS-aligned build number (dev preview only) ───────────
-      # GITHUB_RUN_NUMBER is per-workflow in GitHub Actions, so the macOS
-      # and iOS workflow counters drift apart over time. On `dev` we
-      # want both preview artifacts to advertise the SAME build number
-      # so a user downloading "Node Neo-3.5.0+6-macOS.dmg" can cross-
-      # reference it against TestFlight's "v3.5.0 (6)" at a glance. iOS
-      # is the constraining platform (TestFlight requires CFBundleVersion
-      # to be monotonically unique within a given CFBundleShortVersionString),
-      # so iOS keeps its own GITHUB_RUN_NUMBER as the source of truth and
-      # macOS looks up the iOS workflow's run number for the same head_sha.
+      # ── Compute BUILD_NUMBER (commits since last release tag) ─────────
+      # Replaces the per-workflow `GITHUB_RUN_NUMBER` we used through
+      # v3.4.0. The run-number counter never resets, so dev previews of
+      # v3.5.0 were starting at +11 (the cumulative iOS workflow count
+      # from the v3.4.0 train) instead of +1 — visually misleading
+      # because the small integer is what most readers parse as "build N
+      # of this version".
       #
-      # On `main` this lookup is skipped: there is no `+N` suffix on the
-      # release DMG filename (clean `Node Neo-3.5.0-macOS.dmg`), and the
-      # build step uses `--build-number=${APP_VERSION}` to make the
-      # macOS About panel render as just "Version 3.5.0" without the
-      # `(N)` parens. iOS no longer uploads to TestFlight on main either
-      # (see build-ios.yml), so there's no counter to align with.
-      - name: Resolve iOS-aligned build number
+      # New scheme: BUILD_NUMBER = (commits in HEAD's ancestry that are
+      # NOT in the most recent vX.Y.Z tag's ancestry). It resets to ~1
+      # automatically every time a release lands on main, because the
+      # release tag absorbs all of dev's prior history.
+      #
+      # We deliberately use `git tag --list` (no --merged filter) rather
+      # than `git describe`: the v3.4.0 tag was cut from a merge commit
+      # on main that isn't in dev's ancestry, so `describe` returns
+      # nothing while `rev-list a..HEAD` correctly computes the symmetric
+      # difference (the count of new dev commits since the tag).
+      #
+      # macOS and iOS both run this same logic against the same head_sha
+      # → identical BUILD_NUMBER on both platforms, no cross-workflow
+      # API call needed (we used to look up the iOS workflow's run number
+      # to keep them aligned; obsolete now).
+      #
+      # Caveat: if release PRs to main ever switch from `--merge` to
+      # squash, dev's history is no longer absorbed and the count will
+      # balloon. v3.4.0 was merged with `--merge` (1808159 in main's
+      # log); keep that convention.
+      - name: Compute BUILD_NUMBER (commits since last release tag)
         id: build_num
-        if: github.ref != 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sha="${GITHUB_SHA}"
-          BNUM=""
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            BNUM=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/build-ios.yml/runs?head_sha=${sha}&per_page=1" \
-              --jq '.workflow_runs[0].run_number // empty' 2>/dev/null || true)
-            if [ -n "$BNUM" ]; then
-              echo "Found iOS run number: ${BNUM} (attempt ${attempt})"
-              break
-            fi
-            echo "iOS run not yet available for ${sha} (attempt ${attempt}) — waiting 6s..."
-            sleep 6
-          done
-          if [ -z "$BNUM" ]; then
-            echo "::warning::Could not find iOS workflow run for ${sha} after 60s; falling back to macOS GITHUB_RUN_NUMBER (${GITHUB_RUN_NUMBER}). DMG filename and TestFlight build number may diverge for this commit."
-            BNUM="${GITHUB_RUN_NUMBER}"
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1 || true)
+          if [ -n "$LAST_TAG" ]; then
+            BNUM=$(git rev-list --count "${LAST_TAG}..HEAD" 2>/dev/null || echo "")
+          else
+            BNUM=$(git rev-list --count HEAD 2>/dev/null || echo "")
           fi
+          [ -z "$BNUM" ] && BNUM=1
+          [ "$BNUM" -lt 1 ] && BNUM=1
           echo "BUILD_NUMBER=${BNUM}" >> "$GITHUB_ENV"
           echo "build_number=${BNUM}" >> "$GITHUB_OUTPUT"
-          echo "Using build number: ${BNUM}"
+          echo "Computed BUILD_NUMBER=${BNUM} (commits since ${LAST_TAG:-<no release tag>})"
 
       # ── Toolchains ──
       - uses: subosito/flutter-action@v2
@@ -206,29 +213,29 @@ jobs:
       # The CFBundleShortVersionString in Info.plist stays clean X.Y.Z
       # either way; the +RUN suffix is purely a display-layer cue.
       #
-      # CFBundleVersion (passed as --build-number) is what the native
-      # macOS About panel shows in "(N)" parens after "Version X.Y.Z".
-      # AppKit always wraps the value in parens — there is no built-in
-      # way to suppress them — so on `main` we pass "1" instead of the
-      # CI run counter. The About panel reads as "Version 3.5.0 (1)",
-      # which parses naturally as "the first release of v3.5.0" rather
-      # than exposing the CI ordinal (was "Version 3.4.0 (9)" on the
-      # v3.4.0 ship — a number with no user-meaningful semantics).
-      # On `dev` we keep the iOS-aligned BUILD_NUMBER so the dev DMG /
-      # About panel / corresponding TestFlight build all advertise the
-      # same +N counter and can be cross-referenced at a glance.
+      # CFBundleVersion (passed as --build-number) is what AppKit
+      # normally renders as "(N)" after "Version X.Y.Z" in the macOS
+      # About panel. We hide that parens segment on stable builds via
+      # `macos/Runner/AppDelegate.swift` — it overrides the standard
+      # About menu item and clears `applicationVersion` whenever
+      # `CFBundleVersion == CFBundleShortVersionString`.
       #
-      # Future polish: customise the About panel in `macos/Runner/AppDelegate.swift`
-      # using `NSApplication.AboutPanelOptionKey.applicationVersion = ""`
-      # to hide the parens entirely on stable builds. Skipped for now to
-      # keep this PR YAML-only.
+      # That's why on `main` we set CFBundleVersion to APP_VERSION here:
+      # the equality is the runtime signal AppDelegate looks for. End
+      # result: stable About panel reads `Version 3.5.0` (no parens).
+      #
+      # On `dev` we use the integer BUILD_NUMBER, so CFBundleVersion is
+      # never equal to a SemVer string, AppDelegate falls through, and
+      # the panel keeps the default `Version 3.5.0 (N)` rendering — the
+      # `(N)` is what lets a downloaded preview be cross-referenced
+      # against its TestFlight build at a glance.
       - name: Flutter build macOS (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             BUILD_CHANNEL=stable
-            EFFECTIVE_BUILD_NUMBER="1"
+            EFFECTIVE_BUILD_NUMBER="${APP_VERSION}"
           else
             BUILD_CHANNEL=preview
             EFFECTIVE_BUILD_NUMBER="${BUILD_NUMBER}"

@@ -1,10 +1,12 @@
 ## What's New in v3.5.0
 
-Release-pipeline polish following the v3.4.0 ship. No user-visible product changes; the only thing that looks different is a cleaner version label on the macOS *About* panel.
+Release-pipeline polish following the v3.4.0 ship. No user-visible product changes; the visible deltas are cosmetic — the macOS *About* panel and the dev preview build counter both render the way the user mental model expects.
 
 ### Releases & versioning
-- **macOS About panel** on main releases reads as `Version 3.5.0 (1)` — natural-language "first release of v3.5.0" instead of the CI ordinal that `(9)` exposed on v3.4.0. Dev previews continue to show `Version 3.5.0 (N)` so a downloaded preview can be cross-referenced with its CI run at a glance.
-- **Tag + GitHub Release** are now exclusively owned by the macOS workflow — eliminates the race condition that produced an asset-less release on the v3.4.0 ship.
+- **macOS About panel on main releases reads as a bare `Version 3.5.0`** — no `(N)` parens at all. AppDelegate now overrides the standard About menu and clears AppKit's parens segment whenever `CFBundleVersion == CFBundleShortVersionString` (which the macOS workflow arranges only on `main`). Dev previews continue to show `Version 3.5.0 (N)` so a downloaded preview can be matched with its TestFlight build.
+- **Build counter resets per release train.** `CFBundleVersion` is now `git rev-list --count <last-vX.Y.Z-tag>..HEAD` — the count of dev commits since the most recent release — instead of `GITHUB_RUN_NUMBER` (which never resets, and was causing v3.5.0 dev builds to start at `+11` because that was the cumulative iOS workflow counter from the v3.4.0 train). After every main release the counter resets to ~1 automatically.
+- **macOS and iOS no longer cross-reference each other** to align build numbers. Both workflows compute the same git counter against the same `head_sha` independently, so DMG / IPA / TestFlight all agree by construction. The `gh api` polling loop that used to look up the iOS workflow's run number from the macOS workflow is gone.
+- **Tag + GitHub Release** are owned exclusively by the macOS workflow (it has the only downloadable asset). Eliminates the race condition that produced an asset-less release on the v3.4.0 ship.
 
 ### iOS distribution channels
 - **TestFlight upload is `dev`-only.** Every push to `dev` continues to ship to TestFlight Internal. Pushes to `main` build + verify the IPA and upload it as a workflow artifact for inspection, but no longer auto-publish — App Store production upload is the next thing to wire in once App Store review approval lands.
