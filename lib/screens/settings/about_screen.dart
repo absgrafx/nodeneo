@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../constants/app_brand.dart';
+import '../../constants/external_links.dart';
 import '../../services/bridge.dart';
 import '../../services/form_factor.dart';
 import '../../services/platform_caps.dart';
@@ -149,7 +150,7 @@ class _AboutScreenState extends State<AboutScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Version & Logs')),
+      appBar: AppBar(title: const Text('About & Help')),
       body: MaxContentWidth(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -158,7 +159,7 @@ class _AboutScreenState extends State<AboutScreen> {
               icon: Icons.info_outline_rounded,
               title: 'About',
               status: Text(
-                'v$_appVersion',
+                AppBrand.formatVersion(_appVersion, _buildNumber),
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
@@ -200,7 +201,7 @@ class _AboutScreenState extends State<AboutScreen> {
                   const SizedBox(height: 16),
                   _VersionRow(
                     label: 'App version',
-                    value: 'v$_appVersion ($_buildNumber)',
+                    value: AppBrand.formatVersion(_appVersion, _buildNumber),
                   ),
                   const SizedBox(height: 8),
                   _VersionRow(
@@ -219,6 +220,83 @@ class _AboutScreenState extends State<AboutScreen> {
                       mono: true,
                     ),
                   ],
+                  // Long-form context + the legal commitments (Privacy
+                  // / Terms) live inside the About card itself — the
+                  // reader is here asking "what is this app and what
+                  // are you promising me?", so the pitch, the
+                  // architecture deep dive, and the two legal pages
+                  // belong next to the version block. Privacy + Terms
+                  // are paired with the onboarding acknowledgement
+                  // ("by creating a wallet you agree to our Terms and
+                  // Privacy Policy"); keeping them here makes the App
+                  // Store reviewer's "who runs this app and what are
+                  // their commitments" surface a single tap.
+                  const SizedBox(height: 14),
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: theme.dividerColor.withValues(alpha: 0.4),
+                  ),
+                  const SizedBox(height: 4),
+                  _ExternalLinkRow(
+                    icon: Icons.auto_awesome_outlined,
+                    label: 'Why Node Neo?',
+                    subtitle: 'The pitch in two minutes',
+                    url: ExternalLinks.why,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.architecture_outlined,
+                    label: 'Architecture deep dive',
+                    subtitle: 'Trust model · TEE · proxy-router',
+                    url: ExternalLinks.deepDive,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.privacy_tip_outlined,
+                    label: 'Privacy Policy',
+                    subtitle: 'What we collect (nothing)',
+                    url: ExternalLinks.privacy,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.gavel_outlined,
+                    label: 'Terms of Service',
+                    subtitle: 'Self-custody · MIT source',
+                    url: ExternalLinks.terms,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Resources card — help-first utility links. Privacy and
+            // Terms used to live here under "Legal & Resources"; they
+            // moved to the About card because they're commitments,
+            // not utilities. What's left is a tight three-row card
+            // with one purpose: "where do I get help / see the code".
+            // Order intentionally puts Support first so the user
+            // who's stuck reaches the FAQ + issue tracker before the
+            // power-user paths (issues filing, source).
+            SectionCard(
+              icon: Icons.support_outlined,
+              title: 'Resources',
+              child: Column(
+                children: [
+                  _ExternalLinkRow(
+                    icon: Icons.help_outline,
+                    label: 'Support',
+                    subtitle: 'FAQ · public issues · email',
+                    url: ExternalLinks.support,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.bug_report_outlined,
+                    label: 'Report a bug',
+                    subtitle: 'github.com/absgrafx/nodeneo/issues',
+                    url: ExternalLinks.githubIssues,
+                  ),
+                  _ExternalLinkRow(
+                    icon: Icons.code,
+                    label: 'Source code',
+                    subtitle: 'github.com/absgrafx/nodeneo',
+                    url: ExternalLinks.github,
+                  ),
                 ],
               ),
             ),
@@ -484,4 +562,67 @@ class _LogFileInfo {
     required this.sizeKb,
     required this.modified,
   });
+}
+
+/// Compact link row used inside the "Legal & Resources" card. Tapping it
+/// launches [url] in the platform's default browser via
+/// [ExternalLinks.launch] (which surfaces a snackbar fallback if the
+/// platform refuses to handle the scheme).
+class _ExternalLinkRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final String url;
+
+  const _ExternalLinkRow({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.url,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: () => ExternalLinks.launch(url, context: context),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: theme.hintColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.hintColor,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.open_in_new,
+              size: 14,
+              color: theme.hintColor.withValues(alpha: 0.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

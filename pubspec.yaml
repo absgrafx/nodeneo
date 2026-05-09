@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 3.3.0+5
+version: 3.4.0+1
 
 environment:
   sdk: ^3.11.3
@@ -47,7 +47,32 @@ dependencies:
   flutter_svg: ^2.0.17
   http: ^1.6.0
   package_info_plus: ^9.0.1
-  file_picker: ^11.0.2
+  # file_selector replaces file_picker (was ^11.0.2): file_picker pulled in
+  # DKImagePickerController + DKPhotoGallery + SDWebImage + SwiftyGif via
+  # CocoaPods, which forced us to declare NSPhotoLibrary/Camera/Microphone
+  # purpose strings in ios/Runner/Info.plist even though we never invoke
+  # those APIs from Dart. file_selector uses UIDocumentPickerViewController
+  # exclusively on iOS — no Photos / Camera / Mic linkage — so the App
+  # Privacy nutrition label can stay limited to NSFaceIDUsageDescription.
+  file_selector: ^1.1.0
+  # share_plus is the iOS / Android export path for `BackupResetScreen`.
+  # `file_selector.getSaveLocation` is desktop-only — file_selector_ios
+  # throws `UnimplementedError: getSavePath() has not been implemented`
+  # because iOS has no system "Save File" dialog. The iOS-native pattern
+  # is `UIActivityViewController` (the Share sheet), which surfaces
+  # "Save to Files", "AirDrop", "Mail", etc. as a single user-driven
+  # choice. share_plus wraps that without adding any Info.plist
+  # purpose strings (no Photos / Camera / Mic / Contacts linkage), so
+  # the App Privacy nutrition label stays "Data Not Collected".
+  #
+  # Pinned to ^12.0.2 (not ^13.x) for two reasons:
+  #   1. v13.x bumps `win32` to ^6.0.1, which conflicts with the win32
+  #      ^5.5.3 transitively required by `flutter_secure_storage_windows`
+  #      and `package_info_plus 9.x`. v12.0.2 stays on `win32 ^5.5.3`.
+  #   2. v12.0.1 specifically fixed an iOS 26 crash where the share
+  #      sheet would die on iPhones if `sharePositionOrigin` was null.
+  #      We always pass an origin, but the defence-in-depth is welcome.
+  share_plus: ^12.0.2
 
 dev_dependencies:
   flutter_test:

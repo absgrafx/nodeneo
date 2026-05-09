@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../constants/external_links.dart';
 import '../services/bridge.dart';
 import '../services/session_duration_store.dart';
 import '../theme.dart';
@@ -213,6 +214,36 @@ class _SessionConfirmationDialogState
                         fontSize: 12,
                         color: NeoTheme.red.withValues(alpha: 0.9),
                         height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    // Deep link out to nodeneo.ai/start.html — the page
+                    // walks the user through "I already have a wallet"
+                    // funding paths (Coinbase, MoonPay, Uniswap deeplink).
+                    // Aligned left so it reads as continuation of the red
+                    // affordability message rather than a separate action.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => ExternalLinks.launch(
+                          ExternalLinks.quickStart,
+                          context: context,
+                        ),
+                        icon: const Icon(Icons.school_outlined, size: 14),
+                        label: const Text(
+                          'How to add MOR',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: NeoTheme.emerald,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          minimumSize: const Size(0, 28),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                        ),
                       ),
                     ),
                   ],

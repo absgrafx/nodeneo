@@ -1,10 +1,10 @@
-import 'dart:io';
-import 'dart:typed_data';
+import 'dart:developer' as developer;
 
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../services/bridge.dart';
 import '../../services/form_factor.dart';
@@ -12,6 +12,36 @@ import '../../services/platform_caps.dart';
 import '../../theme.dart';
 import '../../widgets/section_card.dart';
 import '../wallet/wallet_security_actions.dart';
+
+/// Logger name used by [developer.log] — visible in Xcode / Console.app under
+/// the bundle id even in release builds, unlike `debugPrint`. If a tap looks
+/// like it does nothing, filter Console.app for `subsystem == com.absgrafx.nodeneo`
+/// or grep for `[backup-reset]` in any log dump.
+const String _logName = 'backup-reset';
+
+/// Type group used for the Save (macOS) and Open (macOS + iOS) dialogs.
+/// We deliberately stay permissive — real `.nnbak` files were unrecognised
+/// by the system on first open (no UTType registered for our private
+/// extension), and tightening the filter just hides the user's own backup
+/// behind a "no matching files" picker.
+///
+/// `extensions` is enough on macOS — `NSOpenPanel` happily filters by
+/// raw extension. iOS's `file_selector_ios` is stricter:
+/// `UIDocumentPickerViewController` is built on UTIs, so it rejects an
+/// `XTypeGroup` that has `extensions` set without a non-empty
+/// `uniformTypeIdentifiers`. The error you'll see otherwise is:
+///   "Invalid argument(s): The provided type group Instance of
+///    'XTypeGroup' should either allow all files, or have a non-empty
+///    'uniformTypeIdentifiers'."
+/// `public.data` matches any binary file, which mirrors the
+/// "show everything, let the user pick their .nnbak" intent above.
+/// macOS treats `uniformTypeIdentifiers` as a hint and keeps honouring
+/// the `extensions` filter, so this is a no-op there.
+const XTypeGroup _backupTypeGroup = XTypeGroup(
+  label: 'Node Neo backup',
+  extensions: <String>['nnbak'],
+  uniformTypeIdentifiers: <String>['public.data'],
+);
 
 /// Backup & Reset screen: data export/import and destructive operations.
 class BackupResetScreen extends StatefulWidget {
@@ -32,13 +62,31 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
   bool _exporting = false;
   bool _importing = false;
 
+  /// Pulls the wallet's private key (used as the backup passphrase) out of
+  /// the Go bridge. Returns `null` if no wallet exists; **rethrows** any
+  /// other exception so the caller can show it to the user. The previous
+  /// implementation swallowed every error and treated all failures as
+  /// "no wallet found", which made plugin / FFI failures invisible.
   String? _walletPassphrase() {
+    final Map<String, dynamic> res;
     try {
-      final res = GoBridge().exportPrivateKey();
-      final pk = res['private_key'] as String? ?? '';
-      if (pk.isNotEmpty) return pk;
-    } catch (_) {}
-    return null;
+      res = GoBridge().exportPrivateKey();
+    } on GoBridgeException catch (e) {
+      // "no wallet" is a known sentinel error from the Go side — fall
+      // through and return null so the caller can show a clean message.
+      // Anything else, rethrow so it surfaces in the outer catch.
+      final msg = e.message.toLowerCase();
+      if (msg.contains('no wallet') ||
+          msg.contains('not found') ||
+          msg.contains('not initialised') ||
+          msg.contains('not initialized')) {
+        return null;
+      }
+      rethrow;
+    }
+    final pk = res['private_key'] as String? ?? '';
+    if (pk.isEmpty) return null;
+    return pk;
   }
 
   String _walletPrefix() {
@@ -53,28 +101,63 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
   }
 
   Future<void> _exportBackup() async {
-    final passphrase = _walletPassphrase();
-    if (passphrase == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No wallet found — cannot export.')),
-        );
-      }
+    developer.log('export tap', name: _logName);
+    if (_exporting) {
+      _showError(
+        'Export already in progress — wait for the previous attempt to '
+        'finish or cancel its save dialog.',
+      );
       return;
     }
 
-    final ts = DateTime.now()
-        .toIso8601String()
-        .replaceAll(':', '-')
-        .substring(0, 19);
-    final fileName = 'nodeneo-backup-$ts.nnbak';
-
     setState(() => _exporting = true);
     try {
+      final String? passphrase;
+      try {
+        passphrase = _walletPassphrase();
+      } catch (e, st) {
+        developer.log(
+          'wallet passphrase lookup threw',
+          name: _logName,
+          error: e,
+          stackTrace: st,
+        );
+        _showError('Could not read wallet to encrypt the backup: $e');
+        return;
+      }
+      if (passphrase == null) {
+        _showError('No wallet found — cannot export.');
+        return;
+      }
+
+      final ts = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .substring(0, 19);
+      final fileName = 'nodeneo-backup-$ts.nnbak';
+
       final info = await PackageInfo.fromPlatform();
+      developer.log(
+        'export prepare: file=$fileName mobile=${PlatformCaps.isMobile} '
+        'app=${info.version}+${info.buildNumber}',
+        name: _logName,
+      );
 
       if (PlatformCaps.isMobile) {
-        // iOS/Android: export to temp file, read bytes, pass to save dialog.
+        // iOS/Android: there is NO equivalent of `getSaveLocation` here —
+        // file_selector_ios throws `UnimplementedError: getSavePath() has
+        // not been implemented` because iOS has no system "Save File"
+        // dialog. The native pattern is the Share sheet
+        // (`UIActivityViewController`), which lets the user pick "Save to
+        // Files", "AirDrop", "Mail", etc. as a single choice. Pipeline:
+        //   1. Write the encrypted backup to the app's temp directory via
+        //      the Go bridge (sandbox-scoped path the OS will reclaim).
+        //   2. Hand that file to `SharePlus.instance.share(...)` and let
+        //      the user pick a destination.
+        // `sharePositionOrigin` is REQUIRED on iPad — without it iOS
+        // raises NSInvalidArgumentException because a popover anchor must
+        // be set. We use the screen's render box, which produces a sane
+        // mid-screen popover on iPad and is harmlessly ignored on iPhone.
         final tmpDir = await getTemporaryDirectory();
         final tmpPath = '${tmpDir.path}/$fileName';
         GoBridge().exportBackup(
@@ -83,118 +166,227 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
           info.version,
           _walletPrefix(),
         );
-        final bytes = await File(tmpPath).readAsBytes();
-        final outputPath = await FilePicker.saveFile(
-          dialogTitle: 'Save backup',
-          fileName: fileName,
-          bytes: Uint8List.fromList(bytes),
+        developer.log('export staged: tmp=$tmpPath', name: _logName);
+
+        if (!mounted) return;
+        final RenderBox? box = context.findRenderObject() as RenderBox?;
+        final Rect? origin = (box != null && box.hasSize)
+            ? box.localToGlobal(Offset.zero) & box.size
+            : null;
+
+        final ShareResult result = await SharePlus.instance.share(
+          ShareParams(
+            files: <XFile>[
+              XFile(tmpPath, mimeType: 'application/octet-stream'),
+            ],
+            fileNameOverrides: <String>[fileName],
+            subject: 'Node Neo backup',
+            sharePositionOrigin: origin,
+          ),
         );
-        await File(tmpPath).delete().catchError((_) => File(tmpPath));
-        if (outputPath == null) return;
+        developer.log(
+          'export share result: status=${result.status} raw="${result.raw}"',
+          name: _logName,
+        );
+        // Don't fail loudly on a dismissed sheet — the user explicitly
+        // chose to back out. `unavailable` is iOS-speak for "we can't tell
+        // which app received the file", which is fine.
+        if (result.status == ShareResultStatus.dismissed) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Export cancelled.'),
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+          return;
+        }
       } else {
+        // Desktop: hand the system save panel a starting directory and let
+        // the user pick the final path; the Go bridge writes directly to it.
         final dir =
             await getDownloadsDirectory() ??
             await getApplicationDocumentsDirectory();
-        final outputPath = await FilePicker.saveFile(
-          dialogTitle: 'Save backup',
-          fileName: fileName,
-          initialDirectory: dir.path,
+        developer.log(
+          'export prompting save panel: initial=${dir.path}',
+          name: _logName,
         );
-        if (outputPath == null) return;
+        final saveLocation = await getSaveLocation(
+          suggestedName: fileName,
+          initialDirectory: dir.path,
+          acceptedTypeGroups: const <XTypeGroup>[_backupTypeGroup],
+        );
+        if (saveLocation == null) {
+          developer.log('export cancelled by user (desktop)', name: _logName);
+          return;
+        }
+        developer.log(
+          'export writing: path=${saveLocation.path}',
+          name: _logName,
+        );
         GoBridge().exportBackup(
-          outputPath,
+          saveLocation.path,
           passphrase,
           info.version,
           _walletPrefix(),
         );
       }
 
+      developer.log('export ok: $fileName', name: _logName);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Backup saved to $fileName')));
+        // Mobile uses the Share sheet so the user picked the destination
+        // themselves (Files / AirDrop / Mail / …) — phrasing has to stay
+        // honest about that instead of asserting a location.
+        final message = PlatformCaps.isMobile
+            ? 'Backup shared as $fileName'
+            : 'Backup saved to $fileName';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 5),
+          ),
+        );
       }
-    } on GoBridgeException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Export failed: ${e.message}')));
-      }
+    } catch (e, st) {
+      // Catch EVERYTHING (PlatformException from file_selector, MissingPluginException,
+      // GoBridgeException, FileSystemException, ArgumentError, …) so the user
+      // gets a real message instead of a silent no-op.
+      developer.log(
+        'export failed',
+        name: _logName,
+        error: e,
+        stackTrace: st,
+      );
+      _showError('Export failed: $e');
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
   }
 
   Future<void> _importBackup() async {
-    final passphrase = _walletPassphrase();
-    if (passphrase == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No wallet found — cannot decrypt backup.'),
-          ),
-        );
-      }
+    developer.log('import tap', name: _logName);
+    if (_importing) {
+      _showError(
+        'Import already in progress — wait for the current attempt to '
+        'finish or cancel its file picker.',
+      );
       return;
     }
 
-    final result = await FilePicker.pickFiles(
-      dialogTitle: 'Select backup file',
-      type: FileType.any,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final inputPath = result.files.single.path;
-    if (inputPath == null) return;
-    if (!mounted) return;
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Backup?'),
-        content: const Text(
-          'This will replace ALL existing conversations, messages, and '
-          'settings with the data from the backup file.\n\n'
-          'This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: NeoTheme.amber),
-            child: const Text('Import & Replace'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
     setState(() => _importing = true);
     try {
+      final String? passphrase;
+      try {
+        passphrase = _walletPassphrase();
+      } catch (e, st) {
+        developer.log(
+          'wallet passphrase lookup threw',
+          name: _logName,
+          error: e,
+          stackTrace: st,
+        );
+        _showError('Could not read wallet to decrypt the backup: $e');
+        return;
+      }
+      if (passphrase == null) {
+        _showError('No wallet found — cannot decrypt backup.');
+        return;
+      }
+
+      developer.log('import prompting open panel', name: _logName);
+      final picked = await openFile(
+        acceptedTypeGroups: const <XTypeGroup>[_backupTypeGroup],
+        confirmButtonText: 'Import',
+      );
+      if (picked == null) {
+        developer.log('import cancelled by user', name: _logName);
+        return;
+      }
+      final inputPath = picked.path;
+      if (inputPath.isEmpty) {
+        developer.log('import picked empty path', name: _logName);
+        _showError(
+          'Selected file path was empty — try picking the .nnbak again.',
+        );
+        return;
+      }
+      if (!mounted) return;
+      developer.log('import picked: $inputPath', name: _logName);
+
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Import Backup?'),
+          content: const Text(
+            'This will replace ALL existing conversations, messages, and '
+            'settings with the data from the backup file.\n\n'
+            'This action cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: NeoTheme.amber),
+              child: const Text('Import & Replace'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) {
+        developer.log('import confirmation declined', name: _logName);
+        return;
+      }
+
+      developer.log('import calling Go bridge', name: _logName);
       final manifest = GoBridge().importBackup(inputPath, passphrase);
+      final convos = manifest['conversations'] ?? 0;
+      final msgs = manifest['messages'] ?? 0;
+      developer.log(
+        'import ok: convos=$convos msgs=$msgs',
+        name: _logName,
+      );
       if (mounted) {
-        final convos = manifest['conversations'] ?? 0;
-        final msgs = manifest['messages'] ?? 0;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Imported $convos conversations, $msgs messages.'),
+            duration: const Duration(seconds: 5),
           ),
         );
       }
-    } on GoBridgeException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Import failed: ${e.message}'),
-            duration: const Duration(seconds: 6),
-          ),
-        );
-      }
+    } catch (e, st) {
+      developer.log(
+        'import failed',
+        name: _logName,
+        error: e,
+        stackTrace: st,
+      );
+      _showError('Import failed: $e');
     } finally {
       if (mounted) setState(() => _importing = false);
     }
+  }
+
+  /// Show a user-visible error in a SnackBar with a long enough duration to
+  /// actually read it. The default SnackBar dismisses after 4s which is too
+  /// fast for multi-line plugin / FFI errors. Also no-ops cleanly when
+  /// `mounted == false`, mirroring the rest of the file.
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Dismiss',
+          onPressed: () =>
+              ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmFactoryReset() async {
@@ -214,13 +406,22 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
               title: 'Data Backup',
               child: Column(
                 children: [
+                  // NOTE: Always wire `onTap` to the handler — never to a
+                  // gated `_exporting ? () {} : _handler` no-op. The handler
+                  // itself checks the busy flag and shows an "already in
+                  // progress" SnackBar; that way a stuck flag (e.g. from a
+                  // platform-channel call that never resolved) surfaces as
+                  // visible feedback instead of a silent dead button.
                   _SettingsCard(
                     icon: Icons.upload_file_outlined,
                     iconColor: NeoTheme.emerald,
                     title: 'Export Backup',
                     subtitle:
                         'Save conversations and settings to an encrypted file',
-                    onTap: _exporting ? () {} : _exportBackup,
+                    onTap: _exportBackup,
+                    trailing: _exporting
+                        ? const _BusySpinner()
+                        : null,
                   ),
                   const Divider(height: 1, indent: 56),
                   _SettingsCard(
@@ -229,7 +430,10 @@ class _BackupResetScreenState extends State<BackupResetScreen> {
                     title: 'Import Backup',
                     subtitle:
                         'Restore from a .nnbak file (replaces current data)',
-                    onTap: _importing ? () {} : _importBackup,
+                    onTap: _importBackup,
+                    trailing: _importing
+                        ? const _BusySpinner()
+                        : null,
                   ),
                 ],
               ),
@@ -280,6 +484,7 @@ class _SettingsCard extends StatelessWidget {
   final Color? titleColor;
   final String subtitle;
   final VoidCallback onTap;
+  final Widget? trailing;
 
   const _SettingsCard({
     required this.icon,
@@ -288,6 +493,7 @@ class _SettingsCard extends StatelessWidget {
     this.titleColor,
     required this.subtitle,
     required this.onTap,
+    this.trailing,
   });
 
   @override
@@ -326,10 +532,34 @@ class _SettingsCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (trailing != null) ...[
+                trailing!,
+                const SizedBox(width: 8),
+              ],
               Icon(Icons.chevron_right, color: theme.hintColor, size: 20),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Tiny inline spinner shown next to a settings card when its async action is
+/// in flight. Gives a visible cue that the tap is doing something even when
+/// the underlying platform call is slow (e.g. a save / open panel that takes
+/// a beat to present on macOS).
+class _BusySpinner extends StatelessWidget {
+  const _BusySpinner();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 16,
+      height: 16,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        color: Theme.of(context).hintColor,
       ),
     );
   }

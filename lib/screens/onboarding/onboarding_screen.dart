@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../constants/app_brand.dart';
+import '../../constants/external_links.dart';
 import '../../services/bridge.dart';
 import '../../services/wallet_vault.dart';
 import '../../theme.dart';
@@ -231,7 +233,37 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           : const Text('Import Wallet'),
                     ),
                   ),
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 8),
+
+                  // "New to crypto?" — single-tap escape hatch into the
+                  // long-form onboarding walkthrough on nodeneo.ai. Sized
+                  // small on purpose: the user with a wallet ready should
+                  // see the import flow as the dominant CTA; the user
+                  // without one needs an answer that doesn't fit on this
+                  // screen, and bouncing them to the website is honest.
+                  Center(
+                    child: TextButton.icon(
+                      onPressed: () => ExternalLinks.launch(
+                        ExternalLinks.onramp,
+                        context: context,
+                      ),
+                      icon: const Icon(Icons.school_outlined, size: 16),
+                      label: const Text(
+                        'New to crypto? See the walkthrough',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: NeoTheme.emerald,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
 
                   Container(
                     padding: const EdgeInsets.all(16),
@@ -261,7 +293,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 20),
+
+                  // Privacy / Terms acknowledgement. Apple's first-impression
+                  // review wants this surface visible before the user creates
+                  // any account-like artefact (the wallet, in our case). The
+                  // links open the live nodeneo.ai pages so reviewers can
+                  // verify the URLs claimed in the App Store record actually
+                  // resolve to substantive policy text.
+                  _LegalAcknowledgement(theme: theme),
+
+                  const SizedBox(height: 24),
                 ],
               ),
             ),
@@ -269,6 +311,72 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
       ),
     );
+  }
+}
+
+/// Inline "By continuing you agree to … Terms … and … Privacy" line shown
+/// at the bottom of [OnboardingScreen]. Kept as its own widget so the
+/// `RichText` + tap-target plumbing doesn't bloat the main build method.
+class _LegalAcknowledgement extends StatelessWidget {
+  final ThemeData theme;
+  const _LegalAcknowledgement({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    final base = theme.textTheme.bodySmall?.copyWith(
+      color: theme.hintColor,
+      fontSize: 11,
+      height: 1.5,
+    );
+    final link = base?.copyWith(
+      color: NeoTheme.emerald,
+      decoration: TextDecoration.underline,
+      decorationColor: NeoTheme.emerald.withValues(alpha: 0.4),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text.rich(
+        TextSpan(
+          style: base,
+          children: [
+            const TextSpan(text: 'By creating or importing a wallet you agree to our '),
+            TextSpan(
+              text: 'Terms',
+              style: link,
+              recognizer: TapAndHoldGestureRecognizerFactory.createForUrl(
+                context,
+                ExternalLinks.terms,
+              ),
+            ),
+            const TextSpan(text: ' and '),
+            TextSpan(
+              text: 'Privacy Policy',
+              style: link,
+              recognizer: TapAndHoldGestureRecognizerFactory.createForUrl(
+                context,
+                ExternalLinks.privacy,
+              ),
+            ),
+            const TextSpan(text: '.'),
+          ],
+        ),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
+/// Tiny factory wrapper that keeps the `TapGestureRecognizer` lifecycle
+/// out of the widget body. Each call returns a one-shot recognizer wired
+/// to launch [url] via [ExternalLinks.launch]; Flutter's text-span runtime
+/// disposes the recognizer when the parent widget rebuilds, so we don't
+/// need to track it ourselves.
+class TapAndHoldGestureRecognizerFactory {
+  TapAndHoldGestureRecognizerFactory._();
+
+  static TapGestureRecognizer createForUrl(BuildContext context, String url) {
+    return TapGestureRecognizer()
+      ..onTap = () => ExternalLinks.launch(url, context: context);
   }
 }
 

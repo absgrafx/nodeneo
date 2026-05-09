@@ -25,8 +25,6 @@ import 'package:flutter/widgets.dart';
 ///    Small branches stay inside the widget. Full-layout divergence
 ///    (nav rail vs bottom nav, master-detail vs stack) moves to sibling
 ///    files: `foo_screen.dart` (router) + `_compact.dart` + `_expanded.dart`.
-///
-/// See `.ai-docs/ui_responsive_design.md` for the full decision guide.
 enum FormFactor { compact, medium, expanded }
 
 class Breakpoints {

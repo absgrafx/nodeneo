@@ -1,12 +1,22 @@
 name: macOS Build & Release
 #
-# Branch Strategy (mirrors Morpheus-Lumerin-Node):
-#   • dev:  Build + test only — DMG uploaded as artifact, no signing/notarization
-#   • main: Build + sign + notarize + DMG published as GitHub Release
+# Branch Strategy:
+#   • dev:  Build + sign + notarize → DMG uploaded as workflow artifact only
+#           (no GH Release). Same Apple signing path as production so a
+#           cert / profile / notary-service regression shows up on dev,
+#           not on release day. The dev preview DMG installs like a real
+#           release (no xattr ritual, no right-click → Open).
+#   • main: Same pipeline + DMG published as a tagged GH Release with
+#           RELEASE_NOTES.md as the body.
 #
-# SemVer Tagging:
-#   • main: auto-bumps MINOR (v1.1.0, v1.2.0, …) unless VMAJ_NEW is raised
-#   • dev:  vMAJ.MIN.COMMITS-dev (e.g. v1.0.7-dev) — not published
+# Versioning (see lib/constants/app_brand.dart's BUILD_CHANNEL plumbing):
+#   • main: vX.Y.Z, DMG named `Node Neo-X.Y.Z-macOS.dmg`
+#   • dev:  vX.Y.Z+RUN, DMG named `Node Neo-X.Y.Z+RUN-macOS.dmg`,
+#           git tag `vX.Y.Z-dev` (not pushed as a release)
+#
+# RUN tracks the iOS workflow's GITHUB_RUN_NUMBER for the same commit, so
+# `Node Neo-3.4.0+6-macOS.dmg` and TestFlight's `v3.4.0 (6)` always agree.
+# See the "Resolve iOS-aligned build number" step below for the lookup.
 #
 # Trigger: fires on push (i.e. PR merge) to dev or main only.
 
@@ -42,36 +52,24 @@ jobs:
       - name: Compute next version
         id: semver
         run: |
-          VMAJ_NEW=3
-          VMIN_NEW=0
-          VPAT_NEW=0
-
-          # Find the last production tag (clean semver: v#.#.# with no suffix).
-          VLAST=$(git tag -l "v[0-9]*" \
-            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" \
-            | sort -V | tail -n 1 | cut -c2-)
-
-          if [ -n "$VLAST" ]; then
-            eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
-          else
-            VMAJ=0; VMIN=0; VPAT=0
+          # Source of truth is pubspec.yaml's `version:` line. Format:
+          # "version: 3.4.0+1" -> VPUB=3.4.0. The DMG name and git tag both
+          # derive from this; matches the iOS workflow byte-for-byte so a
+          # given commit gets the same tag whether it ships to macOS or iOS.
+          VPUB=$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          if ! echo "$VPUB" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::pubspec.yaml version is not a clean semver: '${VPUB}'"
+            exit 1
           fi
 
           if [ "$GITHUB_REF_NAME" = "main" ]; then
-            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
-              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW; VPAT=$VPAT_NEW
-            else
-              VMIN=$((VMIN + 1)); VPAT=0
-            fi
-            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VFULL=$VPUB
             VTAG=v${VFULL}
           else
-            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
-              VMAJ=$VMAJ_NEW; VMIN=$VMIN_NEW
-            fi
-            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || echo HEAD)
-            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD)
-            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            # Dev preview: same VFULL as the upcoming main release; the
+            # git tag gets a "-dev" suffix so it doesn't collide with the
+            # eventual main release tag for the same pubspec version.
+            VFULL=$VPUB
             RNAME=${GITHUB_REF_NAME##*/}
             VTAG=v${VFULL}-${RNAME}
           fi
@@ -92,6 +90,52 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # ── Resolve iOS-aligned build number ──────────────────────────────
+      # GITHUB_RUN_NUMBER is per-workflow in GitHub Actions. The macOS and
+      # iOS workflows have independent counters that drift apart over time
+      # (e.g. macOS at run 78 while iOS is at run 6 because the iOS
+      # workflow was added later). For a single commit pushed to dev we
+      # want both artifacts to advertise the SAME build number so a user
+      # downloading "Node Neo-3.4.0+6-macOS.dmg" can cross-reference it
+      # against TestFlight's "v3.4.0 (6)" at a glance.
+      #
+      # iOS is the constraining platform — TestFlight requires
+      # CFBundleVersion to be monotonically unique within a given
+      # CFBundleShortVersionString. iOS therefore keeps its own
+      # GITHUB_RUN_NUMBER as the source of truth, and macOS looks up the
+      # iOS workflow's run number for the SAME commit (head_sha) and
+      # reuses it. Both workflows trigger on the same push event, so the
+      # iOS run is created within seconds of macOS — the polling loop
+      # below covers the small window where the iOS run hasn't been
+      # registered yet. If the lookup ever fails (iOS workflow disabled,
+      # API outage, …) we fall back to the macOS GITHUB_RUN_NUMBER and
+      # log a warning instead of failing the build.
+      - name: Resolve iOS-aligned build number
+        id: build_num
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha="${GITHUB_SHA}"
+          BNUM=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            BNUM=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/build-ios.yml/runs?head_sha=${sha}&per_page=1" \
+              --jq '.workflow_runs[0].run_number // empty' 2>/dev/null || true)
+            if [ -n "$BNUM" ]; then
+              echo "Found iOS run number: ${BNUM} (attempt ${attempt})"
+              break
+            fi
+            echo "iOS run not yet available for ${sha} (attempt ${attempt}) — waiting 6s..."
+            sleep 6
+          done
+          if [ -z "$BNUM" ]; then
+            echo "::warning::Could not find iOS workflow run for ${sha} after 60s; falling back to macOS GITHUB_RUN_NUMBER (${GITHUB_RUN_NUMBER}). DMG filename and TestFlight build number may diverge for this commit."
+            BNUM="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "BUILD_NUMBER=${BNUM}" >> "$GITHUB_ENV"
+          echo "build_number=${BNUM}" >> "$GITHUB_OUTPUT"
+          echo "Using build number: ${BNUM}"
+
       # ── Toolchains ──
       - uses: subosito/flutter-action@v2
         with:
@@ -108,17 +152,22 @@ jobs:
         run: pip3 install --break-system-packages cairosvg
 
       # ── Resolve embedded proxy-router version ──
+      # Drop --single-branch and explicitly fetch main so `git describe --tags`
+      # can reach release tags (cut from main) as ancestors of the dev-pinned
+      # commit. Without this the in-app About screen shows the bare 12-char
+      # hash instead of the v7.0.0-N-g<hash> form the ldflag is meant to
+      # produce. Cosmetic, but it's the version users read on every release.
       - name: Determine embedded proxy-router version
         id: pr_version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_COMMIT=$(grep 'MorpheusAIs/Morpheus-Lumerin-Node/proxy-router' go/go.mod | grep -oE '[0-9a-f]{12}$' || echo "unknown")
-          # Shallow-clone Morpheus-Lumerin-Node just enough to git-describe the pinned commit
-          git clone --filter=blob:none --no-checkout --single-branch \
+          git clone --filter=blob:none --no-checkout \
             https://github.com/MorpheusAIs/Morpheus-Lumerin-Node.git /tmp/morpheus-lumerin-node 2>/dev/null || true
           cd /tmp/morpheus-lumerin-node
           git fetch origin --tags 2>/dev/null || true
+          git fetch origin main:main 2>/dev/null || true
           PR_VERSION=$(git describe --tags --always --match 'v*' "$PR_COMMIT" 2>/dev/null || echo "$PR_COMMIT")
           echo "PR_VERSION=$PR_VERSION" >> "$GITHUB_OUTPUT"
           echo "PR_COMMIT=$PR_COMMIT" >> "$GITHUB_OUTPUT"
@@ -153,11 +202,22 @@ jobs:
           sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' macos/Runner.xcodeproj/project.pbxproj
 
       # ── Build release app (inject version + optional premium RPC) ──
+      # BUILD_CHANNEL is consumed by lib/constants/app_brand.dart's
+      # AppBrand.formatVersion() to decide whether the in-app About
+      # screen shows "v3.4.0" (main release) or "v3.4.0+42" (dev preview).
+      # The CFBundleShortVersionString in Info.plist stays clean X.Y.Z
+      # either way; the +RUN suffix is purely a display-layer cue.
       - name: Flutter build macOS (release)
         env:
           ETH_RPC_URL: ${{ secrets.ETH_RPC_URL }}
         run: |
-          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${GITHUB_RUN_NUMBER}"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            BUILD_CHANNEL=stable
+          else
+            BUILD_CHANNEL=preview
+          fi
+          DART_DEFINES="--build-name=${APP_VERSION} --build-number=${BUILD_NUMBER}"
+          DART_DEFINES="$DART_DEFINES --dart-define=BUILD_CHANNEL=${BUILD_CHANNEL}"
           if [ -n "$ETH_RPC_URL" ]; then
             DART_DEFINES="$DART_DEFINES --dart-define=ETH_RPC_URL=${ETH_RPC_URL}"
           fi
@@ -171,9 +231,14 @@ jobs:
           cp build/go/libnodeneo.dylib "$APP_DIR/Contents/Frameworks/"
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
 
-      # ── Sign (main only) ──
+      # ── Sign + notarize (dev AND main) ─────────────────────────────────
+      # Both branches run the full Apple signing + notarization path so
+      # the dev preview DMG is a true production smoke test. Only the
+      # downstream GH Release publication is `main`-only — see the bottom
+      # of this file. If any step here fails (cert expired, profile
+      # mismatch, Apple notary service hiccup) we want to know on the
+      # next dev push, not on release day.
       - name: Import signing certificate
-        if: github.ref == 'refs/heads/main'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
@@ -190,7 +255,6 @@ jobs:
           rm certificate.p12
 
       - name: Embed provisioning profile
-        if: github.ref == 'refs/heads/main'
         env:
           PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
         run: |
@@ -199,7 +263,6 @@ jobs:
           echo "Embedded provisioning profile into app bundle"
 
       - name: Expand entitlements variables for CI signing
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
@@ -209,7 +272,6 @@ jobs:
           cat macos/Runner/Release.entitlements
 
       - name: Codesign app bundle
-        if: github.ref == 'refs/heads/main'
         env:
           SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
         run: |
@@ -221,12 +283,11 @@ jobs:
             --sign "$SIGNING_IDENTITY" \
             "$APP_DIR"
 
-      # ── Notarize the .app (main only) ──
+      # ── Notarize the .app ──
       # Submit a ZIP of the .app for notarization, then staple the ticket
       # onto the .app BEFORE packaging the DMG. This way when the user drags
       # the app out of the DMG the notarization ticket travels with it.
       - name: Notarize app bundle
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
@@ -248,7 +309,23 @@ jobs:
       - name: Package DMG
         run: |
           APP_NAME=$(basename "$APP_DIR" .app)
-          DMG_NAME="Node Neo-${APP_VERSION}-macOS.dmg"
+          # Dev DMGs include the build number so a preview download is
+          # visually distinct from a shipped release on disk:
+          #   main → Node Neo-3.4.0-macOS.dmg
+          #   dev  → Node Neo-3.4.0+6-macOS.dmg   (matches TestFlight "(6)")
+          # BUILD_NUMBER is resolved up-front from the iOS workflow's
+          # run_number for the same commit, so this DMG name and the
+          # corresponding TestFlight CFBundleVersion stay in lockstep.
+          # The .app *inside* the DMG always reports CFBundleShortVersionString
+          # = ${APP_VERSION} (no suffix) because that's what pubspec carries;
+          # the suffix is purely a filename / artifact-naming hint that
+          # mirrors the in-app "v3.4.0+6" preview label.
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            DMG_VERSION="${APP_VERSION}"
+          else
+            DMG_VERSION="${APP_VERSION}+${BUILD_NUMBER}"
+          fi
+          DMG_NAME="Node Neo-${DMG_VERSION}-macOS.dmg"
           DMG_PATH="build/${DMG_NAME}"
 
           create-dmg \
@@ -267,11 +344,13 @@ jobs:
           echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
           echo "DMG_NAME=${DMG_NAME}" >> "$GITHUB_ENV"
 
-      # ── Notarize + staple DMG (main only) ──
+      # ── Notarize + staple DMG ──
       # The .app inside is already notarized+stapled. The DMG is a separate
       # artifact that needs its own notarization submission for stapling.
+      # We staple the DMG too so users who keep the DMG around (rather than
+      # mounting once and trashing it) don't get a Gatekeeper prompt the
+      # second time they double-click it.
       - name: Notarize and staple DMG
-        if: github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}

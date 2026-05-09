@@ -9,6 +9,10 @@ go/vendor/
 build/
 *.iml
 
+# Node (mcp-server/)
+node_modules/
+dist/
+
 # IDE
 .idea/
 .vscode/
@@ -32,23 +36,35 @@ android/local.properties
 *.apk
 *.aab
 
-# Cursor IDE (per-developer config, may contain secrets) — except shared
-# project rules under .cursor/rules/ which we ship to all contributors.
-.cursor/*
-!.cursor/rules/
+# Cursor IDE — entirely local to each developer. The rules under
+# .cursor/rules/ contain internal workflow knowledge (filesystem paths,
+# gh account names, release ritual minutiae) that we don't publish.
+.cursor/
 
-# Secrets
+# Secrets / local-only configs
 *.env
+*.env.local
 *.key
 *.pem
+*.local
+*.local.*
 
-# App Store Connect API key — created in ASC → Users & Access → Integrations,
-# downloadable exactly once. Treat like a private key; never commit.
+# Apple signing material — private keys, certs, profiles. The App Store
+# Connect API key (.p8) is downloadable exactly once. The Apple
+# Distribution .p12 bundles a cert + its private key. Provisioning
+# profiles encode team/app/cert linkage that we don't publish. Treat all
+# of these like private keys.
 *.p8
 AuthKey_*.p8
+*.p12
+*.cer
+*.p7b
+*.mobileprovision
 .appstore
 
 # Internal working docs — drafts, security plans, handoff context, dev
-# roadmaps. Treat as ephemeral planning notes; never publish. Public
-# README.md / docs go elsewhere.
+# roadmaps, business / LLC paperwork, AI sessions' working memory. This
+# folder is the local scratch space; nothing inside is published. Public
+# docs (README, RELEASE_NOTES, LICENSE, PRIVACY, TERMS) live at the repo
+# root.
 .ai-docs/
