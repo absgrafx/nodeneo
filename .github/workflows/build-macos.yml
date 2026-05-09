@@ -371,16 +371,50 @@ jobs:
           path: ${{ env.DMG_PATH }}
           retention-days: 14
 
-      # ── GitHub Release (main only) ──
+      # ── GitHub Release (main only) ──────────────────────────────────
+      # Both `build-macos.yml` and `build-ios.yml` run on every `main`
+      # push and BOTH have a "Create GitHub Release" step. macOS is the
+      # platform that produces a binary asset (the signed/notarized DMG);
+      # iOS distributes via TestFlight/App Store and only creates the
+      # release for the changelog + cross-platform tag. GitHub Actions
+      # may schedule either runner first, so this step is idempotent in
+      # both directions:
+      #
+      #   • If macOS wins the race → creates the release with the DMG
+      #     attached and the platform-aware notes body below.
+      #   • If iOS wins the race  → it creates the release first using
+      #     RELEASE_NOTES.md and skips the asset; this step then
+      #     attaches the DMG via `gh release upload --clobber` so the
+      #     macOS asset still ends up on the release page.
+      #
+      # The v3.4.0 release shipped with iOS winning the race and macOS
+      # failing on `gh release create` (duplicate tag). Recovery was a
+      # manual `gh release upload`. This block prevents repeats.
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git tag "$TAG_NAME"
-          git push origin "$TAG_NAME"
+          # Tag-or-skip. iOS does the same dance, so whichever wins the
+          # race pushes the tag and the loser sees "Everything up-to-date".
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists locally; nothing to push."
+          else
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi
 
-          # Build release notes: repo RELEASE_NOTES.md (if present) + asset table
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "GitHub Release $TAG_NAME already exists (likely from build-ios.yml)."
+            echo "Attaching macOS DMG to the existing release..."
+            gh release upload "$TAG_NAME" "$DMG_PATH" --clobber
+            exit 0
+          fi
+
+          # Build release notes: repo RELEASE_NOTES.md (if present) + a
+          # platform-aware download table that mentions both iOS and
+          # macOS. Using the same shape as build-ios.yml so the release
+          # body looks identical no matter which workflow won the race.
           : > /tmp/release-notes.md
           if [ -f RELEASE_NOTES.md ]; then
             cat RELEASE_NOTES.md >> /tmp/release-notes.md
@@ -389,11 +423,12 @@ jobs:
           cat <<'ASSET_TABLE' >> /tmp/release-notes.md
           ## Download
 
-          Signed and notarized — download, mount, drag to Applications.
+          Signed and notarized — download, mount, drag to Applications (macOS); install via TestFlight or the App Store (iOS).
 
-          | Asset | Description |
-          |-------|-------------|
-          | `Node Neo-VERSION-macOS.dmg` | macOS desktop client (Apple Silicon / Intel universal) |
+          | Platform | Channel | Notes |
+          |----------|---------|-------|
+          | iOS / iPadOS | TestFlight + App Store | Install via TestFlight (beta) or the App Store (`com.absgrafx.nodeneo`) once promoted from this build. |
+          | macOS | GitHub Releases (signed + notarized DMG) | Download `Node Neo-VERSION-macOS.dmg` from Assets below. |
 
           ASSET_TABLE
           sed -i '' "s/VERSION/${APP_VERSION}/g" /tmp/release-notes.md
