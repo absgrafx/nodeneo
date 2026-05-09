@@ -1,18 +1,13 @@
 ## What's New in v3.5.0
 
-Release-pipeline polish following the v3.4.0 ship. No user-visible product changes; the visible deltas are cosmetic — the macOS *About* panel and the dev preview build counter both render the way the user mental model expects.
+Maintenance release — no new features or behavior changes.
 
-### Releases & versioning
-- **macOS About panel on main releases reads as a bare `Version 3.5.0`** — no `(N)` parens at all. AppDelegate now overrides the standard About menu and clears AppKit's parens segment whenever `CFBundleVersion == CFBundleShortVersionString` (which the macOS workflow arranges only on `main`). Dev previews continue to show `Version 3.5.0 (N)` so a downloaded preview can be matched with its TestFlight build.
-- **Build counter resets per release train.** `CFBundleVersion` is now `git rev-list --count <last-vX.Y.Z-tag>..HEAD` — the count of dev commits since the most recent release — instead of `GITHUB_RUN_NUMBER` (which never resets, and was causing v3.5.0 dev builds to start at `+11` because that was the cumulative iOS workflow counter from the v3.4.0 train). After every main release the counter resets to ~1 automatically.
-- **macOS and iOS no longer cross-reference each other** to align build numbers. Both workflows compute the same git counter against the same `head_sha` independently, so DMG / IPA / TestFlight all agree by construction. The `gh api` polling loop that used to look up the iOS workflow's run number from the macOS workflow is gone.
-- **Tag + GitHub Release** are owned exclusively by the macOS workflow (it has the only downloadable asset). Eliminates the race condition that produced an asset-less release on the v3.4.0 ship.
+The macOS *About Node Neo* panel now reads as a clean `Version 3.5.0` instead of `Version 3.4.0 (9)`-style text that was exposing an internal CI build counter.
 
-### iOS distribution channels
-- **TestFlight upload is `dev`-only.** Every push to `dev` continues to ship to TestFlight Internal. Pushes to `main` build + verify the IPA and upload it as a workflow artifact for inspection, but no longer auto-publish — App Store production upload is the next thing to wire in once App Store review approval lands.
-
-### Documentation
-- **Release-page brevity policy.** From v3.5.0 forward, the top section of `RELEASE_NOTES.md` is brief bullet points only — one sentence per bullet, grouped under 2-4 area headings. Long-form *why/how* detail lives in the per-PR commit messages and is no longer mirrored on the GitHub Release page. Goal: a release page a reader can scan in 30 seconds.
+### Engineering footnotes
+- Build counter resets to ~1 with each release (was carrying the cumulative GitHub Actions counter across release trains).
+- Release tag and GitHub Release page are owned exclusively by the macOS workflow.
+- TestFlight uploads gated to `dev`; `main` IPAs build as workflow artifacts only until App Store production approval lands.
 
 ---
 
